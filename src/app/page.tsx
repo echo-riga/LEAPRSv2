@@ -11,40 +11,92 @@ import {
   Stack,
   TextField,
   Alert,
-  Tabs,
-  Tab,
   CircularProgress,
   Divider,
   Chip,
   Paper,
+  InputAdornment,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
 import {
   Storage as StorageIcon,
   Lock as LockIcon,
+  Email as EmailIcon,
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
   Refresh as RefreshIcon,
   Person as PersonIcon,
   ExitToApp as ExitToAppIcon,
   FiberManualRecord as DotIcon,
+  AccessTime as AccessTimeIcon,
+  Dns as DnsIcon,
+  Fullscreen as FullscreenIcon,
+  FullscreenExit as FullscreenExitIcon,
 } from '@mui/icons-material';
-import { checkDrizzleConnection, DbStatus } from './actions';
+import { checkDrizzleConnection, DbStatus, getOrCreateUserRole } from './actions';
 import { authClient } from '@/lib/auth/client';
+import { useRouter } from 'next/navigation';
 
 export default function Home() {
+  const router = useRouter();
+
   // DB Status States
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [checkingDb, setCheckingDb] = useState(false);
 
   // Auth States
   const session = authClient.useSession();
-  const [authTab, setAuthTab] = useState(0);
+  const [role, setRole] = useState<string | null>(null);
+  const [checkingRole, setCheckingRole] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Clock States
+  const [timeStr, setTimeStr] = useState('');
+  const [dateStr, setDateStr] = useState('');
+
+  // Clock effect for Kiosk look
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setTimeStr(
+        now.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+        })
+      );
+      setDateStr(
+        now.toLocaleDateString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        })
+      );
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const syncFullscreenState = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    syncFullscreenState();
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
+  }, []);
+
+  const handleFullscreen = async () => {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  };
 
   const handleCheckDb = async () => {
     setCheckingDb(true);
@@ -62,38 +114,46 @@ export default function Home() {
   };
 
   useEffect(() => {
-    handleCheckDb();
-  }, []);
-
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setAuthError(null);
-    setAuthSuccess(null);
-
-    try {
-      const res = await authClient.signUp.email({
-        email,
-        password,
-        name,
-      });
-
-      if (res?.error) {
-        setAuthError(res.error.message || 'Registration failed');
-      } else {
-        setAuthSuccess('Successfully registered! You are now logged in.');
-        setEmail('');
-        setPassword('');
-        setName('');
-        // Refresh db status to show new write checks if needed
-        handleCheckDb();
-      }
-    } catch (err: any) {
-      setAuthError(err.message || 'An unexpected error occurred');
-    } finally {
-      setAuthLoading(false);
+    if (session.data) {
+      handleCheckDb();
     }
-  };
+  }, [session.data]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const checkUserRole = async () => {
+      if (session.data) {
+        setCheckingRole(true);
+        try {
+          const userRole = await getOrCreateUserRole(
+            session.data.user.id,
+            session.data.user.email
+          );
+          if (isMounted) {
+            setRole(userRole);
+            if (userRole === 'admin') {
+              router.push('/admin');
+            }
+          }
+        } catch (error) {
+          console.error('Failed to get/create user role:', error);
+        } finally {
+          if (isMounted) {
+            setCheckingRole(false);
+          }
+        }
+      } else {
+        if (isMounted) {
+          setRole(null);
+          setCheckingRole(false);
+        }
+      }
+    };
+    checkUserRole();
+    return () => {
+      isMounted = false;
+    };
+  }, [session.data, router]);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,14 +168,14 @@ export default function Home() {
       });
 
       if (res?.error) {
-        setAuthError(res.error.message || 'Sign in failed');
+        setAuthError(res.error.message || 'Access Denied. Check credentials.');
       } else {
-        setAuthSuccess('Successfully signed in!');
+        setAuthSuccess('Access Granted. Loading Portal...');
         setEmail('');
         setPassword('');
       }
     } catch (err: any) {
-      setAuthError(err.message || 'An unexpected error occurred');
+      setAuthError(err.message || 'An unexpected server error occurred.');
     } finally {
       setAuthLoading(false);
     }
@@ -127,302 +187,281 @@ export default function Home() {
       await authClient.signOut();
       setAuthSuccess('Logged out successfully.');
       setAuthError(null);
+      setDbStatus(null);
     } catch (err: any) {
-      setAuthError(err.message || 'Failed to log out');
+      setAuthError(err.message || 'Failed to log out.');
     } finally {
       setAuthLoading(false);
     }
   };
 
-  return (
-    <Container maxWidth="md" sx={{ py: 6, display: 'flex', flexDirection: 'column', minHeight: '100vh', justifyContent: 'center' }}>
-      {/* Title Header */}
-      <Box sx={{ mb: 6, textAlign: 'center' }}>
-        <Typography variant="h3" component="h1" sx={{ fontWeight: '800' }} gutterBottom color="primary">
-          Neon PG & Neon Auth Status
-        </Typography>
-        <Typography variant="subtitle1" color="text.secondary">
-          Fullstack connection verification powered by Drizzle ORM and Material UI
-        </Typography>
-      </Box>
-
-      {/* Grid Layout for Status Cards */}
-      <Stack spacing={4}>
-        {/* Status Highlights (The requested simple text indicating status) */}
-        <Paper variant="outlined" sx={{ p: 3, borderLeft: '6px solid', borderColor: 'primary.main', bgcolor: 'background.paper' }}>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={4} divider={<Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />}>
-            {/* Database Simple Status */}
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: '700' }}>
-                Neon Database Connection
-              </Typography>
-              <Stack direction="row" sx={{ alignItems: 'center', mt: 1 }} spacing={1}>
-                <DotIcon color={dbStatus?.success ? 'primary' : 'error'} sx={{ fontSize: 18 }} />
-                <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-                  {dbStatus?.success ? 'DATABASE CONNECTED' : 'DATABASE DISCONNECTED'}
-                </Typography>
-              </Stack>
-              {dbStatus?.success && (
-                <Typography variant="body2" component="div" color="text.secondary" sx={{ mt: 0.5, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Read Latency: <Chip size="small" label={`${dbStatus.latencyMs}ms`} color="success" variant="outlined" /> | DB Writes: {dbStatus.writeSuccess ? 'OK' : 'FAIL'}
-                </Typography>
-              )}
-            </Box>
-
-            {/* Auth Simple Status */}
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: '700' }}>
-                Neon Auth Session Status
-              </Typography>
-              <Stack direction="row" sx={{ alignItems: 'center', mt: 1 }} spacing={1}>
-                <DotIcon color={session.data ? 'primary' : 'secondary'} sx={{ fontSize: 18 }} />
-                <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-                  {session.isPending ? 'CHECKING SESSION...' : session.data ? 'AUTHENTICATED' : 'NOT AUTHENTICATED'}
-                </Typography>
-              </Stack>
-              {session.data && (
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                  User: <Box component="span" sx={{ fontWeight: 'bold', color: 'primary.main' }}>{session.data.user.email}</Box>
-                </Typography>
-              )}
-            </Box>
-          </Stack>
-        </Paper>
-
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={4}>
-          {/* Card 1: Neon PG Details */}
-          <Card variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <CardContent sx={{ flexGrow: 1 }}>
-              <Stack direction="row" spacing={2} sx={{ alignItems: 'center', mb: 2 }}>
-                <Box sx={{ bgcolor: 'rgba(0, 0, 0, 0.05)', p: 1, borderRadius: 2, display: 'flex' }}>
-                  <StorageIcon color="primary" />
-                </Box>
-                <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                  Neon PostgreSQL
-                </Typography>
-              </Stack>
-
-              <Divider sx={{ my: 2 }} />
-
-              <Stack spacing={2}>
-                <Box>
-                  <Typography variant="body2" color="text.secondary">
-                    ORM Configured
-                  </Typography>
-                  <Typography variant="body1" sx={{ fontWeight: 'medium' }}>
-                    Drizzle ORM (Serverless HTTP Driver)
-                  </Typography>
-                </Box>
-
-                <Box>
-                  <Typography variant="body2" color="text.secondary">
-                    Last Checked
-                  </Typography>
-                  <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
-                    {dbStatus?.testedAt ? new Date(dbStatus.testedAt).toLocaleTimeString() : 'Never'}
-                  </Typography>
-                </Box>
-
-                {dbStatus?.success && (
-                  <>
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        Total Connection Health Logs
-                      </Typography>
-                      <Typography variant="h6" sx={{ fontWeight: 'bold', color: 'primary.main' }}>
-                        {dbStatus.totalChecks} checks
-                      </Typography>
-                    </Box>
-                  </>
-                )}
-
-                {dbStatus?.errorMessage && (
-                  <Alert severity="error" icon={<ErrorIcon />} sx={{ mt: 1 }}>
-                    {dbStatus.errorMessage}
-                  </Alert>
-                )}
-              </Stack>
-            </CardContent>
-            <Box sx={{ p: 2, pt: 0 }}>
-              <Button
-                fullWidth
-                variant="contained"
-                startIcon={checkingDb ? <CircularProgress size={20} color="inherit" /> : <RefreshIcon />}
-                onClick={handleCheckDb}
-                disabled={checkingDb}
-              >
-                {checkingDb ? 'Testing Connection...' : 'Test Connection'}
-              </Button>
-            </Box>
-          </Card>
-
-          {/* Card 2: Neon Auth Operations */}
-          <Card variant="outlined" sx={{ flex: 1 }}>
-            <CardContent>
-              <Stack direction="row" spacing={2} sx={{ alignItems: 'center', mb: 2 }}>
-                <Box sx={{ bgcolor: 'rgba(0, 0, 0, 0.05)', p: 1, borderRadius: 2, display: 'flex' }}>
-                  <LockIcon color="secondary" />
-                </Box>
-                <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                  Neon Auth Control
-                </Typography>
-              </Stack>
-
-              <Divider sx={{ my: 2 }} />
-
-              {authError && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                  {authError}
-                </Alert>
-              )}
-              {authSuccess && (
-                <Alert severity="success" sx={{ mb: 2 }}>
-                  {authSuccess}
-                </Alert>
-              )}
-
-              {session.data ? (
-                /* Authenticated State */
-                <Stack spacing={3} sx={{ py: 1 }}>
-                  <Paper sx={{ p: 2, bgcolor: 'background.default', borderRadius: 2 }}>
-                    <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
-                      <PersonIcon color="primary" sx={{ fontSize: 32 }} />
-                      <Box>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                          {session.data.user.name || 'No Name'}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {session.data.user.email}
-                        </Typography>
-                      </Box>
-                    </Stack>
-                  </Paper>
-
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      Session Created At
-                    </Typography>
-                    <Typography variant="body2">
-                      {new Date(session.data.session.createdAt).toLocaleString()}
-                    </Typography>
-                  </Box>
-
-                  <Button
-                    variant="outlined"
-                    color="error"
-                    fullWidth
-                    startIcon={authLoading ? <CircularProgress size={20} color="inherit" /> : <ExitToAppIcon />}
-                    onClick={handleSignOut}
-                    disabled={authLoading}
-                  >
-                    {authLoading ? 'Signing Out...' : 'Sign Out'}
-                  </Button>
-                </Stack>
-              ) : (
-                /* Unauthenticated State: Sign In / Sign Up Forms */
-                <Box>
-                  <Tabs
-                    value={authTab}
-                    onChange={(_, val) => {
-                      setAuthTab(val);
-                      setAuthError(null);
-                      setAuthSuccess(null);
-                    }}
-                    variant="fullWidth"
-                    sx={{ mb: 2 }}
-                  >
-                    <Tab label="Sign In" />
-                    <Tab label="Register" />
-                  </Tabs>
-
-                  {authTab === 0 ? (
-                    /* Sign In Form */
-                    <form onSubmit={handleSignIn}>
-                      <Stack spacing={2}>
-                        <TextField
-                          label="Email Address"
-                          type="email"
-                          size="small"
-                          fullWidth
-                          required
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                        />
-                        <TextField
-                          label="Password"
-                          type="password"
-                          size="small"
-                          fullWidth
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                        />
-                        <Button
-                          type="submit"
-                          variant="contained"
-                          color="primary"
-                          fullWidth
-                          disabled={authLoading}
-                        >
-                          {authLoading ? <CircularProgress size={24} /> : 'Sign In'}
-                        </Button>
-                      </Stack>
-                    </form>
-                  ) : (
-                    /* Register Form */
-                    <form onSubmit={handleSignUp}>
-                      <Stack spacing={2}>
-                        <TextField
-                          label="Full Name"
-                          type="text"
-                          size="small"
-                          fullWidth
-                          required
-                          value={name}
-                          onChange={(e) => setName(e.target.value)}
-                        />
-                        <TextField
-                          label="Email Address"
-                          type="email"
-                          size="small"
-                          fullWidth
-                          required
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                        />
-                        <TextField
-                          label="Password"
-                          type="password"
-                          size="small"
-                          fullWidth
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                        />
-                        <Button
-                          type="submit"
-                          variant="contained"
-                          color="primary"
-                          fullWidth
-                          disabled={authLoading}
-                        >
-                          {authLoading ? <CircularProgress size={24} /> : 'Register Account'}
-                        </Button>
-                      </Stack>
-                    </form>
-                  )}
-                </Box>
-              )}
-            </CardContent>
-          </Card>
+  // Loading Session State
+  if (session.isPending || (session.data && checkingRole)) {
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          minHeight: '100vh',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: 'background.default',
+        }}
+      >
+        <Stack spacing={2} sx={{ alignItems: 'center' }}>
+          <CircularProgress color="primary" size={50} />
+          <Typography variant="body2" color="text.secondary" sx={{ fontWeight: '500' }}>
+            Loading...
+          </Typography>
         </Stack>
-      </Stack>
-
-      <Box sx={{ mt: 8, textAlign: 'center' }}>
-        <Typography variant="body2" color="text.secondary">
-          Ready for deployment to <Box component="span" sx={{ fontWeight: 'bold', color: 'primary.main' }}>Vercel</Box>. Configured with static optimization and dynamic API routing adapters.
-        </Typography>
       </Box>
-    </Container>
+    );
+  }
+
+  // Authenticated View
+  if (session.data) {
+    if (role === 'admin') {
+      return (
+        <Box
+          sx={{
+            display: 'flex',
+            minHeight: '100vh',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: 'background.default',
+          }}
+        >
+          <Stack spacing={2} sx={{ alignItems: 'center' }}>
+            <CircularProgress color="primary" size={50} />
+            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: '500' }}>
+              Redirecting to Admin Portal...
+            </Typography>
+          </Stack>
+        </Box>
+      );
+    }
+
+    // Access Denied for non-admin users
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: '100vh',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: 'background.default',
+          p: 3,
+        }}
+      >
+        <Card variant="outlined" sx={{ maxWidth: 400, width: '100%', borderRadius: 2, p: 3, textAlign: 'center' }}>
+          <CardContent>
+            <ErrorIcon color="error" sx={{ fontSize: 60, mb: 2 }} />
+            <Typography variant="h5" sx={{ fontWeight: '800', mb: 2 }}>
+              Access Denied
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Your account ({session.data.user.email}) does not have Administrator privileges.
+            </Typography>
+            <Button
+              variant="contained"
+              color="error"
+              fullWidth
+              onClick={handleSignOut}
+              disabled={authLoading}
+              startIcon={<ExitToAppIcon />}
+            >
+              Sign Out
+            </Button>
+          </CardContent>
+        </Card>
+      </Box>
+    );
+  }
+
+  // Unauthenticated Kiosk 70/30 Split Login Screen
+  return (
+    <Box sx={{ display: 'flex', minHeight: '100vh', width: '100vw', overflow: 'hidden', bgcolor: 'background.default' }}>
+      <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>
+        <IconButton
+          color="primary"
+          onClick={handleFullscreen}
+          aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          sx={{ position: 'fixed', top: { xs: 12, md: 16 }, right: { xs: 12, md: 16 }, zIndex: 10, bgcolor: 'rgba(250, 252, 250, 0.92)', boxShadow: '0 2px 8px rgba(28, 40, 28, 0.12)', '&:hover': { bgcolor: '#fafcfa' } }}
+        >
+          {isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+        </IconButton>
+      </Tooltip>
+      {/* Left Panel: 70% Width Background Image */}
+      <Box
+        sx={{
+          flex: 7,
+          display: { xs: 'none', md: 'flex' },
+          flexDirection: 'column',
+          justifyContent: 'space-between',
+          p: 6,
+          backgroundImage: 'url(/login_left_bg.jpg)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          position: 'relative',
+          color: '#ffffff',
+          '&::before': {
+            content: '""',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(27, 94, 32, 0.45)', // Translucent overlay using Forest Green
+            zIndex: 1,
+          },
+        }}
+      >
+        {/* Upper Brand Section */}
+        <Box sx={{ position: 'relative', zIndex: 2 }}>
+          <Typography variant="h3" sx={{ fontWeight: '900', letterSpacing: '-1px' }}>
+            LEAPRS
+          </Typography>
+          <Typography variant="subtitle1" sx={{ opacity: 0.9, fontWeight: '500' }}>
+            Request for Training
+          </Typography>
+        </Box>
+
+        {/* Middle Clock & Kiosk Information */}
+        <Box sx={{ position: 'relative', zIndex: 2, my: 'auto' }}>
+          <Stack spacing={1}>
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+              <AccessTimeIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+              <Typography variant="h6" sx={{ opacity: 0.8, textTransform: 'uppercase', letterSpacing: '1px', fontWeight: '500' }}>
+                Current Local Time
+              </Typography>
+            </Stack>
+            <Typography variant="h2" sx={{ fontWeight: '800', lineHeight: 1 }}>
+              {timeStr}
+            </Typography>
+            <Typography variant="h5" sx={{ fontWeight: '400', opacity: 0.9 }}>
+              {dateStr}
+            </Typography>
+          </Stack>
+        </Box>
+
+        {/* Empty space footer */}
+        <Box sx={{ position: 'relative', zIndex: 2 }} />
+      </Box>
+
+      {/* Right Panel: 30% Width Login Form */}
+      <Box
+        sx={{
+          flex: 3,
+          width: { xs: '100%', md: '30%' },
+          minWidth: { md: '380px' },
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          p: { xs: 4, sm: 6 },
+          bgcolor: 'background.paper',
+          borderLeft: '1px solid',
+          borderColor: 'divider',
+          boxShadow: { xs: 0, md: '-4px 20px 25px -5px rgba(0,0,0,0.05)' },
+        }}
+      >
+        <Box sx={{ width: '100%', maxWidth: '340px', mx: 'auto' }}>
+          {/* Header Mobile Brand */}
+          <Box sx={{ display: { xs: 'block', md: 'none' }, mb: 4, textAlign: 'center' }}>
+            <Typography variant="h4" color="primary" sx={{ fontWeight: '900' }}>
+              LEAPRS
+            </Typography>
+            <Typography variant="subtitle2" color="text.secondary">
+              Request for Training
+            </Typography>
+          </Box>
+
+          {/* Form Header */}
+          <Box sx={{ mb: 4 }}>
+            <Typography variant="h4" color="text.primary" sx={{ fontWeight: '800', letterSpacing: '-0.5px' }}>
+              Sign In
+            </Typography>
+          </Box>
+
+          {authError && (
+            <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
+              {authError}
+            </Alert>
+          )}
+
+          {authSuccess && (
+            <Alert severity="success" sx={{ mb: 3, borderRadius: 2 }}>
+              {authSuccess}
+            </Alert>
+          )}
+
+          {/* Login Form */}
+          <form onSubmit={handleSignIn}>
+            <Stack spacing={3}>
+              <TextField
+                label="Email Address"
+                type="email"
+                required
+                fullWidth
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={authLoading}
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <EmailIcon color="action" />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+
+              <TextField
+                label="Password"
+                type="password"
+                required
+                fullWidth
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={authLoading}
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <LockIcon color="action" />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+
+              <Button
+                type="submit"
+                variant="contained"
+                color="primary"
+                fullWidth
+                size="large"
+                disabled={authLoading}
+                sx={{
+                  py: 1.7,
+                  fontSize: '1.05rem',
+                  boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)',
+                  '&:hover': {
+                    boxShadow: '0 6px 16px rgba(46, 125, 50, 0.35)',
+                  },
+                }}
+              >
+                {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Enter'}
+              </Button>
+            </Stack>
+          </form>
+
+          {/* Spacing bottom */}
+          <Box sx={{ mt: 4 }} />
+        </Box>
+      </Box>
+    </Box>
   );
+
+
 }
