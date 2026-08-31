@@ -30,9 +30,9 @@ graph TD
 A CapDev is a parent project or educational program.
 * **Fixed Fields (In Codebase)**:
   * `AIP Code` (Unique project code)
-  * `Budget` (Overall project fund)
+  * `Initial Budget` (Original project fund)
+  * `Remaining Budget` (Available project fund after deductions)
   * `Department` (Owner department)
-  * `Start Date` & `End Date`
   * Fixed fields remain interactive in the form preview, but their layout is not configurable: they cannot be edited, deleted, or dragged.
 * **Dynamic Fields (Configurable by Admin)**:
   * Custom description, tags, target audience, etc.
@@ -45,7 +45,6 @@ Requisitions filed by employees against a specific CapDev.
 * **Fixed Fields (In Codebase)**:
   * `Setting` (Internal or External)
   * `Requested Budget` (Cost estimation)
-  * `Start Date` & `End Date`
   * Fixed fields remain interactive in the form preview, but their layout is not configurable: they cannot be edited, deleted, or dragged.
 * **Dynamic Fields (Configurable by Admin)**:
   * Attendance sheets (file type), feedback links, etc.
@@ -67,6 +66,8 @@ Chronological logs track request progression. Status updates are **fixed** (not 
 ### A. One-Time Timeline Flags
 * **Timeline Completion**: Once a status update has `mark_as_complete = true`, the request is finished. No further updates are permitted. Only one status update in a request's timeline can have this true.
 * **Budget Deduction**: Once a status update has `subtracts_requested_amount = true`, the request budget is automatically deducted from the parent CapDev's overall budget. Only one status update per request can trigger this deduction.
+* **Budget Availability**: A request's requested budget cannot exceed its parent CapDev's remaining budget. The same check is enforced again when a deduction status update is saved.
+* **Budget History**: A CapDev stores its initial and remaining budgets. Its details view lists every deducted request amount and the status-update author.
 * *Enforcement*: Enforced via PostgreSQL partial unique indexes to block concurrency race conditions.
 
 ### B. File Uploads (Google Drive)

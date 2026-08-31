@@ -2,24 +2,20 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Add as AddIcon, AttachFile as AttachFileIcon, CalendarMonth as CalendarIcon, ChevronRight as ChevronRightIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon } from '@mui/icons-material';
-import { Alert, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, Grid, InputAdornment, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Add as AddIcon, AttachFile as AttachFileIcon, ChevronRight as ChevronRightIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon } from '@mui/icons-material';
+import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Chip, CircularProgress, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, FormControlLabel, Grid, InputAdornment, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { authClient } from '@/lib/auth/client';
-import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevFieldDefinitions, updateCapdev, uploadFilesToGoogleDrive, type StatusAttachment } from '@/app/actions';
+import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevBudgetHistory, getCapdevFieldDefinitions, updateCapdev, uploadFilesToGoogleDrive, type StatusAttachment } from '@/app/actions';
 import DateField from '@/components/DateField';
 
 type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; section: string; width: string; placeholder: string | null };
-type Capdev = { id: number; aipCode: string; budget: string; department: string; startDate: string; endDate: string; additionalInfo: Record<string, unknown> };
-type CapdevForm = Omit<Capdev, 'id'>;
+type Capdev = { id: number; aipCode: string; description: string; initialBudget: string; budget: string; department: string; updatedById: string; createdAt: Date | string; additionalInfo: Record<string, unknown> };
+type CapdevForm = Omit<Capdev, 'id' | 'createdAt' | 'updatedById'>;
+type BudgetHistoryEntry = { authorName: string | null; amount: string; createdAt: Date | string };
 
-const EMPTY_FORM: CapdevForm = { aipCode: '', budget: '', department: '', startDate: '', endDate: '', additionalInfo: {} };
-const dateValue = (value: string) => value ? value.slice(0, 10) : '';
+const EMPTY_FORM: CapdevForm = { aipCode: '', description: '', initialBudget: '', budget: '', department: '', additionalInfo: {} };
 const formatCurrency = (value: string) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
-const formatDisplayDate = (value: string) => {
-  const [year, month, day] = value.split('-').map(Number);
-  if (!year || !month || !day) return value;
-  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(year, month - 1, day));
-};
+const formatDate = (value: Date | string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
 const getAttachments = (value: unknown): StatusAttachment[] => Array.isArray(value) ? value.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file) : [];
 const getSectionLabel = (section: string) => section === 'basic' ? 'Basic Information' : section === 'supporting' ? 'Supporting Information' : section;
 
@@ -30,7 +26,9 @@ export default function AdminPage() {
   const [definitions, setDefinitions] = useState<DynamicField[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [department, setDepartment] = useState('all');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState({ departments: [] as string[], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' });
+  const [draftFilters, setDraftFilters] = useState(filters);
   const [page, setPage] = useState(1);
   const [editorOpen, setEditorOpen] = useState(false);
   const [deleting, setDeleting] = useState<Capdev | null>(null);
@@ -40,12 +38,13 @@ export default function AdminPage() {
   const [pendingFiles, setPendingFiles] = useState<Record<string, File[]>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [budgetHistory, setBudgetHistory] = useState<BudgetHistoryEntry[]>([]);
 
   const loadData = async () => {
     const [projectData, fieldData] = await Promise.all([getAllCapdevs(), getCapdevFieldDefinitions()]);
     setProjects(projectData.map((project) => ({
       ...project,
-      budget: String(project.budget), startDate: dateValue(String(project.startDate)), endDate: dateValue(String(project.endDate)),
+      initialBudget: String(project.initialBudget), budget: String(project.budget),
       additionalInfo: (project.additionalInfo && typeof project.additionalInfo === 'object' ? project.additionalInfo : {}) as Record<string, unknown>,
     })));
     setDefinitions(fieldData.map((field) => ({ ...field, options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [] })));
@@ -55,7 +54,10 @@ export default function AdminPage() {
   useEffect(() => { void Promise.resolve().then(loadData); }, []);
 
   const departments = useMemo(() => Array.from(new Set(projects.map((project) => project.department))).sort(), [projects]);
-  const filtered = useMemo(() => projects.filter((project) => `${project.aipCode} ${project.department}`.toLowerCase().includes(search.toLowerCase()) && (department === 'all' || project.department === department)), [department, projects, search]);
+  const filtered = useMemo(() => projects.filter((project) => {
+    const searchText = `${project.aipCode} ${project.description} ${project.updatedById}`.toLowerCase(); const date = new Date(project.createdAt).getTime();
+    return searchText.includes(search.toLowerCase()) && (filters.departments.length === 0 || filters.departments.includes(project.department)) && (!filters.initialMin || Number(project.initialBudget) >= Number(filters.initialMin)) && (!filters.initialMax || Number(project.initialBudget) <= Number(filters.initialMax)) && (!filters.remainingMin || Number(project.budget) >= Number(filters.remainingMin)) && (!filters.remainingMax || Number(project.budget) <= Number(filters.remainingMax)) && (!filters.dateFrom || date >= new Date(filters.dateFrom).getTime()) && (!filters.dateTo || date <= new Date(`${filters.dateTo}T23:59:59`).getTime());
+  }).sort((a, b) => filters.sort === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()), [filters, projects, search]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / 6));
   const visible = filtered.slice((page - 1) * 6, page * 6);
   const requiredDefinitions = definitions.filter((field) => field.isRequired || field.section === 'required');
@@ -65,8 +67,8 @@ export default function AdminPage() {
   const setValue = (updates: Partial<CapdevForm>) => setForm((current) => ({ ...current, ...updates }));
   const setDynamicValue = (name: string, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [name]: value } }));
 
-  const openCreate = () => { setError(''); setPendingFiles({}); setEditing(null); setForm(EMPTY_FORM); setEditorOpen(true); };
-  const openEdit = (project: Capdev) => { setError(''); setPendingFiles({}); setEditing(project); setForm({ ...project, additionalInfo: { ...project.additionalInfo } }); setEditorOpen(true); };
+  const openCreate = () => { setError(''); setPendingFiles({}); setBudgetHistory([]); setEditing(null); setForm(EMPTY_FORM); setEditorOpen(true); };
+  const openEdit = async (project: Capdev) => { setError(''); setPendingFiles({}); setEditing(project); setForm({ ...project, additionalInfo: { ...project.additionalInfo } }); setBudgetHistory(await getCapdevBudgetHistory(project.id)); setEditorOpen(true); };
   const addSelectedFiles = (fieldName: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
     setPendingFiles((current) => ({ ...current, [fieldName]: [...(current[fieldName] || []), ...selectedFiles].filter((file, index, files) => files.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index) }));
@@ -81,7 +83,7 @@ export default function AdminPage() {
   const areRequiredFieldsComplete = requiredDefinitions.every(hasDynamicValue);
 
   const saveProject = async () => {
-    if (!session.data || !form.aipCode || !form.budget || !form.department || !form.startDate || !form.endDate) return;
+    if (!session.data || !form.aipCode || !form.description || !form.budget || !form.department) return;
     const missingRequiredFields = requiredDefinitions.filter((field) => !hasDynamicValue(field));
     if (missingRequiredFields.length > 0) { setError(`Complete the required field${missingRequiredFields.length === 1 ? '' : 's'}: ${missingRequiredFields.map((field) => field.name).join(', ')}.`); return; }
     setSaving(true);
@@ -127,21 +129,19 @@ export default function AdminPage() {
           <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>CapDev Projects</Typography>
           <Stack direction="row" spacing={2} sx={{ width: { xs: '100%', sm: 'auto' }, alignItems: 'center' }}>
             <TextField size="small" placeholder="Search projects..." value={search} onChange={(event) => { setSearch(event.target.value); resetPage(); }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> } }} sx={{ bgcolor: '#ffffff', borderRadius: 2, minWidth: { sm: 260 }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} />
-            <TextField select size="small" value={department} onChange={(event) => { setDepartment(event.target.value); resetPage(); }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><FilterIcon color="action" /></InputAdornment> } }} sx={{ bgcolor: '#ffffff', borderRadius: 2, minWidth: { sm: 180 }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} aria-label="Filter by department">
-            <MenuItem value="all">All departments</MenuItem>
-            {departments.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
-          </TextField>
+            <Button size="small" sx={{ height: 40 }} variant="outlined" startIcon={<FilterIcon />} onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}>Filter</Button>
         </Stack>
       </Stack>
 
         {visible.length === 0 ? <Card variant="outlined" sx={{ borderRadius: 2, minHeight: 300, display: 'grid', placeItems: 'center' }}><Stack spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}><CapdevIcon sx={{ fontSize: 42 }} /><Typography>No CapDev projects found</Typography></Stack></Card> :
-          <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>{visible.map((project) => <Grid key={project.id} size={{ xs: 12, sm: 6, md: 4 }}>
-            <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#ffffff', height: '100%', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' } }}>
+          <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>{visible.map((project) => <Grid key={project.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3 }}>
+            <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}><Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}><Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>Added {formatDate(project.createdAt)}</Typography></Box></Box>
+            <Card variant="outlined" sx={{ position: 'relative', zIndex: 1, borderRadius: 2, bgcolor: '#ffffff', height: '100%', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' } }}>
               <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
-                <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}><Box sx={{ bgcolor: 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CapdevIcon color="primary" /></Box><Box sx={{ flexGrow: 1 }}><Typography variant="h6" sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>{project.department}</Typography><Typography variant="body2" color="text.secondary">{project.aipCode}</Typography></Box></Stack>
-                <Stack spacing={1.5} sx={{ my: 1 }}><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Budget</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(project.budget)}</Typography></Stack><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', gap: 1 }}><Typography variant="body2" color="text.secondary">Schedule</Typography><Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}><CalendarIcon fontSize="small" color="action" /><Typography variant="body2">{formatDisplayDate(project.startDate)} to {formatDisplayDate(project.endDate)}</Typography></Stack></Stack></Stack>
+                <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}><Box sx={{ bgcolor: 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CapdevIcon color="primary" /></Box><Box sx={{ flexGrow: 1 }}><Typography variant="h6" sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>{project.aipCode}</Typography><Typography variant="body2" color="text.secondary">{project.department}</Typography></Box></Stack>
+                <Typography variant="body2" color="text.secondary" noWrap sx={{ mb: 1.5 }}>{project.description}</Typography><Stack spacing={1.5} sx={{ my: 1 }}><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Initial Budget</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(project.initialBudget)}</Typography></Stack><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Remaining Budget</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(project.budget)}</Typography></Stack></Stack>
                 <Divider sx={{ my: 2 }} />
-                <Stack direction="row" spacing={3} sx={{ mt: 'auto', flexWrap: 'wrap', rowGap: 1 }}><Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/admin/capdev/${project.id}/requests`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>View Requests</Button><Button variant="text" color="primary" onClick={() => openEdit(project)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Edit Project</Button><Button variant="text" color="error" onClick={() => { setDeleteError(''); setDeleting(project); }} aria-label={`Delete ${project.aipCode}`} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: '#b71c1c' } }}>Delete</Button></Stack>
+                <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}><Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/admin/capdev/${project.id}/requests`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>View Requests</Button><Stack direction="row" spacing={3}><Button variant="text" color="primary" onClick={() => openEdit(project)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Details</Button><Button variant="text" color="error" onClick={() => { setDeleteError(''); setDeleting(project); }} aria-label={`Delete ${project.aipCode}`} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: '#b71c1c' } }}>Delete</Button></Stack></Stack>
               </CardContent>
             </Card>
           </Grid>)}</Grid>}
@@ -157,15 +157,16 @@ export default function AdminPage() {
           <Grid container spacing={2.5} sx={{ pt: 0.5 }}>
             <Grid size={{ xs: 12, sm: 6 }}><TextField required fullWidth label="AIP Code" value={form.aipCode} onChange={(event) => setValue({ aipCode: event.target.value })} /></Grid>
             <Grid size={{ xs: 12, sm: 6 }}><TextField required fullWidth label="Department" value={form.department} onChange={(event) => setValue({ department: event.target.value })} /></Grid>
-            <Grid size={{ xs: 12, sm: 4 }}><TextField required fullWidth label="Budget" type="number" value={form.budget} onChange={(event) => setValue({ budget: event.target.value })} /></Grid>
-            <Grid size={{ xs: 12, sm: 4 }}><DateField label="Start Date" required value={form.startDate} onChange={(value) => setValue({ startDate: value })} /></Grid>
-            <Grid size={{ xs: 12, sm: 4 }}><DateField label="End Date" required value={form.endDate} onChange={(value) => setValue({ endDate: value })} /></Grid>
+            <Grid size={12}><TextField required fullWidth label="Description" multiline minRows={2} value={form.description} onChange={(event) => setValue({ description: event.target.value })} /></Grid>
+            {editing ? <><Grid size={{ xs: 12, sm: 6 }}><Typography variant="body2" color="text.secondary">Initial Budget</Typography><Typography sx={{ fontWeight: 700 }}>{formatCurrency(form.initialBudget)}</Typography></Grid><Grid size={{ xs: 12, sm: 6 }}><Typography variant="body2" color="text.secondary">Remaining Budget</Typography><Typography sx={{ fontWeight: 700, color: 'primary.dark' }}>{formatCurrency(form.budget)}</Typography></Grid></> : <Grid size={12}><TextField required fullWidth label="Initial Budget" type="number" value={form.budget} onChange={(event) => setValue({ budget: event.target.value, initialBudget: event.target.value })} /></Grid>}
             {requiredDefinitions.map(renderDynamicField)}
           </Grid>
           {configuredSections.map((section) => { const fields = additionalDefinitions.filter((field) => (field.section || 'Additional Information') === section); return <React.Fragment key={section}><Divider sx={{ my: 3 }} /><Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>{getSectionLabel(section)}</Typography><Grid container spacing={2.5}>{fields.map(renderDynamicField)}</Grid></React.Fragment>; })}
+          {editing && <><Divider sx={{ my: 3 }} /><Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>Budget History</Typography><Stack spacing={1.25}><Stack direction="row" sx={{ justifyContent: 'space-between' }}><Typography variant="body2">Initial budget</Typography><Typography variant="body2" sx={{ fontWeight: 800 }}>{formatCurrency(form.initialBudget)}</Typography></Stack>{budgetHistory.map((entry, index) => <Stack key={`${String(entry.createdAt)}-${index}`} direction="row" spacing={1} sx={{ pl: 2, alignItems: 'center', color: 'error.main' }}><Typography aria-hidden sx={{ fontWeight: 800 }}>└</Typography><Typography variant="body2" sx={{ flexGrow: 1 }}>Deducted by {entry.authorName || 'Staff member'}</Typography><Typography variant="body2" sx={{ fontWeight: 800 }}>−{formatCurrency(entry.amount)}</Typography></Stack>)}<Divider /><Stack direction="row" sx={{ justifyContent: 'space-between' }}><Typography variant="body2" sx={{ fontWeight: 800 }}>Remaining budget</Typography><Typography variant="body2" sx={{ fontWeight: 800, color: 'primary.dark' }}>{formatCurrency(form.budget)}</Typography></Stack></Stack><Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 3 }}>Added {formatDate(editing.createdAt)}</Typography></>}
         </DialogContent>
-        <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Cancel</Button><Button onClick={saveProject} disabled={saving || !form.aipCode || !form.budget || !form.department || !form.startDate || !form.endDate || !areRequiredFieldsComplete} variant="contained">{saving ? 'Saving' : 'Save CapDev'}</Button></DialogActions>
+        <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Cancel</Button><Button onClick={saveProject} disabled={saving || !form.aipCode || !form.description || !form.budget || !form.department || !areRequiredFieldsComplete} variant="contained">{saving ? 'Saving' : 'Save CapDev'}</Button></DialogActions>
       </Dialog>
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev Projects</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.length === 0 || draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.length === 0 ? departments.filter((department) => department !== item) : current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial budget from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial budget to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining budget from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining budget to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Date added from" type="date" slotProps={{ inputLabel: { shrink: true } }} value={draftFilters.dateFrom} onChange={(e) => setDraftFilters({ ...draftFilters, dateFrom: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Date added to" type="date" slotProps={{ inputLabel: { shrink: true } }} value={draftFilters.dateTo} onChange={(e) => setDraftFilters({ ...draftFilters, dateTo: e.target.value })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const d = new Date().toISOString().slice(0, 10); setDraftFilters({ ...draftFilters, dateFrom: d, dateTo: d }); }}>Today</Button><Button size="small" onClick={() => { const d = new Date(); setDraftFilters({ ...draftFilters, dateFrom: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`, dateTo: d.toISOString().slice(0,10) }); }}>This month</Button><Button size="small" onClick={() => { const d = new Date(); setDraftFilters({ ...draftFilters, dateFrom: `${d.getFullYear()}-01-01`, dateTo: d.toISOString().slice(0,10) }); }}>This year</Button></Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { setFilters({ ...draftFilters, departments: [...draftFilters.departments] }); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
       <Dialog open={Boolean(deleting)} onClose={() => !saving && setDeleting(null)} maxWidth="xs" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Delete CapDev Project?</DialogTitle><DialogContent><Stack spacing={2}>{deleteError && <Alert severity="error">{deleteError}</Alert>}<Typography>
   This permanently deletes {deleting?.aipCode} and all its requests. This cannot be undone.
 </Typography></Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDeleting(null)} disabled={saving}>Cancel</Button><Button color="error" variant="contained" onClick={removeProject} disabled={saving} sx={{ whiteSpace: 'nowrap' }}>{saving ? 'Deleting' : 'Delete project'}</Button></DialogActions></Dialog>

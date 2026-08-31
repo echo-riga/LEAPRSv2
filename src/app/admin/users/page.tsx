@@ -20,6 +20,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Checkbox,
+  FormControlLabel,
   TextField,
   MenuItem,
   InputAdornment,
@@ -43,6 +45,8 @@ interface UserEntity {
   name: string;
   password?: string;
   isMock?: boolean;
+  createdAt: Date | string;
+  department: string;
 }
 
 export default function UsersManagementPage() {
@@ -53,7 +57,17 @@ export default function UsersManagementPage() {
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState('all');
+  const [roleFilter, setRoleFilter] = useState<string[]>([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [draftRoleFilter, setDraftRoleFilter] = useState<string[]>([]);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [draftDateFrom, setDraftDateFrom] = useState('');
+  const [draftDateTo, setDraftDateTo] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
+  const [draftDepartmentFilter, setDraftDepartmentFilter] = useState<string[]>([]);
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [draftSortOrder, setDraftSortOrder] = useState<'newest' | 'oldest'>('newest');
 
   // Pagination State (6 items per page to prevent scrolling)
   const [currentPage, setCurrentPage] = useState(1);
@@ -68,6 +82,7 @@ export default function UsersManagementPage() {
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
   const [formRole, setFormRole] = useState('employee');
+  const [formDepartment, setFormDepartment] = useState('');
 
   // Redirect if not logged in
   useEffect(() => {
@@ -91,6 +106,8 @@ export default function UsersManagementPage() {
         email: u.id === session.data?.user.id ? session.data?.user.email : `user-${u.id.substring(0, 5)}@leaprs.gov`,
         password: '••••••••',
         isMock: false,
+        createdAt: u.createdAt,
+        department: u.department,
       }));
 
       setUsersList(formattedDbUsers);
@@ -114,6 +131,7 @@ export default function UsersManagementPage() {
     setFormEmail('');
     setFormPassword('');
     setFormRole('employee');
+    setFormDepartment('');
     setDialogOpen(true);
   };
 
@@ -124,6 +142,7 @@ export default function UsersManagementPage() {
     setFormEmail(user.email);
     setFormPassword(''); // Clear password field, indicating "keep current"
     setFormRole(user.role);
+    setFormDepartment(user.department);
     setDialogOpen(true);
   };
 
@@ -138,6 +157,7 @@ export default function UsersManagementPage() {
         name: formName,
         email: formEmail,
         role: formRole,
+        department: formDepartment || 'Unassigned',
         // Only update password if a new one is typed in the field
         ...(formPassword ? { password: formPassword } : {}),
       };
@@ -146,7 +166,7 @@ export default function UsersManagementPage() {
 
       if (!editingUser.isMock) {
         try {
-          await updateUserRole(editingUser.id, formRole);
+          await updateUserRole(editingUser.id, formRole, formDepartment || 'Unassigned');
         } catch (err) {
           console.error('Error updating role in DB:', err);
         }
@@ -161,12 +181,14 @@ export default function UsersManagementPage() {
         role: formRole,
         password: formPassword || '••••••••',
         isMock: true, // New local users are mock by default for presentation
+        createdAt: new Date(),
+        department: formDepartment || 'Unassigned',
       };
 
       setUsersList(prev => [newUser, ...prev]);
 
       try {
-        await createUser(newId, formRole);
+        await createUser(newId, formRole, formDepartment || 'Unassigned');
       } catch (err) {
         console.error('Error creating user in DB:', err);
       }
@@ -193,9 +215,10 @@ export default function UsersManagementPage() {
     const matchesSearch =
       user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       user.email.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesRole = roleFilter === 'all' || user.role === roleFilter;
-    return matchesSearch && matchesRole;
-  });
+    const matchesRole = roleFilter.length === 0 || roleFilter.includes(user.role);
+    const added = new Date(user.createdAt).getTime();
+    return matchesSearch && matchesRole && (departmentFilter.length === 0 || departmentFilter.includes(user.department)) && (!dateFrom || added >= new Date(dateFrom).getTime()) && (!dateTo || added <= new Date(`${dateTo}T23:59:59`).getTime());
+  }).sort((a, b) => sortOrder === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   // Pagination Logic
   const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
@@ -206,7 +229,7 @@ export default function UsersManagementPage() {
   // Reset page when filter/search changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, roleFilter]);
+  }, [searchQuery]);
 
   if (session.isPending || loading) {
     return (
@@ -283,33 +306,7 @@ export default function UsersManagementPage() {
               }}
             />
 
-            {/* Filter Selector */}
-            <TextField
-              select
-              size="small"
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value)}
-              slotProps={{
-                input: {
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <FilterIcon color="action" />
-                    </InputAdornment>
-                  ),
-                },
-              }}
-              sx={{
-                bgcolor: '#ffffff',
-                borderRadius: 2,
-                minWidth: '130px',
-                '& .MuiOutlinedInput-root': { borderRadius: 2 },
-              }}
-            >
-              <MenuItem value="all">All Roles</MenuItem>
-              <MenuItem value="admin">Admin</MenuItem>
-              <MenuItem value="employee">Employee</MenuItem>
-              <MenuItem value="viewer">Viewer</MenuItem>
-            </TextField>
+            <Button size="small" sx={{ height: 40 }} variant="outlined" startIcon={<FilterIcon />} onClick={() => { setDraftRoleFilter([...roleFilter]); setDraftDepartmentFilter([...departmentFilter]); setDraftDateFrom(dateFrom); setDraftDateTo(dateTo); setDraftSortOrder(sortOrder); setFiltersOpen(true); }}>Filter</Button>
           </Stack>
         </Stack>
 
@@ -317,11 +314,12 @@ export default function UsersManagementPage() {
         {currentItems.length > 0 ? (
           <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>
             {currentItems.map((user) => (
-              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={user.id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={user.id} sx={{ position: 'relative', pt: 3 }}>
+                <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}><Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}><Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>Added {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(user.createdAt))}</Typography></Box></Box>
                 <Card
                   variant="outlined"
                   sx={{
-                    borderRadius: 2,
+                    position: 'relative', zIndex: 1, borderRadius: 2,
                     bgcolor: '#ffffff',
                     height: '100%',
                     display: 'flex',
@@ -372,7 +370,7 @@ export default function UsersManagementPage() {
 
                     {/* Details Panel */}
                     <Stack spacing={1.5} sx={{ my: 1 }}>
-                      <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
                         <Typography variant="body2" color="text.secondary">
                           Role
                         </Typography>
@@ -392,11 +390,12 @@ export default function UsersManagementPage() {
                         </Typography>
                       </Stack>
                     </Stack>
+                    <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Department</Typography><Typography variant="body2" sx={{ fontWeight: 700 }}>{user.department}</Typography></Stack>
 
                     <Divider sx={{ my: 2 }} />
 
                     {/* Action buttons aligned at the bottom - Consistent text button design */}
-                    <Stack direction="row" spacing={3} sx={{ mt: 'auto' }}>
+                    <Stack direction="row" spacing={3} sx={{ mt: 'auto', justifyContent: 'flex-end' }}>
                       <Button
                         variant="text"
                         color="primary"
@@ -409,7 +408,7 @@ export default function UsersManagementPage() {
                           '&:hover': { bgcolor: 'transparent', color: 'primary.dark' },
                         }}
                       >
-                        Edit User
+                        Details
                       </Button>
                       
                       <Button
@@ -501,6 +500,7 @@ export default function UsersManagementPage() {
         </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={3} sx={{ py: 1 }}>
+            {editingUser && <Typography variant="caption" color="text.secondary">Added {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(editingUser.createdAt))}</Typography>}
             {/* Name Input */}
             <TextField
               label="Full Name"
@@ -568,6 +568,7 @@ export default function UsersManagementPage() {
               <MenuItem value="admin">Admin</MenuItem>
               <MenuItem value="viewer">Viewer</MenuItem>
             </TextField>
+            <TextField label="Department" fullWidth value={formDepartment} onChange={(e) => setFormDepartment(e.target.value)} />
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
@@ -579,6 +580,7 @@ export default function UsersManagementPage() {
           </Button>
         </DialogActions>
       </Dialog>
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} maxWidth="sm" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Filter Users</DialogTitle><DialogContent dividers><Stack spacing={2}><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Roles</Typography>{['admin', 'employee', 'viewer'].map((role, _, roles) => <FormControlLabel key={role} control={<Checkbox checked={draftRoleFilter.length === 0 || draftRoleFilter.includes(role)} onChange={() => setDraftRoleFilter((current) => current.length === 0 ? roles.filter((item) => item !== role) : current.includes(role) ? current.filter((item) => item !== role) : [...current, role])} />} label={role.charAt(0).toUpperCase() + role.slice(1)} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{Array.from(new Set(usersList.map((user) => user.department))).sort().map((department, _, departments) => <FormControlLabel key={department} control={<Checkbox checked={draftDepartmentFilter.length === 0 || draftDepartmentFilter.includes(department)} onChange={() => setDraftDepartmentFilter((current) => current.length === 0 ? departments.filter((item) => item !== department) : current.includes(department) ? current.filter((item) => item !== department) : [...current, department])} />} label={department} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Grid container spacing={2}><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth type="date" label="Date added from" slotProps={{ inputLabel: { shrink: true } }} value={draftDateFrom} onChange={(event) => setDraftDateFrom(event.target.value)} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth type="date" label="Date added to" slotProps={{ inputLabel: { shrink: true } }} value={draftDateTo} onChange={(event) => setDraftDateTo(event.target.value)} /></Grid></Grid><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const today = new Date().toISOString().slice(0, 10); setDraftDateFrom(today); setDraftDateTo(today); }}>Today</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This month</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-01-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This year</Button></Stack><TextField select fullWidth label="Sort" value={draftSortOrder} onChange={(event) => setDraftSortOrder(event.target.value as 'newest' | 'oldest')}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => { setDraftRoleFilter([]); setDraftDepartmentFilter([]); setDraftDateFrom(''); setDraftDateTo(''); setDraftSortOrder('newest'); }}>Reset</Button><Button variant="contained" onClick={() => { setRoleFilter([...draftRoleFilter]); setDepartmentFilter([...draftDepartmentFilter]); setDateFrom(draftDateFrom); setDateTo(draftDateTo); setSortOrder(draftSortOrder); setCurrentPage(1); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
     </Box>
   );
 }

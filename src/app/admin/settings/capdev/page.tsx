@@ -87,8 +87,6 @@ export default function CapdevConfigPage() {
     aipCode: '',
     budget: '',
     department: '',
-    startDate: '',
-    endDate: '',
   });
 
   const handleFixedPreviewChange = (key: string, value: string) => {
@@ -891,22 +889,6 @@ export default function CapdevConfigPage() {
                                 onChange={(e) => handleFixedPreviewChange('department', e.target.value)}
                                 sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
                               />
-                            </Stack>
-                          </Grid>
-                          <Grid size={{ xs: 12, sm: 6 }}>
-                            <Stack spacing={0.5}>
-                              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                                Start Date
-                              </Typography>
-                              <DateField size="small" value={fixedPreviewData.startDate} onChange={(value) => handleFixedPreviewChange('startDate', value)} />
-                            </Stack>
-                          </Grid>
-                          <Grid size={{ xs: 12, sm: 6 }}>
-                            <Stack spacing={0.5}>
-                              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                                End Date
-                              </Typography>
-                              <DateField size="small" value={fixedPreviewData.endDate} onChange={(value) => handleFixedPreviewChange('endDate', value)} />
                             </Stack>
                           </Grid>
                         </>

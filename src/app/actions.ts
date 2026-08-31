@@ -2,7 +2,7 @@
 
 import { db } from '@/db';
 import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates } from '@/db/schema';
-import { sql, count, eq, getTableColumns } from 'drizzle-orm';
+import { sql, count, and, eq, getTableColumns } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 
 export interface DbStatus {
@@ -96,9 +96,9 @@ export async function getAllUsers() {
   }
 }
 
-export async function updateUserRole(userId: string, newRole: string) {
+export async function updateUserRole(userId: string, newRole: string, department?: string) {
   try {
-    await db.update(users).set({ role: newRole }).where(eq(users.id, userId));
+    await db.update(users).set({ role: newRole, ...(department ? { department } : {}) }).where(eq(users.id, userId));
     return { success: true };
   } catch (error) {
     console.error('Failed to update user role:', error);
@@ -106,11 +106,12 @@ export async function updateUserRole(userId: string, newRole: string) {
   }
 }
 
-export async function createUser(userId: string, role: string) {
+export async function createUser(userId: string, role: string, department = 'Unassigned') {
   try {
     await db.insert(users).values({
       id: userId,
       role: role,
+      department,
     });
     return { success: true };
   } catch (error) {
@@ -131,10 +132,9 @@ export async function deleteUser(userId: string) {
 
 export type CapdevInput = {
   aipCode: string;
+  description: string;
   budget: string;
   department: string;
-  startDate: string;
-  endDate: string;
   additionalInfo: Record<string, unknown>;
   updatedById: string;
 };
@@ -164,11 +164,30 @@ export async function getAllCapdevs() {
   }
 }
 
+export async function getAnalyticsData() {
+  try {
+    const [capdevData, requestData, statusUpdateData] = await Promise.all([
+      db.select({ id: capdevs.id, department: capdevs.department, initialBudget: capdevs.initialBudget, budget: capdevs.budget, createdAt: capdevs.createdAt }).from(capdevs),
+      db.select({ id: requests.id, capdevId: requests.capdevId, setting: requests.setting, createdAt: requests.createdAt }).from(requests),
+      db.select({ requestId: requestStatusUpdates.requestId, markAsComplete: requestStatusUpdates.markAsComplete }).from(requestStatusUpdates),
+    ]);
+
+    return {
+      capdevs: capdevData.map((capdev) => ({ ...capdev, initialBudget: String(capdev.initialBudget), budget: String(capdev.budget), createdAt: capdev.createdAt.toISOString() })),
+      requests: requestData.map((request) => ({ ...request, createdAt: request.createdAt.toISOString() })),
+      statusUpdates: statusUpdateData,
+    };
+  } catch (error) {
+    console.error('Failed to fetch analytics data:', error);
+    return { capdevs: [], requests: [], statusUpdates: [] };
+  }
+}
+
 export async function createCapdev(data: CapdevInput) {
   try {
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
-    const [created] = await db.insert(capdevs).values(data).returning();
+    const [created] = await db.insert(capdevs).values({ ...data, initialBudget: data.budget }).returning();
     return { success: true, capdev: created };
   } catch (error) {
     console.error('Failed to create CapDev project:', error);
@@ -182,7 +201,7 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [updated] = await db
       .update(capdevs)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ aipCode: data.aipCode, description: data.description, department: data.department, additionalInfo: data.additionalInfo, updatedById: data.updatedById, updatedAt: new Date() })
       .where(eq(capdevs.id, id))
       .returning();
     return { success: true, capdev: updated };
@@ -199,6 +218,20 @@ export async function getCapdevById(id: number) {
   } catch (error) {
     console.error('Failed to fetch CapDev project:', error);
     return null;
+  }
+}
+
+export async function getCapdevBudgetHistory(capdevId: number) {
+  try {
+    return await db
+      .select({ authorName: requestStatusUpdates.authorName, amount: requests.requestedBudget, createdAt: requestStatusUpdates.createdAt })
+      .from(requestStatusUpdates)
+      .innerJoin(requests, eq(requestStatusUpdates.requestId, requests.id))
+      .where(and(eq(requests.capdevId, capdevId), eq(requestStatusUpdates.subtractsRequestedAmount, true)))
+      .orderBy(requestStatusUpdates.createdAt);
+  } catch (error) {
+    console.error('Failed to fetch CapDev budget history:', error);
+    return [];
   }
 }
 
@@ -472,9 +505,8 @@ export type RequestInput = {
   capdevId: number;
   userId: string;
   setting: string;
+  description: string;
   requestedBudget: string;
-  startDate: string;
-  endDate: string;
   additionalInfo: Record<string, unknown>;
   updatedById: string;
 };
@@ -482,14 +514,7 @@ export type RequestInput = {
 export async function getRequestsByCapdev(capdevId: number) {
   try {
     return await db
-      .select({
-        ...getTableColumns(requests),
-        isComplete: sql<boolean>`EXISTS (
-          SELECT 1 FROM request_status_updates
-          WHERE request_status_updates.request_id = ${requests.id}
-            AND request_status_updates.mark_as_complete = true
-        )`,
-      })
+      .select(getTableColumns(requests))
       .from(requests)
       .where(eq(requests.capdevId, capdevId))
       .orderBy(requests.createdAt);
@@ -514,6 +539,8 @@ export async function createRequest(data: RequestInput) {
     const { data: session } = await auth.getSession();
     if (!session?.user) return { success: false, error: 'You must be signed in to create a request.' };
 
+    const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, data.capdevId)).limit(1);
+    if (!capdev || Number(data.requestedBudget) > Number(capdev.budget)) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
     const [created] = await db.insert(requests).values({
       ...data,
       userId: session.user.id,
@@ -529,7 +556,13 @@ export async function createRequest(data: RequestInput) {
 
 export async function updateRequest(id: number, data: RequestInput) {
   try {
-    const [updated] = await db.update(requests).set({ ...data, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
+    const [existing] = await db.select().from(requests).where(eq(requests.id, id)).limit(1);
+    if (!existing) return { success: false, error: 'Request not found.' };
+    const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, existing.capdevId)).limit(1);
+    const [deduction] = await db.select({ id: requestStatusUpdates.id }).from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
+    if (deduction && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested budget cannot be changed after it has been deducted.' };
+    if (!deduction && (!capdev || Number(data.requestedBudget) > Number(capdev.budget))) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
+    const [updated] = await db.update(requests).set({ ...data, capdevId: existing.capdevId, userId: existing.userId, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
     return { success: true, request: updated };
   } catch (error) {
     console.error('Failed to update request:', error);
@@ -684,6 +717,14 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
           WHERE request_id = ${data.requestId}
             AND mark_as_complete = true
         )
+        AND (
+          ${data.subtractsRequestedAmount} = false
+          OR EXISTS (
+            SELECT 1 FROM capdevs
+            WHERE capdevs.id = target_request.capdev_id
+              AND capdevs.budget >= target_request.requested_budget
+          )
+        )
         RETURNING request_id, subtracts_requested_amount
       ),
       deducted_budget AS (
@@ -694,11 +735,12 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
         JOIN inserted_update ON inserted_update.request_id = target_request.id
         WHERE capdevs.id = target_request.capdev_id
           AND inserted_update.subtracts_requested_amount = true
+          AND capdevs.budget >= target_request.requested_budget
         RETURNING capdevs.id
       )
       SELECT request_id FROM inserted_update
     `);
-    if (result.rows.length === 0) throw new Error('This request is already complete or no longer exists');
+    if (result.rows.length === 0) throw new Error('This request is already complete, no longer exists, or exceeds the remaining CapDev budget.');
     return { success: true };
   } catch (error) {
     console.error('Failed to create request status update:', error);

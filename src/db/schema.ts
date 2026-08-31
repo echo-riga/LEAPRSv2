@@ -6,7 +6,6 @@ import {
   text, 
   integer, 
   numeric, 
-  date, 
   boolean, 
   jsonb, 
   uniqueIndex 
@@ -22,6 +21,7 @@ export const connections = pgTable('connections', {
 export const users = pgTable('users', {
   id: text('id').primaryKey(),
   role: varchar('role', { length: 50 }).default('employee').notNull(),
+  department: varchar('department', { length: 255 }).default('Unassigned').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -46,10 +46,10 @@ export const capdevFieldDefinitions = pgTable('capdev_field_definitions', {
 export const capdevs = pgTable('capdevs', {
   id: serial('id').primaryKey(),
   aipCode: varchar('aip_code', { length: 100 }).notNull().unique(),
+  description: text('description').notNull().default(''),
+  initialBudget: numeric('initial_budget', { precision: 12, scale: 2 }).notNull().default('0'),
   budget: numeric('budget', { precision: 12, scale: 2 }).notNull(),
   department: varchar('department', { length: 255 }).notNull(),
-  startDate: date('start_date').notNull(),
-  endDate: date('end_date').notNull(),
   additionalInfo: jsonb('additional_info').default({}).notNull(),
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED FORM DATA LAST
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -80,9 +80,8 @@ export const requests = pgTable('requests', {
   userId: text('user_id').references(() => users.id).notNull(),
   requestorName: varchar('requestor_name', { length: 255 }),
   setting: varchar('setting', { length: 50 }).notNull(),
+  description: text('description').notNull().default(''),
   requestedBudget: numeric('requested_budget', { precision: 12, scale: 2 }).notNull(),
-  startDate: date('start_date').notNull(),
-  endDate: date('end_date').notNull(),
   additionalInfo: jsonb('additional_info').default({}).notNull(),
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED FORM DATA LAST
   createdAt: timestamp('created_at').defaultNow().notNull(),
