@@ -4,8 +4,6 @@ import React, { useEffect, useState } from 'react';
 import {
   Container,
   Box,
-  Card,
-  CardContent,
   Typography,
   Button,
   Stack,
@@ -24,10 +22,8 @@ import {
   Lock as LockIcon,
   Email as EmailIcon,
   CheckCircle as CheckCircleIcon,
-  Error as ErrorIcon,
   Refresh as RefreshIcon,
   Person as PersonIcon,
-  ExitToApp as ExitToAppIcon,
   FiberManualRecord as DotIcon,
   AccessTime as AccessTimeIcon,
   Dns as DnsIcon,
@@ -47,7 +43,6 @@ export default function Home() {
 
   // Auth States
   const session = authClient.useSession();
-  const [role, setRole] = useState<string | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -125,15 +120,12 @@ export default function Home() {
       if (session.data) {
         setCheckingRole(true);
         try {
-          const userRole = await getOrCreateUserRole(
+          await getOrCreateUserRole(
             session.data.user.id,
             session.data.user.email
           );
           if (isMounted) {
-            setRole(userRole);
-            if (userRole === 'admin') {
-              router.push('/admin');
-            }
+            router.replace('/admin');
           }
         } catch (error) {
           console.error('Failed to get/create user role:', error);
@@ -144,7 +136,6 @@ export default function Home() {
         }
       } else {
         if (isMounted) {
-          setRole(null);
           setCheckingRole(false);
         }
       }
@@ -181,20 +172,6 @@ export default function Home() {
     }
   };
 
-  const handleSignOut = async () => {
-    setAuthLoading(true);
-    try {
-      await authClient.signOut();
-      setAuthSuccess('Logged out successfully.');
-      setAuthError(null);
-      setDbStatus(null);
-    } catch (err: any) {
-      setAuthError(err.message || 'Failed to log out.');
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
   // Loading Session State
   if (session.isPending || (session.data && checkingRole)) {
     return (
@@ -217,63 +194,25 @@ export default function Home() {
     );
   }
 
-  // Authenticated View
+  // All authenticated users enter the shared portal. Individual features remain
+  // controlled by the role checks within the portal and server actions.
   if (session.data) {
-    if (role === 'admin') {
-      return (
-        <Box
-          sx={{
-            display: 'flex',
-            minHeight: '100vh',
-            alignItems: 'center',
-            justifyContent: 'center',
-            bgcolor: 'background.default',
-          }}
-        >
-          <Stack spacing={2} sx={{ alignItems: 'center' }}>
-            <CircularProgress color="primary" size={50} />
-            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: '500' }}>
-              Redirecting to Admin Portal...
-            </Typography>
-          </Stack>
-        </Box>
-      );
-    }
-
-    // Access Denied for non-admin users
     return (
       <Box
         sx={{
           display: 'flex',
-          flexDirection: 'column',
           minHeight: '100vh',
           alignItems: 'center',
           justifyContent: 'center',
           bgcolor: 'background.default',
-          p: 3,
         }}
       >
-        <Card variant="outlined" sx={{ maxWidth: 400, width: '100%', borderRadius: 2, p: 3, textAlign: 'center' }}>
-          <CardContent>
-            <ErrorIcon color="error" sx={{ fontSize: 60, mb: 2 }} />
-            <Typography variant="h5" sx={{ fontWeight: '800', mb: 2 }}>
-              Access Denied
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              Your account ({session.data.user.email}) does not have Administrator privileges.
-            </Typography>
-            <Button
-              variant="contained"
-              color="error"
-              fullWidth
-              onClick={handleSignOut}
-              disabled={authLoading}
-              startIcon={<ExitToAppIcon />}
-            >
-              Sign Out
-            </Button>
-          </CardContent>
-        </Card>
+        <Stack spacing={2} sx={{ alignItems: 'center' }}>
+          <CircularProgress color="primary" size={50} />
+          <Typography variant="body2" color="text.secondary" sx={{ fontWeight: '500' }}>
+            Loading Portal...
+          </Typography>
+        </Stack>
       </Box>
     );
   }
