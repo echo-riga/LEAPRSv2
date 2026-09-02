@@ -6,7 +6,7 @@ import { AppBar, Box, Chip, CircularProgress, IconButton, Stack, Toolbar, Toolti
 import { ArrowBack as ArrowBackIcon, ExitToApp as ExitToAppIcon, Fullscreen as FullscreenIcon, FullscreenExit as FullscreenExitIcon, Settings as SettingsIcon } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
 
-const ADMIN_ROUTES = ['/admin', '/admin/analytics', '/admin/settings', '/admin/users', '/admin/settings/capdev', '/admin/settings/request'];
+const ADMIN_ROUTES = ['/admin', '/admin/analytics', '/admin/reports', '/admin/settings', '/admin/users', '/admin/settings/capdev', '/admin/settings/request'];
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -71,7 +71,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     ? safeSettingsReturnPath
     : statusRouteMatch
       ? statusRouteMatch[1]
-      : pathname === '/admin/users' || pathname === '/admin/analytics' || pathname === '/admin/settings/capdev' || pathname === '/admin/settings/request'
+      : pathname === '/admin/users' || pathname === '/admin/analytics' || pathname === '/admin/reports' || pathname === '/admin/settings/capdev' || pathname === '/admin/settings/request'
         ? '/admin/settings'
         : '/admin';
   const settingsHref = `/admin/settings?from=${encodeURIComponent(pathname)}`;

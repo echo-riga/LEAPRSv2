@@ -100,6 +100,7 @@ export default function SettingsPage() {
         </Stack>
       ),
       actionText: 'Export Reports',
+      route: '/admin/reports',
     },
     {
       title: 'Analytics',

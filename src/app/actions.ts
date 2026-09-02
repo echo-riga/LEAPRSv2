@@ -4,6 +4,9 @@ import { db } from '@/db';
 import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates } from '@/db/schema';
 import { sql, count, and, eq, getTableColumns } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
+import ExcelJS from 'exceljs';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 
 export interface DbStatus {
   success: boolean;
@@ -180,6 +183,149 @@ export async function getAnalyticsData() {
   } catch (error) {
     console.error('Failed to fetch analytics data:', error);
     return { capdevs: [], requests: [], statusUpdates: [] };
+  }
+}
+
+export async function getMonitoringReportData() {
+  try {
+    const [capdevData, requestData, capdevFields, requestFields] = await Promise.all([
+      db.select().from(capdevs).orderBy(capdevs.aipCode),
+      db.select().from(requests).orderBy(requests.createdAt),
+      db.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.isActive, true)).orderBy(capdevFieldDefinitions.sortOrder),
+      db.select().from(requestFieldDefinitions).where(eq(requestFieldDefinitions.isActive, true)).orderBy(requestFieldDefinitions.sortOrder),
+    ]);
+    return { capdevs: capdevData, requests: requestData, capdevFields, requestFields };
+  } catch (error) {
+    console.error('Failed to fetch monitoring report data:', error);
+    return { capdevs: [], requests: [], capdevFields: [], requestFields: [] };
+  }
+}
+
+type MonitoringField = { name: string; source: 'capdev' | 'request'; key?: string };
+
+function monitoringCellValue(value: unknown) {
+  if (value === null || value === undefined || value === '') return '';
+  if (Array.isArray(value)) return value.map((item) => typeof item === 'object' && item !== null && 'name' in item ? String(item.name) : String(item)).join(', ');
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+function columnLetter(column: number) {
+  let result = '';
+  for (let current = column; current > 0; current = Math.floor((current - 1) / 26)) result = String.fromCharCode(((current - 1) % 26) + 65) + result;
+  return result;
+}
+
+export async function generateMonitoringSheet(input: { capdevIds: number[]; capdevFieldIds: number[]; requestFieldIds: number[]; capdevFixedFields: string[]; requestFixedFields: string[] }) {
+  try {
+    if (input.capdevIds.length === 0) return { success: false, error: 'Select at least one CapDev project.' };
+    const [allCapdevs, allRequests, capdevFields, requestFields] = await Promise.all([
+      db.select().from(capdevs), db.select().from(requests),
+      db.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.isActive, true)).orderBy(capdevFieldDefinitions.sortOrder),
+      db.select().from(requestFieldDefinitions).where(eq(requestFieldDefinitions.isActive, true)).orderBy(requestFieldDefinitions.sortOrder),
+    ]);
+    const selectedCapdevs = allCapdevs.filter((capdev) => input.capdevIds.includes(capdev.id));
+    const selectedCapdevsById = new Map(selectedCapdevs.map((capdev) => [capdev.id, capdev]));
+    const selectedRequests = allRequests.filter((request) => selectedCapdevsById.has(request.capdevId));
+    const fields: MonitoringField[] = [
+      ...input.capdevFixedFields.map((key) => ({ name: key, source: 'capdev' as const, key })),
+      ...capdevFields.filter((field) => input.capdevFieldIds.includes(field.id)).map((field) => ({ name: field.name, source: 'capdev' as const })),
+      ...input.requestFixedFields.map((key) => ({ name: key, source: 'request' as const, key })),
+      ...requestFields.filter((field) => input.requestFieldIds.includes(field.id)).map((field) => ({ name: field.name, source: 'request' as const })),
+    ];
+    const capacityColumns = Math.max(1, fields.length);
+    const originalCapacityColumns = 8;
+    const template = await readFile(path.join(process.cwd(), 'public', 'monitoring-sheet-template.xlsx'));
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(template as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+    const sheet = workbook.getWorksheet('Sheet1');
+    if (!sheet) return { success: false, error: 'Monitoring sheet template was not found.' };
+
+    ['B1:BT1', 'BU1:CI1', 'B2:I2', 'J2:K2', 'L2:O2', 'P2:AE2', 'AF2:AR2', 'AS2:BC2', 'BD2:BJ2', 'BK2:BT2', 'BV2:BX2', 'BY2:CA2', 'CB2:CD2', 'CE2:CH2', 'CI2:CI3'].forEach((range) => sheet.unMergeCells(range));
+    const delta = capacityColumns - originalCapacityColumns;
+    if (delta > 0) sheet.spliceColumns(10, 0, ...Array.from({ length: delta }, () => []));
+    if (delta < 0) sheet.spliceColumns(2 + capacityColumns, -delta);
+
+    const sectionDefinitions = [
+      { label: 'CAPDEV PROPOSAL (To be filled out by HRDO)', width: 2 },
+      { label: 'I. LBP FORM 4 DETAILS (To be filled out by OFFICES)', width: 4 },
+      { label: 'II. ACTIVITY DESIGN DETAILS (To be filled out by OFFICES)', width: 16 },
+      { label: 'III. BUDGETARY REQUIREMENTS (Fill Color = Obligated/Utilized) (To be filled out by OFFICES)', width: 13 },
+      { label: 'IV. DOCUMENT TRACKER DETAILS (To be filled out by OFFICES)', width: 11 },
+      { label: 'V. TERMINAL REPORT DETAILS (To be filled out by OFFICES)', width: 7 },
+      { label: 'VI. ATTACHMENT (To be filled out by OFFICES)', width: 10 },
+    ];
+    const headerStyle = { ...sheet.getCell('B3').style };
+    const dataStyle = { ...sheet.getCell('B4').style };
+    for (let offset = 0; offset < capacityColumns; offset += 1) {
+      const column = 2 + offset;
+      sheet.getColumn(column).width = 14;
+      sheet.getCell(3, column).style = { ...headerStyle };
+      sheet.getCell(4, column).style = { ...dataStyle };
+      sheet.getCell(3, column).value = fields[offset]?.name || '';
+    }
+
+    let cursor = 2 + capacityColumns;
+    sheet.mergeCells(2, 2, 2, cursor - 1);
+    sheet.getCell(2, 2).value = 'CAPACITY DEVELOPMENT';
+    for (const section of sectionDefinitions) {
+      sheet.mergeCells(2, cursor, 2, cursor + section.width - 1);
+      sheet.getCell(2, cursor).value = section.label;
+      if (section.label.startsWith('I. LBP')) {
+        for (let column = cursor; column < cursor + section.width; column += 1) sheet.getCell(2, column).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF47D45A' } };
+      }
+      cursor += section.width;
+    }
+    const attachmentEnd = cursor - 1;
+    cursor += 1;
+    const ratingSections = [
+      { label: 'HRDO RATING PRE-IMPLEMENTATION', width: 3 }, { label: 'HRDO RATING DURING-IMPLEMENTATION', width: 3 },
+      { label: 'HRDO RATING POST-IMPLEMENTATION', width: 3 }, { label: 'AVERAGE ACTIVITY RATING', width: 4 }, { label: 'HRDO ANALYSIS', width: 1 },
+    ];
+    for (const section of ratingSections) {
+      if (section.width > 1) sheet.mergeCells(2, cursor, 2, cursor + section.width - 1);
+      sheet.getCell(2, cursor).value = section.label;
+      cursor += section.width;
+    }
+    for (const row of [2, 3]) {
+      for (let column = 2; column < cursor; column += 1) {
+        const cell = sheet.getCell(row, column);
+        const fill = cell.fill;
+        const isWhiteOrUnfilled = fill?.type !== 'pattern' || fill.pattern !== 'solid' || fill.fgColor?.argb === 'FFFFFFFF';
+        if (isWhiteOrUnfilled) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF47D45A' } };
+      }
+    }
+    sheet.mergeCells(1, 2, 1, attachmentEnd);
+    sheet.mergeCells(1, attachmentEnd + 1, 1, cursor - 1);
+    sheet.getCell(1, 2).value = `${new Date().getFullYear()} CONSOLIDATED COMPETENCY-BASED LEARNING & DEVELOPMENT INTERVENTIONS (CapDev)`;
+    sheet.getCell(1, attachmentEnd + 1).value = 'To be filled out by HRDO';
+
+    if (selectedRequests.length > 1) sheet.duplicateRow(4, selectedRequests.length - 1, true);
+    const rowCount = Math.max(1, selectedRequests.length);
+    for (let rowOffset = 0; rowOffset < rowCount; rowOffset += 1) {
+      const row = 4 + rowOffset;
+      const request = selectedRequests[rowOffset];
+      const capdev = request ? selectedCapdevsById.get(request.capdevId) : undefined;
+      const capdevInfo = (capdev?.additionalInfo || {}) as Record<string, unknown>;
+      const requestInfo = (request?.additionalInfo || {}) as Record<string, unknown>;
+      for (let offset = 0; offset < capacityColumns; offset += 1) {
+        const cell = sheet.getCell(row, 2 + offset);
+        cell.style = { ...dataStyle };
+        const field = fields[offset];
+        const record = field?.source === 'capdev' ? capdev : request;
+        cell.value = field ? monitoringCellValue(field.key ? record?.[field.key as keyof typeof record] : field.source === 'capdev' ? capdevInfo[field.name] : requestInfo[field.name]) : '';
+      }
+      for (let column = 2 + capacityColumns; column < cursor; column += 1) {
+        const cell = sheet.getCell(row, column);
+        cell.value = '';
+      }
+    }
+    sheet.views = [{ state: 'frozen', xSplit: 1, ySplit: 3, topLeftCell: 'B4' }];
+    workbook.calcProperties.fullCalcOnLoad = true;
+    const output = await workbook.xlsx.writeBuffer();
+    return { success: true, fileName: `Monitoring-Sheet-${new Date().getFullYear()}.xlsx`, base64: Buffer.from(output).toString('base64'), columns: `${columnLetter(2)}:${columnLetter(1 + capacityColumns)}` };
+  } catch (error) {
+    console.error('Failed to generate monitoring sheet:', error);
+    return { success: false, error: 'Unable to generate the monitoring sheet.' };
   }
 }
 
