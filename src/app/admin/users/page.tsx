@@ -36,7 +36,7 @@ import {
   FilterList as FilterIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
-import { getAllUsers, getCurrentUserAccess, updateUserRole, createUser, deleteUser } from '@/app/actions';
+import { createDirectoryUser, deleteDirectoryUser, getCurrentUserAccess, getUsersDirectory, updateDirectoryUser, createUser } from '@/app/actions';
 
 interface UserEntity {
   id: string;
@@ -102,13 +102,13 @@ export default function UsersManagementPage() {
 
     setLoading(true);
     try {
-      const dbUsers = await getAllUsers();
+      const directoryUsers = await getUsersDirectory();
       
-      const formattedDbUsers = dbUsers.map(u => ({
+      const formattedDbUsers = directoryUsers.map(u => ({
         id: u.id,
         role: u.role,
-        name: u.id === session.data?.user.id ? (session.data?.user.name || 'Admin User') : 'Registered Staff',
-        email: u.id === session.data?.user.id ? session.data?.user.email : `user-${u.id.substring(0, 5)}@leaprs.gov`,
+        name: u.name || 'Unnamed user',
+        email: u.email,
         password: '••••••••',
         isMock: false,
         createdAt: u.createdAt,
@@ -167,17 +167,19 @@ export default function UsersManagementPage() {
         ...(formPassword ? { password: formPassword } : {}),
       };
 
-      setUsersList(prev => prev.map(u => u.id === editingUser.id ? updatedUser : u));
-
       if (!editingUser.isMock) {
-        try {
-          await updateUserRole(editingUser.id, formRole, formDepartment || 'Unassigned');
-        } catch (err) {
-          console.error('Error updating role in DB:', err);
-        }
+        const result = await updateDirectoryUser(editingUser.id, { name: formName, email: formEmail, role: formRole, department: formDepartment || 'Unassigned' });
+        if (!result.success) { console.error('Error updating user:', result.error); return; }
       }
+      setUsersList(prev => prev.map(u => u.id === editingUser.id ? updatedUser : u));
     } else {
       // ADD OPERATION
+      if (!formPassword) return;
+      const created = await createDirectoryUser({ name: formName, email: formEmail, password: formPassword, role: formRole, department: formDepartment || 'Unassigned' });
+      if (!created.success || !created.user) { console.error('Error creating user:', created.error); return; }
+      setUsersList((current) => [{ id: created.user.id, name: created.user.name || formName, email: created.user.email, role: formRole, password: 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢', createdAt: created.user.createdAt, department: formDepartment || 'Unassigned' }, ...current]);
+      setDialogOpen(false);
+      return;
       const newId = `user-${Math.random().toString(36).substr(2, 9)}`;
       const newUser: UserEntity = {
         id: newId,
@@ -208,7 +210,7 @@ export default function UsersManagementPage() {
 
     if (!isMock) {
       try {
-        await deleteUser(userId);
+        await deleteDirectoryUser(userId);
       } catch (err) {
         console.error('Failed to delete user from DB:', err);
       }

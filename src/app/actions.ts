@@ -143,6 +143,33 @@ export async function getAllUsers() {
   }
 }
 
+export type DirectoryUser = { id: string; name: string | null; email: string; createdAt: Date; role: string; department: string };
+
+export async function getUsersDirectory(): Promise<DirectoryUser[]> {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return [];
+
+  try {
+    const [{ data: authUsers, error: authError }, appUsers] = await Promise.all([
+      auth.admin.listUsers({ query: { limit: 100 } }),
+      db.select().from(users),
+    ]);
+    if (authError || !authUsers) throw new Error(authError?.message || 'Neon Auth did not return users.');
+    const appUsersById = new Map(appUsers.map((user) => [user.id, user]));
+    return authUsers.users.map((user) => ({
+      id: user.id,
+      name: user.name || null,
+      email: user.email,
+      createdAt: user.createdAt,
+      role: appUsersById.get(user.id)?.role || 'employee',
+      department: appUsersById.get(user.id)?.department || 'Unassigned',
+    }));
+  } catch (error) {
+    console.error('Failed to fetch Neon Auth users:', error);
+    return [];
+  }
+}
+
 export async function updateUserRole(userId: string, newRole: string, department?: string) {
   try {
     const access = await getCurrentAccess();
@@ -152,6 +179,20 @@ export async function updateUserRole(userId: string, newRole: string, department
   } catch (error) {
     console.error('Failed to update user role:', error);
     return { success: false, error: 'Database update failed' };
+  }
+}
+
+export async function updateDirectoryUser(userId: string, input: { name: string; email: string; role: string; department: string }) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin' || !VALID_ROLES.includes(input.role as AppRole)) return unauthorized;
+  try {
+    const { error } = await auth.admin.updateUser({ userId, data: { name: input.name, email: input.email } });
+    if (error) return { success: false, error: error.message || 'Unable to update the Neon Auth user.' };
+    await db.update(users).set({ role: input.role, department: input.department }).where(eq(users.id, userId));
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to update user directory record:', error);
+    return { success: false, error: 'Unable to update the user.' };
   }
 }
 
@@ -171,6 +212,20 @@ export async function createUser(userId: string, role: string, department = 'Una
   }
 }
 
+export async function createDirectoryUser(input: { name: string; email: string; password: string; role: string; department: string }) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin' || !VALID_ROLES.includes(input.role as AppRole)) return unauthorized;
+  try {
+    const { data, error } = await auth.admin.createUser({ email: input.email, password: input.password, name: input.name });
+    if (error || !data?.user) return { success: false, error: error?.message || 'Unable to create the Neon Auth user.' };
+    await db.insert(users).values({ id: data.user.id, role: input.role, department: input.department });
+    return { success: true, user: data.user };
+  } catch (error) {
+    console.error('Failed to create user directory record:', error);
+    return { success: false, error: 'Unable to create the user.' };
+  }
+}
+
 export async function deleteUser(userId: string) {
   try {
     const access = await getCurrentAccess();
@@ -180,6 +235,20 @@ export async function deleteUser(userId: string) {
   } catch (error) {
     console.error('Failed to delete user from DB:', error);
     return { success: false, error: 'Database delete failed' };
+  }
+}
+
+export async function deleteDirectoryUser(userId: string) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
+  try {
+    const { error } = await auth.admin.removeUser({ userId });
+    if (error) return { success: false, error: error.message || 'Unable to delete the Neon Auth user.' };
+    await db.delete(users).where(eq(users.id, userId));
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to delete user directory record:', error);
+    return { success: false, error: 'Unable to delete the user.' };
   }
 }
 
