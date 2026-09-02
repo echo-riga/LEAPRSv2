@@ -33,6 +33,7 @@ import {
   Edit as EditIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
+import { getCurrentUserAccess } from '@/app/actions';
 import DateField from '@/components/DateField';
 import {
   getRequestFieldDefinitions,
@@ -97,6 +98,11 @@ export default function RequestConfigPage() {
       router.push('/');
     }
   }, [session.isPending, session.data, router]);
+
+  useEffect(() => {
+    if (!session.data) return;
+    void getCurrentUserAccess().then((access) => { if (access.success && access.role !== 'admin') router.replace('/admin'); });
+  }, [router, session.data]);
 
   useEffect(() => {
     const loadFields = async () => {

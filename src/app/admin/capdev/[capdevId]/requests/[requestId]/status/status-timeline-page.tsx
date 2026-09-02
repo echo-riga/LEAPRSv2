@@ -13,7 +13,7 @@ import {
   DialogContent, DialogTitle, Fab, FormControlLabel, Stack, TextField, Typography,
 } from '@mui/material';
 import { authClient } from '@/lib/auth/client';
-import { createRequestStatusUpdate, getRequestById, getRequestStatusUpdates, uploadFilesToGoogleDrive, type StatusAttachment } from '@/app/actions';
+import { createRequestStatusUpdate, getCurrentUserAccess, getRequestById, getRequestStatusUpdates, uploadFilesToGoogleDrive, type AppRole, type StatusAttachment } from '@/app/actions';
 
 type RequestSummary = { id: number; capdevId: number; setting: string; requestedBudget: string };
 type StatusUpdate = { id: number; requestId: number; authorName: string | null; statusUpdate: string; remarks: string | null; files: unknown; markAsComplete: boolean; subtractsRequestedAmount: boolean; createdAt: Date | string };
@@ -67,6 +67,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [form, setForm] = useState<StatusForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [role, setRole] = useState<AppRole>('employee');
+
+  useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
 
   const loadData = useCallback(async () => {
     const [requestData, updateData] = await Promise.all([getRequestById(requestId), getRequestStatusUpdates(requestId)]);
@@ -134,7 +137,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           })}</Box>}
       </Container>
 
-      {!isComplete && <Fab variant="extended" color="primary" onClick={openAdd} sx={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1100, px: 2.5, boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)' }}><AddIcon sx={{ mr: 1 }} />Add Status</Fab>}
+      {!isComplete && (role === 'admin' || role === 'employee') && <Fab variant="extended" color="primary" onClick={openAdd} sx={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1100, px: 2.5, boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)' }}><AddIcon sx={{ mr: 1 }} />Add Status</Fab>}
 
       <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Add Status Update</DialogTitle><DialogContent dividers><Stack spacing={2.5} sx={{ pt: 0.5 }}>
         {error && <Alert severity="error">{error}</Alert>}

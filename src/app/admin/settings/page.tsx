@@ -31,7 +31,7 @@ import {
   Analytics as AnalyticsIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
-import { getDynamicFieldCounts } from '@/app/actions';
+import { getCurrentUserAccess, getDynamicFieldCounts, type AppRole } from '@/app/actions';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -39,10 +39,13 @@ export default function SettingsPage() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [auditLogsOpen, setAuditLogsOpen] = useState(false);
   const [counts, setCounts] = useState({ capdevFieldsCount: 0, requestFieldsCount: 0 });
+  const [role, setRole] = useState<AppRole>('employee');
 
   useEffect(() => {
     getDynamicFieldCounts().then(setCounts);
   }, []);
+
+  useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
 
   // Redirect if not logged in
   useEffect(() => {
@@ -168,7 +171,11 @@ export default function SettingsPage() {
       actionText: 'Configure Fields',
       route: '/admin/settings/request',
     },
-  ];
+  ].filter((item) => role === 'admin' || item.title === 'Reports' || item.title === 'Analytics');
+
+  if (role === 'employee') {
+    return <Box sx={{ display: 'grid', minHeight: 'calc(100vh - 72px)', placeItems: 'center' }}><Typography color="text.secondary">Settings are available to administrators and viewers only.</Typography></Box>;
+  }
 
   return (
     <Box

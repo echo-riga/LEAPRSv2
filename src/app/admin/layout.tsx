@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { AppBar, Box, Chip, CircularProgress, IconButton, Stack, Toolbar, Tooltip, Typography } from '@mui/material';
 import { ArrowBack as ArrowBackIcon, ExitToApp as ExitToAppIcon, Fullscreen as FullscreenIcon, FullscreenExit as FullscreenExitIcon, Settings as SettingsIcon } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
+import { getCurrentUserAccess, type AppRole } from '@/app/actions';
 
 const ADMIN_ROUTES = ['/admin', '/admin/analytics', '/admin/reports', '/admin/settings', '/admin/users', '/admin/settings/capdev', '/admin/settings/request'];
 
@@ -22,6 +23,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   const session = authClient.useSession();
   const [greeting, setGreeting] = useState(getGreeting);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [role, setRole] = useState<AppRole>('employee');
 
   useEffect(() => {
     const interval = window.setInterval(() => setGreeting(getGreeting()), 60_000);
@@ -31,6 +33,13 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!session.isPending && !session.data) router.replace('/');
   }, [router, session.data, session.isPending]);
+
+  useEffect(() => {
+    if (!session.data) return;
+    void getCurrentUserAccess().then((access) => {
+      if (access.success) setRole(access.role);
+    });
+  }, [session.data]);
 
   useEffect(() => {
     ADMIN_ROUTES.forEach((route) => router.prefetch(route));
@@ -87,7 +96,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
           </Stack>
           <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
             {!isDashboard && <Tooltip title="Back"><IconButton color="primary" onClick={() => router.push(backHref)} aria-label="Back"><ArrowBackIcon /></IconButton></Tooltip>}
-            {!isSettingsPage && <Tooltip title="Settings"><IconButton color="primary" onClick={() => router.push(settingsHref)} aria-label="Settings"><SettingsIcon /></IconButton></Tooltip>}
+            {role !== 'employee' && !isSettingsPage && <Tooltip title="Settings"><IconButton color="primary" onClick={() => router.push(settingsHref)} aria-label="Settings"><SettingsIcon /></IconButton></Tooltip>}
             <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}><IconButton color="primary" onClick={handleFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>{isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}</IconButton></Tooltip>
             <Tooltip title="Sign out"><IconButton color="error" onClick={handleSignOut} aria-label="Sign out"><ExitToAppIcon /></IconButton></Tooltip>
           </Stack>

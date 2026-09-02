@@ -17,6 +17,46 @@ export interface DbStatus {
   errorMessage?: string;
 }
 
+export type AppRole = 'admin' | 'employee' | 'viewer' | 'viewer-full';
+export type UserAccess = { userId: string; role: AppRole; department: string };
+
+const VALID_ROLES: AppRole[] = ['admin', 'employee', 'viewer', 'viewer-full'];
+const unauthorized = { success: false as const, error: 'You do not have permission to perform this action.' };
+
+async function getCurrentAccess(): Promise<UserAccess | null> {
+  const { data: session } = await auth.getSession();
+  if (!session?.user) return null;
+  const [storedUser] = await db.select({ role: users.role, department: users.department }).from(users).where(eq(users.id, session.user.id)).limit(1);
+  if (!storedUser) return { userId: session.user.id, role: 'employee', department: 'Unassigned' };
+  return {
+    userId: session.user.id,
+    role: VALID_ROLES.includes(storedUser.role as AppRole) ? storedUser.role as AppRole : 'employee',
+    department: storedUser.department,
+  };
+}
+
+function canAccessCapdev(access: UserAccess, capdev: { department: string }) {
+  return access.role === 'admin' || access.role === 'viewer-full' || access.role === 'employee' || capdev.department === access.department;
+}
+
+async function getAccessibleCapdev(access: UserAccess, capdevId: number) {
+  const [capdev] = await db.select().from(capdevs).where(eq(capdevs.id, capdevId)).limit(1);
+  return capdev && canAccessCapdev(access, capdev) ? capdev : null;
+}
+
+async function getAccessibleRequest(access: UserAccess, requestId: number) {
+  const [record] = await db.select({ request: getTableColumns(requests), capdevDepartment: capdevs.department }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(eq(requests.id, requestId)).limit(1);
+  if (!record) return null;
+  if (access.role === 'employee') return record.request.userId === access.userId ? record.request : null;
+  if (access.role === 'viewer') return record.capdevDepartment === access.department ? record.request : null;
+  return record.request;
+}
+
+export async function getCurrentUserAccess() {
+  const access = await getCurrentAccess();
+  return access ? { success: true as const, ...access } : { success: false as const, error: 'You must be signed in.' };
+}
+
 export async function checkDrizzleConnection(): Promise<DbStatus> {
   const testedAt = new Date().toISOString();
   const start = Date.now();
@@ -65,6 +105,8 @@ export async function checkDrizzleConnection(): Promise<DbStatus> {
 
 export async function getOrCreateUserRole(userId: string, email: string): Promise<string> {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.userId !== userId) return 'employee';
     const existing = await db
       .select({ role: users.role })
       .from(users)
@@ -92,6 +134,8 @@ export async function getOrCreateUserRole(userId: string, email: string): Promis
 
 export async function getAllUsers() {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return [];
     return await db.select().from(users);
   } catch (error) {
     console.error('Failed to fetch users:', error);
@@ -101,6 +145,8 @@ export async function getAllUsers() {
 
 export async function updateUserRole(userId: string, newRole: string, department?: string) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin' || !VALID_ROLES.includes(newRole as AppRole)) return unauthorized;
     await db.update(users).set({ role: newRole, ...(department ? { department } : {}) }).where(eq(users.id, userId));
     return { success: true };
   } catch (error) {
@@ -111,6 +157,8 @@ export async function updateUserRole(userId: string, newRole: string, department
 
 export async function createUser(userId: string, role: string, department = 'Unassigned') {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin' || !VALID_ROLES.includes(role as AppRole)) return unauthorized;
     await db.insert(users).values({
       id: userId,
       role: role,
@@ -125,6 +173,8 @@ export async function createUser(userId: string, role: string, department = 'Una
 
 export async function deleteUser(userId: string) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
     await db.delete(users).where(eq(users.id, userId));
     return { success: true };
   } catch (error) {
@@ -160,7 +210,10 @@ async function getMissingRequiredCapdevFields(additionalInfo: Record<string, unk
 
 export async function getAllCapdevs() {
   try {
-    return await db.select().from(capdevs).orderBy(capdevs.aipCode);
+    const access = await getCurrentAccess();
+    if (!access) return [];
+    const records = await db.select().from(capdevs).orderBy(capdevs.aipCode);
+    return records.filter((capdev) => canAccessCapdev(access, capdev));
   } catch (error) {
     console.error('Failed to fetch CapDev projects:', error);
     return [];
@@ -169,16 +222,22 @@ export async function getAllCapdevs() {
 
 export async function getAnalyticsData() {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role === 'employee') return { capdevs: [], requests: [], statusUpdates: [] };
     const [capdevData, requestData, statusUpdateData] = await Promise.all([
       db.select({ id: capdevs.id, department: capdevs.department, initialBudget: capdevs.initialBudget, budget: capdevs.budget, createdAt: capdevs.createdAt }).from(capdevs),
       db.select({ id: requests.id, capdevId: requests.capdevId, setting: requests.setting, createdAt: requests.createdAt }).from(requests),
       db.select({ requestId: requestStatusUpdates.requestId, markAsComplete: requestStatusUpdates.markAsComplete }).from(requestStatusUpdates),
     ]);
 
+    const permittedCapdevs = capdevData.filter((capdev) => canAccessCapdev(access, capdev));
+    const permittedIds = new Set(permittedCapdevs.map((capdev) => capdev.id));
+    const permittedRequests = requestData.filter((request) => permittedIds.has(request.capdevId));
+    const permittedRequestIds = new Set(permittedRequests.map((request) => request.id));
     return {
-      capdevs: capdevData.map((capdev) => ({ ...capdev, initialBudget: String(capdev.initialBudget), budget: String(capdev.budget), createdAt: capdev.createdAt.toISOString() })),
-      requests: requestData.map((request) => ({ ...request, createdAt: request.createdAt.toISOString() })),
-      statusUpdates: statusUpdateData,
+      capdevs: permittedCapdevs.map((capdev) => ({ ...capdev, initialBudget: String(capdev.initialBudget), budget: String(capdev.budget), createdAt: capdev.createdAt.toISOString() })),
+      requests: permittedRequests.map((request) => ({ ...request, createdAt: request.createdAt.toISOString() })),
+      statusUpdates: statusUpdateData.filter((update) => permittedRequestIds.has(update.requestId)),
     };
   } catch (error) {
     console.error('Failed to fetch analytics data:', error);
@@ -188,13 +247,17 @@ export async function getAnalyticsData() {
 
 export async function getMonitoringReportData() {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role === 'employee') return { capdevs: [], requests: [], capdevFields: [], requestFields: [] };
     const [capdevData, requestData, capdevFields, requestFields] = await Promise.all([
       db.select().from(capdevs).orderBy(capdevs.aipCode),
       db.select().from(requests).orderBy(requests.createdAt),
       db.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.isActive, true)).orderBy(capdevFieldDefinitions.sortOrder),
       db.select().from(requestFieldDefinitions).where(eq(requestFieldDefinitions.isActive, true)).orderBy(requestFieldDefinitions.sortOrder),
     ]);
-    return { capdevs: capdevData, requests: requestData, capdevFields, requestFields };
+    const permittedCapdevs = capdevData.filter((capdev) => canAccessCapdev(access, capdev));
+    const permittedIds = new Set(permittedCapdevs.map((capdev) => capdev.id));
+    return { capdevs: permittedCapdevs, requests: requestData.filter((request) => permittedIds.has(request.capdevId)), capdevFields, requestFields };
   } catch (error) {
     console.error('Failed to fetch monitoring report data:', error);
     return { capdevs: [], requests: [], capdevFields: [], requestFields: [] };
@@ -217,13 +280,15 @@ function columnLetter(column: number) {
 
 export async function generateMonitoringSheet(input: { capdevIds: number[]; capdevFieldIds: number[]; requestFieldIds: number[]; capdevFixedFields: string[]; requestFixedFields: string[] }) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role === 'employee') return unauthorized;
     if (input.capdevIds.length === 0) return { success: false, error: 'Select at least one CapDev project.' };
     const [allCapdevs, allRequests, capdevFields, requestFields] = await Promise.all([
       db.select().from(capdevs), db.select().from(requests),
       db.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.isActive, true)).orderBy(capdevFieldDefinitions.sortOrder),
       db.select().from(requestFieldDefinitions).where(eq(requestFieldDefinitions.isActive, true)).orderBy(requestFieldDefinitions.sortOrder),
     ]);
-    const selectedCapdevs = allCapdevs.filter((capdev) => input.capdevIds.includes(capdev.id));
+    const selectedCapdevs = allCapdevs.filter((capdev) => input.capdevIds.includes(capdev.id) && canAccessCapdev(access, capdev));
     const selectedCapdevsById = new Map(selectedCapdevs.map((capdev) => [capdev.id, capdev]));
     const selectedRequests = allRequests.filter((request) => selectedCapdevsById.has(request.capdevId));
     const fields: MonitoringField[] = [
@@ -331,9 +396,11 @@ export async function generateMonitoringSheet(input: { capdevIds: number[]; capd
 
 export async function createCapdev(data: CapdevInput) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
-    const [created] = await db.insert(capdevs).values({ ...data, initialBudget: data.budget }).returning();
+    const [created] = await db.insert(capdevs).values({ ...data, updatedById: access.userId, initialBudget: data.budget }).returning();
     return { success: true, capdev: created };
   } catch (error) {
     console.error('Failed to create CapDev project:', error);
@@ -343,11 +410,13 @@ export async function createCapdev(data: CapdevInput) {
 
 export async function updateCapdev(id: number, data: CapdevInput) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [updated] = await db
       .update(capdevs)
-      .set({ aipCode: data.aipCode, description: data.description, department: data.department, additionalInfo: data.additionalInfo, updatedById: data.updatedById, updatedAt: new Date() })
+      .set({ aipCode: data.aipCode, description: data.description, department: data.department, additionalInfo: data.additionalInfo, updatedById: access.userId, updatedAt: new Date() })
       .where(eq(capdevs.id, id))
       .returning();
     return { success: true, capdev: updated };
@@ -359,8 +428,8 @@ export async function updateCapdev(id: number, data: CapdevInput) {
 
 export async function getCapdevById(id: number) {
   try {
-    const [capdev] = await db.select().from(capdevs).where(eq(capdevs.id, id)).limit(1);
-    return capdev ?? null;
+    const access = await getCurrentAccess();
+    return access ? await getAccessibleCapdev(access, id) : null;
   } catch (error) {
     console.error('Failed to fetch CapDev project:', error);
     return null;
@@ -369,6 +438,8 @@ export async function getCapdevById(id: number) {
 
 export async function getCapdevBudgetHistory(capdevId: number) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || !await getAccessibleCapdev(access, capdevId)) return [];
     return await db
       .select({ authorName: requestStatusUpdates.authorName, amount: requests.requestedBudget, createdAt: requestStatusUpdates.createdAt })
       .from(requestStatusUpdates)
@@ -383,6 +454,8 @@ export async function getCapdevBudgetHistory(capdevId: number) {
 
 export async function deleteCapdev(id: number) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     // Delete child records first, then the project, in one database statement.
     // The dependencies between the CTEs ensure PostgreSQL respects the foreign keys.
     const result = await db.execute(sql`
@@ -415,6 +488,8 @@ export async function deleteCapdev(id: number) {
 
 export async function getDynamicFieldCounts() {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role === 'employee') return { capdevFieldsCount: 0, requestFieldsCount: 0 };
     const capdevCount = await db
       .select({ value: count() })
       .from(capdevFieldDefinitions)
@@ -437,6 +512,7 @@ export async function getDynamicFieldCounts() {
 
 export async function getCapdevFieldDefinitions() {
   try {
+    if (!await getCurrentAccess()) return [];
     return await db
       .select()
       .from(capdevFieldDefinitions)
@@ -461,6 +537,8 @@ export async function saveCapdevFieldDefinition(data: {
   updatedById: string;
 }) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     if (data.id) {
       await db
         .update(capdevFieldDefinitions)
@@ -507,6 +585,8 @@ export async function saveCapdevFieldDefinition(data: {
 
 export async function deleteCapdevFieldDefinition(id: number, updatedById: string) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     await db
       .update(capdevFieldDefinitions)
       .set({
@@ -524,6 +604,8 @@ export async function deleteCapdevFieldDefinition(id: number, updatedById: strin
 
 export async function updateCapdevFieldsOrder(idOrderArray: number[], updatedById: string) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     if (idOrderArray.length === 0) return { success: true };
     const orderRows = idOrderArray.map((id, index) => sql`(${id}::integer, ${index + 1}::integer)`);
     // The Neon HTTP driver cannot use Drizzle callback transactions. This is one
@@ -545,6 +627,7 @@ export async function updateCapdevFieldsOrder(idOrderArray: number[], updatedByI
 
 export async function getRequestFieldDefinitions() {
   try {
+    if (!await getCurrentAccess()) return [];
     return await db
       .select()
       .from(requestFieldDefinitions)
@@ -569,6 +652,8 @@ export async function saveRequestFieldDefinition(data: {
   updatedById: string;
 }) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     if (data.id) {
       await db
         .update(requestFieldDefinitions)
@@ -615,6 +700,8 @@ export async function saveRequestFieldDefinition(data: {
 
 export async function deleteRequestFieldDefinition(id: number, updatedById: string) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     await db
       .update(requestFieldDefinitions)
       .set({ isActive: false, updatedById, updatedAt: new Date() })
@@ -628,6 +715,8 @@ export async function deleteRequestFieldDefinition(id: number, updatedById: stri
 
 export async function updateRequestFieldsOrder(idOrderArray: number[], updatedById: string) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
     if (idOrderArray.length === 0) return { success: true };
     const orderRows = idOrderArray.map((id, index) => sql`(${id}::integer, ${index + 1}::integer)`);
     // See updateCapdevFieldsOrder: a single statement is compatible with Neon HTTP
@@ -659,11 +748,14 @@ export type RequestInput = {
 
 export async function getRequestsByCapdev(capdevId: number) {
   try {
-    return await db
+    const access = await getCurrentAccess();
+    if (!access || !await getAccessibleCapdev(access, capdevId)) return [];
+    const records = await db
       .select(getTableColumns(requests))
       .from(requests)
       .where(eq(requests.capdevId, capdevId))
       .orderBy(requests.createdAt);
+    return access.role === 'employee' ? records.filter((request) => request.userId === access.userId) : records;
   } catch (error) {
     console.error('Failed to fetch requests:', error);
     return [];
@@ -672,8 +764,8 @@ export async function getRequestsByCapdev(capdevId: number) {
 
 export async function getRequestById(id: number) {
   try {
-    const [request] = await db.select().from(requests).where(eq(requests.id, id)).limit(1);
-    return request ?? null;
+    const access = await getCurrentAccess();
+    return access ? await getAccessibleRequest(access, id) : null;
   } catch (error) {
     console.error('Failed to fetch request:', error);
     return null;
@@ -682,16 +774,18 @@ export async function getRequestById(id: number) {
 
 export async function createRequest(data: RequestInput) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || (access.role !== 'admin' && access.role !== 'employee')) return unauthorized;
+    if (!await getAccessibleCapdev(access, data.capdevId)) return unauthorized;
     const { data: session } = await auth.getSession();
-    if (!session?.user) return { success: false, error: 'You must be signed in to create a request.' };
 
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, data.capdevId)).limit(1);
     if (!capdev || Number(data.requestedBudget) > Number(capdev.budget)) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
     const [created] = await db.insert(requests).values({
       ...data,
-      userId: session.user.id,
-      updatedById: session.user.id,
-      requestorName: session.user.name || session.user.email || 'Requestor',
+      userId: access.userId,
+      updatedById: access.userId,
+      requestorName: session?.user?.name || session?.user?.email || 'Requestor',
     }).returning();
     return { success: true, request: created };
   } catch (error) {
@@ -702,13 +796,15 @@ export async function createRequest(data: RequestInput) {
 
 export async function updateRequest(id: number, data: RequestInput) {
   try {
-    const [existing] = await db.select().from(requests).where(eq(requests.id, id)).limit(1);
+    const access = await getCurrentAccess();
+    if (!access || (access.role !== 'admin' && access.role !== 'employee')) return unauthorized;
+    const existing = await getAccessibleRequest(access, id);
     if (!existing) return { success: false, error: 'Request not found.' };
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, existing.capdevId)).limit(1);
     const [deduction] = await db.select({ id: requestStatusUpdates.id }).from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
     if (deduction && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested budget cannot be changed after it has been deducted.' };
     if (!deduction && (!capdev || Number(data.requestedBudget) > Number(capdev.budget))) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
-    const [updated] = await db.update(requests).set({ ...data, capdevId: existing.capdevId, userId: existing.userId, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
+    const [updated] = await db.update(requests).set({ ...data, capdevId: existing.capdevId, userId: existing.userId, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
     return { success: true, request: updated };
   } catch (error) {
     console.error('Failed to update request:', error);
@@ -718,6 +814,8 @@ export async function updateRequest(id: number, data: RequestInput) {
 
 export async function deleteRequest(id: number) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || (access.role !== 'admin' && access.role !== 'employee') || !await getAccessibleRequest(access, id)) return unauthorized;
     await db.delete(requests).where(eq(requests.id, id));
     return { success: true };
   } catch (error) {
@@ -803,8 +901,8 @@ async function uploadFileToGoogleDrive(file: File, accessToken: string): Promise
 
 export async function uploadFilesToGoogleDrive(formData: FormData) {
   try {
-    const { data: session } = await auth.getSession();
-    if (!session?.user) return { success: false, error: 'You must be signed in to upload files.', files: [] as StatusAttachment[] };
+    const access = await getCurrentAccess();
+    if (!access || (access.role !== 'admin' && access.role !== 'employee')) return { ...unauthorized, files: [] as StatusAttachment[] };
 
     const files = formData.getAll('files').filter((value): value is File => value instanceof File && value.size > 0);
     if (files.length > MAX_STATUS_ATTACHMENTS) return { success: false, error: `You can attach up to ${MAX_STATUS_ATTACHMENTS} files at once.`, files: [] as StatusAttachment[] };
@@ -822,6 +920,8 @@ export async function uploadFilesToGoogleDrive(formData: FormData) {
 
 export async function getRequestStatusUpdates(requestId: number) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || !await getAccessibleRequest(access, requestId)) return [];
     return await db.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.requestId, requestId)).orderBy(requestStatusUpdates.createdAt);
   } catch (error) {
     console.error('Failed to fetch request status updates:', error);
@@ -831,8 +931,9 @@ export async function getRequestStatusUpdates(requestId: number) {
 
 export async function createRequestStatusUpdate(data: StatusUpdateInput) {
   try {
+    const access = await getCurrentAccess();
+    if (!access || (access.role !== 'admin' && access.role !== 'employee') || !await getAccessibleRequest(access, data.requestId)) return unauthorized;
     const { data: session } = await auth.getSession();
-    if (!session?.user) return { success: false, error: 'You must be signed in to add a status update.' };
     // Neon HTTP does not implement Drizzle's callback transaction API. This single
     // PostgreSQL statement is still atomic: it creates the update and applies the
     // optional budget deduction together, or applies neither one.
@@ -849,8 +950,8 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
         )
         SELECT
           target_request.id,
-          ${session.user.id},
-          ${session.user.name || session.user.email || 'Staff member'},
+          ${access.userId},
+          ${session?.user?.name || session?.user?.email || 'Staff member'},
           ${data.statusUpdate},
           ${data.remarks || null},
           ${JSON.stringify(data.files)}::jsonb,
