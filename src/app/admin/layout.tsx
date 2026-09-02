@@ -85,6 +85,9 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
         : '/admin';
   const settingsHref = `/admin/settings?from=${encodeURIComponent(pathname)}`;
   const isDashboard = pathname === '/admin';
+  const roleLabel = role === 'viewer-full'
+    ? 'Viewer (All)'
+    : `${role.charAt(0).toUpperCase()}${role.slice(1)}`;
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: '#fafcfa' }}>
@@ -92,7 +95,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
         <Toolbar sx={{ minHeight: { xs: 64, md: 72 }, px: { xs: 2, md: 3 }, justifyContent: 'space-between' }}>
           <Stack direction="row" spacing={1.5} sx={{ minWidth: 0, alignItems: 'center' }}>
             <Typography variant="h6" noWrap sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 700, color: 'text.primary' }}>{greeting}, {userName}</Typography>
-            <Chip label="Admin" size="small" color="primary" sx={{ flexShrink: 0, fontWeight: 700, height: 24, borderRadius: '6px' }} />
+            <Chip label={roleLabel} size="small" color="primary" sx={{ flexShrink: 0, fontWeight: 700, height: 24, borderRadius: '6px' }} />
           </Stack>
           <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
             {!isDashboard && <Tooltip title="Back"><IconButton color="primary" onClick={() => router.push(backHref)} aria-label="Back"><ArrowBackIcon /></IconButton></Tooltip>}
