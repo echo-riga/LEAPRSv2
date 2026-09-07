@@ -146,6 +146,21 @@ export default function StandardPage() {
 }
 ```
 
-## 6. Date Display Format
+## 6. Date Display & DatePicker Standard
 
 - **Human-readable dates**: Whenever a stored date is shown for reading, format it as `Mon day, year` (for example, `May 10, 2005`). Keep ISO-style values such as `2005-05-10` only inside date inputs or technical data views.
+- **MUI DatePicker standard**: All date selection across the app (forms, dynamic fields, and filter dialogs) must use the `@mui/x-date-pickers` component (via `DateField`) instead of native browser HTML `<input type="date">`.
+
+---
+
+## 7. Business Validation Dialogs
+
+- **No Top-of-Form Error Banners**: When an action fails business validation (e.g., requesting budget exceeding the project's remaining allocation), do not display an inline alert box above the form fields.
+- **Dedicated Validation Dialog**: Present a dedicated validation modal dialog with an alert icon, a concise title (e.g., "Budget Limit Exceeded"), explanatory text comparing relevant figures, and an "Understood" primary action to dismiss and return smoothly to the form.
+
+---
+
+## 8. Zero / Depleted Remaining Budget Styling
+
+- **Red Font Color**: When remaining budget reaches 0 (or is depleted), its font color must be styled with `error.main` (red) across both summary card boxes (partial view) and detailed edit/history modals (full view), as well as utilization summaries, to clearly signal exhaustion of funds.
+
