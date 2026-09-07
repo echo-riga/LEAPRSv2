@@ -294,7 +294,7 @@ export async function getAnalyticsData() {
     const access = await getCurrentAccess();
     if (!access || access.role === 'employee') return { capdevs: [], requests: [], statusUpdates: [] };
     const [capdevData, requestData, statusUpdateData] = await Promise.all([
-      db.select({ id: capdevs.id, department: capdevs.department, initialBudget: capdevs.initialBudget, budget: capdevs.budget, createdAt: capdevs.createdAt }).from(capdevs),
+      db.select({ id: capdevs.id, aipCode: capdevs.aipCode, description: capdevs.description, department: capdevs.department, initialBudget: capdevs.initialBudget, budget: capdevs.budget, createdAt: capdevs.createdAt }).from(capdevs),
       db.select({ id: requests.id, capdevId: requests.capdevId, setting: requests.setting, createdAt: requests.createdAt }).from(requests),
       db.select({ requestId: requestStatusUpdates.requestId, markAsComplete: requestStatusUpdates.markAsComplete }).from(requestStatusUpdates),
     ]);

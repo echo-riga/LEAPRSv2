@@ -8,16 +8,46 @@ import {
   ChevronRight as ChevronRightIcon,
   Payments as PaymentsIcon,
   Search as SearchIcon,
+  WarningAmber as WarningIcon,
 } from '@mui/icons-material';
 import {
-  Alert, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress, Container, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, Fab, Grid, InputAdornment, MenuItem, Stack, TextField, Typography,
+  Alert,
+  Autocomplete,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  CircularProgress,
+  Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  Fab,
+  Grid,
+  InputAdornment,
+  MenuItem,
+  Stack,
+  TextField,
+  Typography,
 } from '@mui/material';
 import { useRouter } from 'next/navigation';
 import { authClient } from '@/lib/auth/client';
 import DateField from '@/components/DateField';
 import {
-  createRequest, deleteRequest, getCapdevById, getCurrentUserAccess, getRequestFieldDefinitions, getRequestStatusUpdates, getRequestsByCapdev, updateRequest, uploadFilesToGoogleDrive, type AppRole, type StatusAttachment,
+  createRequest,
+  deleteRequest,
+  getCapdevById,
+  getCurrentUserAccess,
+  getRequestFieldDefinitions,
+  getRequestStatusUpdates,
+  getRequestsByCapdev,
+  updateRequest,
+  uploadFilesToGoogleDrive,
+  type AppRole,
+  type StatusAttachment,
 } from '@/app/actions';
 
 type RequestRecord = {
@@ -39,7 +69,7 @@ type CapdevSummary = { id: number; aipCode: string; department: string; budget: 
 
 const EMPTY_FORM: RequestForm = { setting: 'internal', description: '', requestedBudget: '', additionalInfo: {} };
 const formatDate = (value: Date | string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
-const formatCurrency = (value: string) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
+const formatCurrency = (value: string | number) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
 const getAttachments = (value: unknown): StatusAttachment[] => Array.isArray(value) ? value.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file) : [];
 
 export default function RequestsPage({ capdevId }: { capdevId: number }) {
@@ -61,6 +91,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const [pendingFiles, setPendingFiles] = useState<Record<string, File[]>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [budgetValidationOpen, setBudgetValidationOpen] = useState(false);
+  const [budgetValidationMessage, setBudgetValidationMessage] = useState('');
   const [role, setRole] = useState<AppRole>('employee');
 
   useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
@@ -96,7 +128,18 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     };
   }, [loadData]);
 
-  const filtered = useMemo(() => requests.filter((request) => { const date = new Date(request.createdAt).getTime(); return `${request.requestorName} ${request.description}`.toLowerCase().includes(search.toLowerCase()) && (!filters.setting || request.setting === filters.setting) && (!filters.min || Number(request.requestedBudget) >= Number(filters.min)) && (!filters.max || Number(request.requestedBudget) <= Number(filters.max)) && (!filters.dateFrom || date >= new Date(filters.dateFrom).getTime()) && (!filters.dateTo || date <= new Date(`${filters.dateTo}T23:59:59`).getTime()); }).sort((a,b) => filters.sort === 'newest' ? new Date(b.createdAt).getTime()-new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime()-new Date(b.createdAt).getTime()), [filters, requests, search]);
+  const filtered = useMemo(() => requests.filter((request) => {
+    const date = new Date(request.createdAt).getTime();
+    return (
+      `${request.requestorName} ${request.description}`.toLowerCase().includes(search.toLowerCase()) &&
+      (!filters.setting || request.setting === filters.setting) &&
+      (!filters.min || Number(request.requestedBudget) >= Number(filters.min)) &&
+      (!filters.max || Number(request.requestedBudget) <= Number(filters.max)) &&
+      (!filters.dateFrom || date >= new Date(filters.dateFrom).getTime()) &&
+      (!filters.dateTo || date <= new Date(`${filters.dateTo}T23:59:59`).getTime())
+    );
+  }).sort((a, b) => filters.sort === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()), [filters, requests, search]);
+
   const pageCount = Math.max(1, Math.ceil(filtered.length / 6));
   const visible = filtered.slice((page - 1) * 6, page * 6);
   const setValue = (updates: Partial<RequestForm>) => setForm((current) => ({ ...current, ...updates }));
@@ -111,9 +154,22 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     event.target.value = '';
   };
   const removeSelectedFile = (fieldName: string, file: File) => setPendingFiles((current) => ({ ...current, [fieldName]: (current[fieldName] || []).filter((candidate) => candidate !== file) }));
+
   const saveRequest = async () => {
     if (!session.data || !form.description || !form.requestedBudget) return;
-    if (!editing?.hasDeductedBudget && Number(form.requestedBudget) > Number(capdev?.budget)) { setError('Requested budget exceeds the remaining CapDev budget.'); return; }
+
+    const requestedAmount = Number(form.requestedBudget);
+    const availableBudget = Number(capdev?.budget || 0);
+
+    // Validation check for requested budget vs remaining CapDev budget
+    if (!editing?.hasDeductedBudget && requestedAmount > availableBudget) {
+      setBudgetValidationMessage(
+        `The requested amount of ${formatCurrency(requestedAmount)} exceeds the available CapDev budget of ${formatCurrency(availableBudget)}. Please adjust the requested amount.`
+      );
+      setBudgetValidationOpen(true);
+      return;
+    }
+
     setSaving(true);
     setError('');
     const additionalInfo = { ...form.additionalInfo };
@@ -127,9 +183,20 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     }
     const data = { ...form, additionalInfo, capdevId, userId: editing?.userId || session.data.user.id, updatedById: session.data.user.id };
     const result = editing ? await updateRequest(editing.id, data) : await createRequest(data);
-    if (result.success) { setEditorOpen(false); await loadData(); }
+    if (result.success) {
+      setEditorOpen(false);
+      await loadData();
+    } else {
+      if (result.error && result.error.toLowerCase().includes('budget')) {
+        setBudgetValidationMessage(result.error);
+        setBudgetValidationOpen(true);
+      } else {
+        setError(result.error || 'Unable to save request.');
+      }
+    }
     setSaving(false);
   };
+
   const removeRequest = async () => {
     if (!deleting) return;
     setSaving(true);
@@ -144,46 +211,366 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const canManageRequest = role === 'admin' || role === 'employee';
   const currentUserId = session.data.user.id;
   const canEditRequest = (request: RequestRecord) => role === 'admin' || (role === 'employee' && request.userId === currentUserId);
+  const isCapdevBudgetDepleted = Number(capdev.budget) <= 0;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px)' }}>
       <Container maxWidth={false} sx={{ p: 0, width: '100%', flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-          <Box><Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>Requests</Typography><Typography variant="body2" color="text.secondary">{capdev.aipCode} · {capdev.department}</Typography></Box>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><TextField size="small" placeholder="Search requestor or description..." value={search} onChange={(event) => { setSearch(event.target.value); resetPage(); }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> } }} sx={{ bgcolor: '#ffffff', borderRadius: 2, minWidth: { sm: 260 }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} /><Button size="small" sx={{ height: 40 }} variant="outlined" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}>Filter</Button></Stack>
+          <Box>
+            <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>
+              Requests
+            </Typography>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 0.5 }}>
+              <Typography variant="body2" color="text.secondary">
+                {capdev.aipCode} · {capdev.department}
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 700, color: isCapdevBudgetDepleted ? 'error.main' : 'primary.dark' }}>
+                (Remaining: {formatCurrency(capdev.budget)})
+              </Typography>
+            </Stack>
+          </Box>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <TextField
+              size="small"
+              placeholder="Search requestor or description..."
+              value={search}
+              onChange={(event) => { setSearch(event.target.value); resetPage(); }}
+              slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> } }}
+              sx={{ bgcolor: '#ffffff', borderRadius: 2, minWidth: { sm: 260 }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+            />
+            <Button size="small" sx={{ height: 40 }} variant="outlined" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}>
+              Filter
+            </Button>
+          </Stack>
         </Stack>
 
-        {visible.length === 0 ? <Card variant="outlined" sx={{ borderRadius: 2, minHeight: 300, display: 'grid', placeItems: 'center' }}><Stack spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}><RequestIcon sx={{ fontSize: 42 }} /><Typography>No requests found</Typography></Stack></Card> :
-          <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>{visible.map((request) => <Grid key={request.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3 }}>
-            <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}><Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}><Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>Added {formatDate(request.createdAt)}</Typography></Box></Box>
-            <Card variant="outlined" sx={{ position: 'relative', zIndex: 1, borderRadius: 2, bgcolor: '#ffffff', height: '100%', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' } }}>
-              <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
-                <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}><Box sx={{ bgcolor: 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><RequestIcon color="primary" /></Box><Box sx={{ flexGrow: 1, minWidth: 0 }}><Typography variant="h6" noWrap sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>{request.description}</Typography><Typography variant="body2" color="text.secondary">{request.setting === 'internal' ? 'Internal' : 'External'}</Typography></Box><Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}><Chip label={request.isComplete ? 'Complete' : 'In progress'} color={request.isComplete ? 'success' : 'primary'} size="small" sx={{ fontWeight: 700 }} />{request.hasDeductedBudget && <Chip icon={<PaymentsIcon />} label="Budget deducted" color="success" variant="outlined" size="small" sx={{ fontWeight: 700 }} />}</Stack></Stack>
-                <Stack spacing={1.5} sx={{ my: 1 }}><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Requestor</Typography><Typography variant="body2" sx={{ fontWeight: 700 }}>{request.requestorName || 'Requestor'}</Typography></Stack><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Requested budget</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(request.requestedBudget)}</Typography></Stack></Stack>
-                <Divider sx={{ my: 2 }} />
-                <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}><Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/admin/capdev/${capdevId}/requests/${request.id}/status`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Track Progress</Button><Stack direction="row" spacing={3}><Button variant="text" color="primary" onClick={() => openEdit(request)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Details</Button>{canEditRequest(request) && <Button variant="text" color="error" onClick={() => setDeleting(request)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: '#b71c1c' } }}>Delete</Button>}</Stack></Stack>
-              </CardContent>
-            </Card>
-          </Grid>)}</Grid>}
+        {visible.length === 0 ? (
+          <Card variant="outlined" sx={{ borderRadius: 2, minHeight: 300, display: 'grid', placeItems: 'center' }}>
+            <Stack spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}>
+              <RequestIcon sx={{ fontSize: 42 }} />
+              <Typography>No requests found</Typography>
+            </Stack>
+          </Card>
+        ) : (
+          <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>
+            {visible.map((request) => (
+              <Grid key={request.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3 }}>
+                <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}>
+                  <Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}>
+                    <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>
+                      Added {formatDate(request.createdAt)}
+                    </Typography>
+                  </Box>
+                </Box>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    position: 'relative',
+                    zIndex: 1,
+                    borderRadius: 2,
+                    bgcolor: '#ffffff',
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    transition: 'all 0.2s',
+                    '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' },
+                  }}
+                >
+                  <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
+                    <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}>
+                      <Box sx={{ bgcolor: 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <RequestIcon color="primary" />
+                      </Box>
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Typography variant="h6" noWrap sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>
+                          {request.description}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {request.setting === 'internal' ? 'Internal' : 'External'}
+                        </Typography>
+                      </Box>
+                      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
+                        <Chip label={request.isComplete ? 'Complete' : 'In progress'} color={request.isComplete ? 'success' : 'primary'} size="small" sx={{ fontWeight: 700 }} />
+                        {request.hasDeductedBudget && <Chip icon={<PaymentsIcon />} label="Budget deducted" color="success" variant="outlined" size="small" sx={{ fontWeight: 700 }} />}
+                      </Stack>
+                    </Stack>
+                    <Stack spacing={1.5} sx={{ my: 1 }}>
+                      <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Typography variant="body2" color="text.secondary">Requestor</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 700 }}>{request.requestorName || 'Requestor'}</Typography>
+                      </Stack>
+                      <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Typography variant="body2" color="text.secondary">Requested budget</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(request.requestedBudget)}</Typography>
+                      </Stack>
+                    </Stack>
+                    <Divider sx={{ my: 2 }} />
+                    <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+                      <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/admin/capdev/${capdevId}/requests/${request.id}/status`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
+                        Track Progress
+                      </Button>
+                      <Stack direction="row" spacing={3}>
+                        <Button variant="text" color="primary" onClick={() => openEdit(request)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
+                          Details
+                        </Button>
+                        {canEditRequest(request) && (
+                          <Button variant="text" color="error" onClick={() => setDeleting(request)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: '#b71c1c' } }}>
+                            Delete
+                          </Button>
+                        )}
+                      </Stack>
+                    </Stack>
+                  </CardContent>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+        )}
 
-        {filtered.length > 6 && <Stack direction="row" spacing={2} sx={{ justifyContent: 'center', alignItems: 'center', mt: 4, mb: 2 }}><Button variant="outlined" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button><Typography variant="body2" sx={{ fontWeight: '700', color: 'text.secondary' }}>Page {page} of {pageCount}</Typography><Button variant="outlined" disabled={page === pageCount} onClick={() => setPage((current) => current + 1)}>Next</Button></Stack>}
+        {filtered.length > 6 && (
+          <Stack direction="row" spacing={2} sx={{ justifyContent: 'center', alignItems: 'center', mt: 4, mb: 2 }}>
+            <Button variant="outlined" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>
+              Previous
+            </Button>
+            <Typography variant="body2" sx={{ fontWeight: '700', color: 'text.secondary' }}>
+              Page {page} of {pageCount}
+            </Typography>
+            <Button variant="outlined" disabled={page === pageCount} onClick={() => setPage((current) => current + 1)}>
+              Next
+            </Button>
+          </Stack>
+        )}
       </Container>
 
-      {canManageRequest && <Fab variant="extended" color="primary" onClick={openCreate} sx={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1100, px: 2.5, boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)' }}><AddIcon sx={{ mr: 1 }} />Add Request</Fab>}
+      {canManageRequest && (
+        <Fab variant="extended" color="primary" onClick={openCreate} sx={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1100, px: 2.5, boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)' }}>
+          <AddIcon sx={{ mr: 1 }} />
+          Add Request
+        </Fab>
+      )}
 
+      {/* Add / Edit Request Dialog */}
       <Dialog open={editorOpen} onClose={() => !saving && setEditorOpen(false)} fullWidth maxWidth="md">
         <DialogTitle sx={{ fontWeight: 800 }}>{editing ? 'Edit Request' : 'Add Request'}</DialogTitle>
-        <DialogContent dividers>{error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}<Grid container spacing={2.5} sx={{ pt: 0.5 }}>
-          {editing && <Grid size={12}><Typography variant="body2" color="text.secondary">Requestor</Typography><Typography sx={{ fontWeight: 700 }}>{editing.requestorName || 'Requestor'}</Typography></Grid>}
-          <Grid size={12}><TextField select required fullWidth label="Setting" value={form.setting} onChange={(event) => setValue({ setting: event.target.value })}><MenuItem value="internal">Internal</MenuItem><MenuItem value="external">External</MenuItem></TextField></Grid>
-          <Grid size={12}><TextField required fullWidth label="Description" multiline minRows={2} value={form.description} onChange={(event) => setValue({ description: event.target.value })} /></Grid>
-          <Grid size={12}><TextField required fullWidth label="Requested Budget" type="number" value={form.requestedBudget} onChange={(event) => setValue({ requestedBudget: event.target.value })} helperText={`Remaining CapDev budget: ${formatCurrency(capdev.budget)}`} disabled={editing?.hasDeductedBudget} /></Grid>
-          {definitions.length > 0 && <><Grid size={12}><Divider sx={{ my: 0.5 }} /><Typography variant="subtitle1" sx={{ fontWeight: 800, mt: 2 }}>Additional Information</Typography></Grid>{definitions.map((field) => <Grid key={field.id} size={field.width === 'half' ? { xs: 12, sm: 6 } : 12}>{field.type === 'text' && field.options && field.options.length > 0 ? <Autocomplete freeSolo options={field.options} value={String(form.additionalInfo[field.name] || '')} onChange={(_, value) => setDynamicValue(field.name, value || '')} onInputChange={(_, value) => setDynamicValue(field.name, value)} renderInput={(params) => <TextField {...params} required={field.isRequired} fullWidth label={field.name} placeholder={field.placeholder || 'Select or type...'} />} /> : field.type === 'date' ? <DateField label={field.name} required={field.isRequired} value={String(form.additionalInfo[field.name] || '')} onChange={(value) => setDynamicValue(field.name, value)} /> : field.type === 'file' ? <Stack spacing={1}><Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>{field.name}<input hidden type="file" multiple onChange={(event) => addSelectedFiles(field.name, event)} /></Button>{getAttachments(form.additionalInfo[field.name]).map((file) => <Button key={file.id} component="a" href={file.url} target="_blank" rel="noreferrer" size="small" startIcon={<AttachFileIcon />} sx={{ width: 'fit-content', textTransform: 'none' }}>{file.name}</Button>)}{(pendingFiles[field.name] || []).length > 0 && <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>{pendingFiles[field.name].map((file) => <Chip key={`${file.name}-${file.lastModified}-${file.size}`} label={file.name} size="small" onDelete={() => removeSelectedFile(field.name, file)} />)}</Stack>}</Stack> : <TextField required={field.isRequired} fullWidth label={field.name} type={field.type === 'number' ? 'number' : 'text'} value={String(form.additionalInfo[field.name] || '')} placeholder={field.placeholder || ''} onChange={(event) => setDynamicValue(field.name, event.target.value)} />}</Grid>)}</>}
-        </Grid>{editing && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 3 }}>Added {formatDate(editing.createdAt)}</Typography>}</DialogContent>
-        <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Close</Button>{(!editing || canEditRequest(editing)) && canManageRequest && <Button onClick={saveRequest} disabled={saving || !form.description || !form.requestedBudget} variant="contained">{saving ? 'Saving' : 'Save Request'}</Button>}</DialogActions>
+        <DialogContent dividers>
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          <Grid container spacing={2.5} sx={{ pt: 0.5 }}>
+            {editing && (
+              <Grid size={12}>
+                <Typography variant="body2" color="text.secondary">Requestor</Typography>
+                <Typography sx={{ fontWeight: 700 }}>{editing.requestorName || 'Requestor'}</Typography>
+              </Grid>
+            )}
+            <Grid size={12}>
+              <TextField select required fullWidth label="Setting" value={form.setting} onChange={(event) => setValue({ setting: event.target.value })}>
+                <MenuItem value="internal">Internal</MenuItem>
+                <MenuItem value="external">External</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid size={12}>
+              <TextField required fullWidth label="Description" multiline minRows={2} value={form.description} onChange={(event) => setValue({ description: event.target.value })} />
+            </Grid>
+            <Grid size={12}>
+              <TextField
+                required
+                fullWidth
+                label="Requested Budget"
+                type="number"
+                value={form.requestedBudget}
+                onChange={(event) => setValue({ requestedBudget: event.target.value })}
+                helperText={
+                  isCapdevBudgetDepleted
+                    ? `Remaining CapDev budget: ${formatCurrency(capdev.budget)} (Depleted)`
+                    : `Remaining CapDev budget: ${formatCurrency(capdev.budget)}`
+                }
+                slotProps={{
+                  formHelperText: {
+                    sx: {
+                      color: isCapdevBudgetDepleted ? 'error.main' : 'text.secondary',
+                      fontWeight: isCapdevBudgetDepleted ? 700 : 400,
+                    },
+                  },
+                }}
+                disabled={editing?.hasDeductedBudget}
+              />
+            </Grid>
+            {definitions.length > 0 && (
+              <>
+                <Grid size={12}>
+                  <Divider sx={{ my: 0.5 }} />
+                  <Typography variant="subtitle1" sx={{ fontWeight: 800, mt: 2 }}>
+                    Additional Information
+                  </Typography>
+                </Grid>
+                {definitions.map((field) => (
+                  <Grid key={field.id} size={field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
+                    {field.type === 'text' && field.options && field.options.length > 0 ? (
+                      <Autocomplete
+                        freeSolo
+                        options={field.options}
+                        value={String(form.additionalInfo[field.name] || '')}
+                        onChange={(_, value) => setDynamicValue(field.name, value || '')}
+                        onInputChange={(_, value) => setDynamicValue(field.name, value)}
+                        renderInput={(params) => <TextField {...params} required={field.isRequired} fullWidth label={field.name} placeholder={field.placeholder || 'Select or type...'} />}
+                      />
+                    ) : field.type === 'date' ? (
+                      <DateField
+                        label={field.name}
+                        required={field.isRequired}
+                        value={String(form.additionalInfo[field.name] || '')}
+                        onChange={(value) => setDynamicValue(field.name, value)}
+                      />
+                    ) : field.type === 'file' ? (
+                      <Stack spacing={1}>
+                        <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
+                          {field.name}
+                          <input hidden type="file" multiple onChange={(event) => addSelectedFiles(field.name, event)} />
+                        </Button>
+                        {getAttachments(form.additionalInfo[field.name]).map((file) => (
+                          <Button key={file.id} component="a" href={file.url} target="_blank" rel="noreferrer" size="small" startIcon={<AttachFileIcon />} sx={{ width: 'fit-content', textTransform: 'none' }}>
+                            {file.name}
+                          </Button>
+                        ))}
+                        {(pendingFiles[field.name] || []).length > 0 && (
+                          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                            {pendingFiles[field.name].map((file) => (
+                              <Chip key={`${file.name}-${file.lastModified}-${file.size}`} label={file.name} size="small" onDelete={() => removeSelectedFile(field.name, file)} />
+                            ))}
+                          </Stack>
+                        )}
+                      </Stack>
+                    ) : (
+                      <TextField
+                        required={field.isRequired}
+                        fullWidth
+                        label={field.name}
+                        type={field.type === 'number' ? 'number' : 'text'}
+                        value={String(form.additionalInfo[field.name] || '')}
+                        placeholder={field.placeholder || ''}
+                        onChange={(event) => setDynamicValue(field.name, event.target.value)}
+                      />
+                    )}
+                  </Grid>
+                ))}
+              </>
+            )}
+          </Grid>
+          {editing && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 3 }}>
+              Added {formatDate(editing.createdAt)}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">
+            Close
+          </Button>
+          {(!editing || canEditRequest(editing)) && canManageRequest && (
+            <Button onClick={saveRequest} disabled={saving || !form.description || !form.requestedBudget} variant="contained">
+              {saving ? 'Saving' : 'Save Request'}
+            </Button>
+          )}
+        </DialogActions>
       </Dialog>
-      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter Requests</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><TextField select fullWidth label="Setting" value={draftFilters.setting} onChange={(e) => setDraftFilters({...draftFilters, setting:e.target.value})}><MenuItem value="">All settings</MenuItem><MenuItem value="internal">Internal</MenuItem><MenuItem value="external">External</MenuItem></TextField></Grid><Grid size={{xs:12,sm:6}}><TextField fullWidth type="number" label="Requested budget from" value={draftFilters.min} onChange={(e)=>setDraftFilters({...draftFilters,min:e.target.value})}/></Grid><Grid size={{xs:12,sm:6}}><TextField fullWidth type="number" label="Requested budget to" value={draftFilters.max} onChange={(e)=>setDraftFilters({...draftFilters,max:e.target.value})}/></Grid><Grid size={{xs:12,sm:6}}><TextField fullWidth type="date" label="Date added from" slotProps={{inputLabel:{shrink:true}}} value={draftFilters.dateFrom} onChange={(e)=>setDraftFilters({...draftFilters,dateFrom:e.target.value})}/></Grid><Grid size={{xs:12,sm:6}}><TextField fullWidth type="date" label="Date added to" slotProps={{inputLabel:{shrink:true}}} value={draftFilters.dateTo} onChange={(e)=>setDraftFilters({...draftFilters,dateTo:e.target.value})}/></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e)=>setDraftFilters({...draftFilters,sort:e.target.value})}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{p:2.5}}><Button onClick={()=>setDraftFilters({setting:'',min:'',max:'',dateFrom:'',dateTo:'',sort:'newest'})}>Reset</Button><Button variant="contained" onClick={()=>{setFilters(draftFilters);resetPage();setFiltersOpen(false)}}>Apply Filters</Button></DialogActions></Dialog>
-      <Dialog open={Boolean(deleting)} onClose={() => !saving && setDeleting(null)} maxWidth="xs" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Delete Request?</DialogTitle><DialogContent><Typography>This permanently removes Request #{deleting?.id}.</Typography></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDeleting(null)} disabled={saving}>Cancel</Button><Button color="error" variant="contained" onClick={removeRequest} disabled={saving}>{saving ? 'Deleting' : 'Delete'}</Button></DialogActions></Dialog>
+
+      {/* Dedicated Budget Validation Dialog */}
+      <Dialog
+        open={budgetValidationOpen}
+        onClose={() => setBudgetValidationOpen(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <WarningIcon color="warning" />
+          Budget Limit Exceeded
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5} sx={{ py: 1 }}>
+            <Typography variant="body1" sx={{ color: 'text.primary' }}>
+              {budgetValidationMessage || 'The requested budget exceeds the remaining CapDev allocation.'}
+            </Typography>
+            <Box sx={{ p: 1.5, bgcolor: '#f4f7f4', borderRadius: 1.5 }}>
+              <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
+                <Typography variant="caption" color="text.secondary">Remaining Project Budget</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: isCapdevBudgetDepleted ? 'error.main' : 'primary.dark' }}>
+                  {formatCurrency(capdev.budget)}
+                </Typography>
+              </Stack>
+            </Box>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button variant="contained" onClick={() => setBudgetValidationOpen(false)} sx={{ fontWeight: 700 }}>
+            Understood
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Filter Requests Dialog using MUI DatePicker */}
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle sx={{ fontWeight: 800 }}>Filter Requests</DialogTitle>
+        <DialogContent dividers>
+          <Grid container spacing={2} sx={{ pt: .5 }}>
+            <Grid size={12}>
+              <TextField select fullWidth label="Setting" value={draftFilters.setting} onChange={(e) => setDraftFilters({ ...draftFilters, setting: e.target.value })}>
+                <MenuItem value="">All settings</MenuItem>
+                <MenuItem value="internal">Internal</MenuItem>
+                <MenuItem value="external">External</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth type="number" label="Requested budget from" value={draftFilters.min} onChange={(e) => setDraftFilters({ ...draftFilters, min: e.target.value })} />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth type="number" label="Requested budget to" value={draftFilters.max} onChange={(e) => setDraftFilters({ ...draftFilters, max: e.target.value })} />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <DateField
+                label="Date added from"
+                value={draftFilters.dateFrom}
+                onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <DateField
+                label="Date added to"
+                value={draftFilters.dateTo}
+                onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })}
+              />
+            </Grid>
+            <Grid size={12}>
+              <TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}>
+                <MenuItem value="newest">Newest to oldest</MenuItem>
+                <MenuItem value="oldest">Oldest to newest</MenuItem>
+              </TextField>
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button onClick={() => setDraftFilters({ setting: '', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' })}>
+            Reset
+          </Button>
+          <Button variant="contained" onClick={() => { setFilters(draftFilters); resetPage(); setFiltersOpen(false); }}>
+            Apply Filters
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Request Dialog */}
+      <Dialog open={Boolean(deleting)} onClose={() => !saving && setDeleting(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Delete Request?</DialogTitle>
+        <DialogContent>
+          <Typography>This permanently removes Request #{deleting?.id}.</Typography>
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button onClick={() => setDeleting(null)} disabled={saving}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={removeRequest} disabled={saving}>
+            {saving ? 'Deleting' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
+
