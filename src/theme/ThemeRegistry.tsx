@@ -54,6 +54,22 @@ const theme = createTheme({
         },
       },
     },
+    MuiFormLabel: {
+      styleOverrides: {
+        asterisk: {
+          color: '#d32f2f',
+          fontWeight: 'bold',
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: {
+        asterisk: {
+          color: '#d32f2f',
+          fontWeight: 'bold',
+        },
+      },
+    },
   },
 });
 

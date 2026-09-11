@@ -31,10 +31,14 @@ import {
   DragIndicator as DragIcon,
   CloudUpload as UploadIcon,
   Edit as EditIcon,
+  KeyboardArrowUp as ArrowUpIcon,
+  KeyboardArrowDown as ArrowDownIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess } from '@/app/actions';
+import { FormConfigSkeleton } from '@/components/Skeletons';
 import DateField from '@/components/DateField';
+import DynamicTableField from '@/components/DynamicTableField';
 import {
   getCapdevFieldDefinitions,
   saveCapdevFieldDefinition,
@@ -63,6 +67,7 @@ export default function CapdevConfigPage() {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | string | null>(null);
   const [draggedFieldKey, setDraggedFieldKey] = useState<string | null>(null);
+  const [dragOverTarget, setDragOverTarget] = useState<{ key: string; position: 'before' | 'after' } | null>(null);
 
   // Inline editing state (replaces the old modal)
   const [editingKeys, setEditingKeys] = useState<Set<string>>(new Set());
@@ -80,7 +85,7 @@ export default function CapdevConfigPage() {
   const [newSectionName, setNewSectionName] = useState('');
 
   // Interactive preview input states
-  const [previewData, setPreviewData] = useState<Record<string, string>>({});
+  const [previewData, setPreviewData] = useState<Record<string, any>>({});
   const [previewFiles, setPreviewFiles] = useState<Record<string, File[]>>({});
 
   // Fixed/required preview fields (AIP Code, Budget, etc.) — typeable, placeholder only
@@ -125,12 +130,22 @@ export default function CapdevConfigPage() {
     loadFields();
   }, []);
 
+    // Global dragend/drop listener to guarantee dragged state is reset and never stays stuck gray
+  useEffect(() => {
+    const handleGlobalDragEnd = () => {
+      setDraggedFieldKey(null);
+      setDragOverTarget(null);
+    };
+    window.addEventListener('dragend', handleGlobalDragEnd);
+    window.addEventListener('drop', handleGlobalDragEnd);
+    return () => {
+      window.removeEventListener('dragend', handleGlobalDragEnd);
+      window.removeEventListener('drop', handleGlobalDragEnd);
+    };
+  }, []);
+
   if (session.isPending || loading) {
-    return (
-      <Box sx={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', bgcolor: '#fafcfa' }}>
-        <CircularProgress color="primary" />
-      </Box>
-    );
+    return <FormConfigSkeleton titleWidth={260} />;
   }
 
   if (!session.data) return null;
@@ -273,38 +288,109 @@ export default function CapdevConfigPage() {
     handleFieldChange(originalIndex, { options: currentOptions.filter((o) => o !== optToRemove) });
   };
 
-  // ---- Drag and drop reordering --------------------------------------------------------------
+    // ---- Drag and drop & 1-click reordering -----------------------------------------------------
+
+  
+  const handleMoveField = async (fieldKey: string, direction: 'up' | 'down') => {
+    const currentField = fields.find((f) => f.key === fieldKey);
+    if (!currentField) return;
+    const currentSection = currentField.isRequired ? 'required' : currentField.section;
+    const sectionFields = fields.filter((f) => (f.isRequired ? 'required' : f.section) === currentSection);
+    const secIndex = sectionFields.findIndex((f) => f.key === fieldKey);
+    if (secIndex === -1) return;
+    const targetSecIndex = direction === 'up' ? secIndex - 1 : secIndex + 1;
+    if (targetSecIndex < 0 || targetSecIndex >= sectionFields.length) return;
+
+    const targetField = sectionFields[targetSecIndex];
+    const currentIndex = fields.findIndex((f) => f.key === currentField.key);
+
+    const updated = [...fields];
+    updated.splice(currentIndex, 1);
+    const newTargetIndex = updated.findIndex((f) => f.key === targetField.key);
+    const insertIndex = direction === 'up' ? newTargetIndex : newTargetIndex + 1;
+    updated.splice(insertIndex, 0, currentField);
+
+    const sorted = updated.map((f, i) => ({ ...f, sortOrder: i + 1 }));
+    setFields(sorted);
+
+    const idOrder = sorted.map((f) => f.id).filter((id): id is number => typeof id === 'number');
+    await updateCapdevFieldsOrder(idOrder, currentUserId);
+  };
 
   const handleDragStart = (e: React.DragEvent, key: string) => {
     if (editingKeys.has(key)) {
       e.preventDefault();
       return;
     }
-    e.stopPropagation();
     setDraggedFieldKey(key);
+    e.dataTransfer.setData('text/plain', key);
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleFieldDragOver = (e: React.DragEvent, targetKey: string) => {
     e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+
+    if (!draggedFieldKey || draggedFieldKey === targetKey) {
+      if (dragOverTarget) setDragOverTarget(null);
+      return;
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const isHorizontal = rect.width > rect.height * 1.5;
+    const isFirstHalf = isHorizontal
+      ? (e.clientX - rect.left) < rect.width / 2
+      : (e.clientY - rect.top) < rect.height / 2;
+
+    const position: 'before' | 'after' = isFirstHalf ? 'before' : 'after';
+
+    if (!dragOverTarget || dragOverTarget.key !== targetKey || dragOverTarget.position !== position) {
+      setDragOverTarget({ key: targetKey, position });
+    }
   };
 
-  const handleDrop = async (e: React.DragEvent, targetIndex: number, destinationSection?: string) => {
-    e.preventDefault();
-    const sourceIndex = draggedFieldKey ? fields.findIndex((field) => field.key === draggedFieldKey) : -1;
-    if (sourceIndex === -1 || sourceIndex === targetIndex) {
-      setDraggedFieldKey(null);
-      return;
+  const handleFieldDragLeave = (e: React.DragEvent, targetKey: string) => {
+    if (dragOverTarget?.key === targetKey) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      if (
+        e.clientX < rect.left ||
+        e.clientX >= rect.right ||
+        e.clientY < rect.top ||
+        e.clientY >= rect.bottom
+      ) {
+        setDragOverTarget(null);
+      }
     }
+  };
+
+  const handleDrop = async (
+    e: React.DragEvent,
+    targetIndex: number,
+    destinationSection?: string,
+    forcedPosition?: 'before' | 'after'
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const sourceKey = draggedFieldKey || e.dataTransfer.getData('text/plain');
+    const sourceIndex = sourceKey ? fields.findIndex((field) => field.key === sourceKey) : -1;
+    
+    const currentDragOver = dragOverTarget;
+    setDraggedFieldKey(null);
+    setDragOverTarget(null);
+
+    if (sourceIndex === -1) return;
 
     const updated = [...fields];
-    const draggedField = updated[sourceIndex];
-    const targetField = updated[targetIndex];
-    const targetSection = destinationSection || (targetField ? (targetField.isRequired ? 'required' : targetField.section) : null);
-    if (!targetSection) {
-      setDraggedFieldKey(null);
-      return;
-    }
+    const draggedField = { ...updated[sourceIndex] };
+
+    const targetField = fields[targetIndex];
+    if (!targetField) return;
+
+    const position = forcedPosition || (currentDragOver?.key === targetField.key ? currentDragOver.position : 'after');
+    const targetSection = destinationSection || (targetField.isRequired ? 'required' : targetField.section);
+    if (!targetSection) return;
+
     let changed = false;
 
     if (draggedField.isRequired && targetSection !== 'required') {
@@ -321,17 +407,18 @@ export default function CapdevConfigPage() {
     }
 
     updated.splice(sourceIndex, 1);
-    updated.splice(targetIndex, 0, draggedField);
+    const targetIdxInUpdated = updated.findIndex((f) => f.key === targetField.key);
+    if (targetIdxInUpdated === -1) return;
+
+    const insertIndex = position === 'before' ? targetIdxInUpdated : targetIdxInUpdated + 1;
+    updated.splice(insertIndex, 0, draggedField);
 
     const sorted = updated.map((f, i) => ({ ...f, sortOrder: i + 1 }));
     setFields(sorted);
-    setDraggedFieldKey(null);
 
-    // Save ordering
     const idOrder = sorted.map((f) => f.id).filter((id): id is number => typeof id === 'number');
     await updateCapdevFieldsOrder(idOrder, currentUserId);
 
-    // Save section change if updated
     if (changed && draggedField.id) {
       const payload = {
         id: draggedField.id,
@@ -351,6 +438,7 @@ export default function CapdevConfigPage() {
 
   const handleDragEnd = () => {
     setDraggedFieldKey(null);
+    setDragOverTarget(null);
   };
 
   const getSectionInsertIndex = (section: string) => {
@@ -505,7 +593,7 @@ export default function CapdevConfigPage() {
         return (
           <Stack spacing={0.5}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-              {field.name} {isRequired && <span style={{ color: 'red' }}>*</span>}
+              {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
             <TextField
               type="number"
@@ -522,7 +610,7 @@ export default function CapdevConfigPage() {
         return (
           <Stack spacing={0.5}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-              {field.name} {isRequired && <span style={{ color: 'red' }}>*</span>}
+              {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
             <DateField size="small" value={value} onChange={(nextValue) => setPreviewData({ ...previewData, [field.name]: nextValue })} />
           </Stack>
@@ -531,7 +619,7 @@ export default function CapdevConfigPage() {
         return (
           <Stack spacing={0.5}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-              {field.name} {isRequired && <span style={{ color: 'red' }}>*</span>}
+              {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
             <Box
               sx={{
@@ -571,13 +659,25 @@ export default function CapdevConfigPage() {
             )}
           </Stack>
         );
+      case 'table':
+        return (
+          <DynamicTableField
+            label={field.name}
+            required={isRequired}
+            value={previewData[field.name]}
+            template={field.options?.[0]}
+            showDimensionControls={false}
+            onChange={(val) => setPreviewData({ ...previewData, [field.name]: val })}
+          />
+        );
       case 'text':
+      case 'textarea':
       default:
         if (field.options && field.options.length > 0) {
           return (
             <Stack spacing={0.5}>
               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                {field.name} {isRequired && <span style={{ color: 'red' }}>*</span>}
+                {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
               </Typography>
               <Autocomplete
                 freeSolo
@@ -593,10 +693,12 @@ export default function CapdevConfigPage() {
         return (
           <Stack spacing={0.5}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-              {field.name} {isRequired && <span style={{ color: 'red' }}>*</span>}
+              {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
             <TextField
               fullWidth
+              multiline
+              minRows={2}
               size="small"
               placeholder={field.placeholder || 'Enter text...'}
               value={value}
@@ -618,13 +720,18 @@ export default function CapdevConfigPage() {
           border: '2px solid',
           borderColor: 'primary.main',
           borderRadius: 2.5,
-          bgcolor: 'rgba(46, 125, 50, 0.03)',
+          bgcolor: '#ffffff',
+          boxShadow: '0 4px 16px rgba(46, 125, 50, 0.08)',
         }}
       >
+        <Typography variant="subtitle2" sx={{ color: 'primary.main', fontWeight: 'bold', mb: 2 }}>
+          {f.isTemp ? 'Add New Field' : `Editing: ${f.name}`}
+        </Typography>
+
         <Grid container spacing={2}>
           <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
-              label="Label"
+              label="Field Name"
               fullWidth
               size="small"
               autoFocus
@@ -645,14 +752,18 @@ export default function CapdevConfigPage() {
             <FormControl fullWidth size="small">
               <InputLabel>Type</InputLabel>
               <Select
-                value={f.type}
+                value={f.type === 'textarea' ? 'text' : f.type}
                 label="Type"
-                onChange={(e) => handleFieldChange(originalIndex, { type: e.target.value })}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  handleFieldChange(originalIndex, { type: val });
+                }}
               >
                 <MenuItem value="text">Text (Textbox / Combobox)</MenuItem>
                 <MenuItem value="number">Number</MenuItem>
                 <MenuItem value="date">Date Picker</MenuItem>
                 <MenuItem value="file">File Upload (Allows Multiple)</MenuItem>
+                <MenuItem value="table">Table (Dynamic Grid)</MenuItem>
               </Select>
             </FormControl>
           </Grid>
@@ -746,6 +857,25 @@ export default function CapdevConfigPage() {
               </Box>
             </Grid>
           )}
+
+          {f.type === 'table' && (
+            <Grid size={12}>
+              <Box sx={{ border: '1px solid rgba(0,0,0,0.12)', borderRadius: 2, p: 2, bgcolor: '#ffffff' }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
+                  Table Structure Configuration
+                </Typography>
+                <DynamicTableField
+                  label=""
+                  value={f.options?.[0] ? JSON.parse(f.options[0]) : undefined}
+                  template={f.options?.[0]}
+                  showDimensionControls={true}
+                  onChange={(val) => {
+                    handleFieldChange(originalIndex, { options: [JSON.stringify(val)] });
+                  }}
+                />
+              </Box>
+            </Grid>
+          )}
         </Grid>
 
         <Stack direction="row" spacing={1} sx={{ mt: 2.5, justifyContent: 'flex-end' }}>
@@ -777,7 +907,6 @@ export default function CapdevConfigPage() {
       </Box>
     );
   }
-
   return (
     <Box
       sx={{
@@ -839,7 +968,7 @@ export default function CapdevConfigPage() {
                       {editingSection === secKey ? (
                         <TextField size="small" autoFocus value={sectionDraft} onChange={(event) => setSectionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void handleSaveSection(secKey); if (event.key === 'Escape') setEditingSection(null); }} sx={{ flexGrow: 1 }} />
                       ) : (
-                        <Typography variant="subtitle2" sx={{ color: 'primary.dark', fontWeight: 'bold', letterSpacing: '0.1px', flexGrow: 1 }}>
+                <Typography variant="subtitle2" sx={{ color: 'primary.dark', fontWeight: 'bold', letterSpacing: '0.1px', flexGrow: 1 }}>
                           {getSectionLabel(secKey)} {secKey === 'required' && '(Fixed & Required Fields)'}
                         </Typography>
                       )}
@@ -855,12 +984,12 @@ export default function CapdevConfigPage() {
                           <Grid size={12}>
                             <Stack spacing={0.5}>
                               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                                AIP Code
+                                AIP Code <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
                               </Typography>
                               <TextField
                                 fullWidth
                                 size="small"
-                                placeholder="e.g. AIP-2026-001"
+                                placeholder="3000-002-04-03-26-006-022"
                                 value={fixedPreviewData.aipCode}
                                 onChange={(e) => handleFixedPreviewChange('aipCode', e.target.value)}
                                 sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
@@ -869,8 +998,7 @@ export default function CapdevConfigPage() {
                           </Grid>
                           <Grid size={{ xs: 12, sm: 6 }}>
                             <Stack spacing={0.5}>
-                              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                                Budget
+                              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>Balance <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
                               </Typography>
                               <TextField
                                 fullWidth
@@ -885,7 +1013,7 @@ export default function CapdevConfigPage() {
                           <Grid size={{ xs: 12, sm: 6 }}>
                             <Stack spacing={0.5}>
                               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                                Department
+                                Department <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
                               </Typography>
                               <TextField
                                 fullWidth
@@ -900,80 +1028,211 @@ export default function CapdevConfigPage() {
                         </>
                       )}
 
-                      {/* Dynamic fields — clean view, or inline editor when adding/editing */}
-                      {sectionFields.map((f) => {
-                        const originalIndex = fields.findIndex((field) => field.key === f.key);
-                        const editing = editingKeys.has(f.key);
-                        return (
-                          <Grid
-                            size={editing ? 12 : f.width === 'half' ? { xs: 12, sm: 6 } : 12}
-                            key={f.key}
-                            draggable={!editing}
-                            onDragStart={(e) => handleDragStart(e, f.key)}
-                            onDragOver={handleDragOver}
-                            onDrop={(e) => handleDrop(e, originalIndex)}
-                            onDragEnd={handleDragEnd}
-                            sx={{
-                              opacity: draggedFieldKey === f.key ? 0.3 : 1,
-                              transition: 'all 0.2s',
-                              position: 'relative',
-                            }}
-                          >
-                            {editing ? (
-                              renderFieldEditor(f, originalIndex)
-                            ) : (
-                              <Box
+                      {/* Compute unpaired half-width fields for side-by-side drop slot */}
+                      {(() => {
+                        const unpairedHalfIndices = new Set<number>();
+                        let rowCols = 0;
+                        let lastHalfIndex = -1;
+                        sectionFields.forEach((field, i) => {
+                          if (field.width === 'half' && field.type !== 'table') {
+                            if (rowCols === 0) {
+                              rowCols = 6;
+                              lastHalfIndex = i;
+                            } else {
+                              rowCols = 0;
+                              lastHalfIndex = -1;
+                            }
+                          } else {
+                            if (rowCols === 6 && lastHalfIndex !== -1) {
+                              unpairedHalfIndices.add(lastHalfIndex);
+                              rowCols = 0;
+                              lastHalfIndex = -1;
+                            }
+                          }
+                        });
+                        if (rowCols === 6 && lastHalfIndex !== -1) {
+                          unpairedHalfIndices.add(lastHalfIndex);
+                        }
+
+                        return sectionFields.map((f, secIdx) => {
+                          const originalIndex = fields.findIndex((field) => field.key === f.key);
+                          const editing = editingKeys.has(f.key);
+                          const isBeingDragged = draggedFieldKey === f.key;
+                          const isOverBefore = dragOverTarget?.key === f.key && dragOverTarget.position === 'before';
+                          const isOverAfter = dragOverTarget?.key === f.key && dragOverTarget.position === 'after';
+
+                          return (
+                            <React.Fragment key={f.key}>
+                              <Grid
+                                size={editing ? 12 : f.type === 'table' ? 12 : f.width === 'half' ? { xs: 12, sm: 6 } : 12}
+                                draggable={!editing}
+                                onDragStart={(e) => handleDragStart(e, f.key)}
+                                onDragOver={(e) => handleFieldDragOver(e, f.key)}
+                                onDragLeave={(e) => handleFieldDragLeave(e, f.key)}
+                                onDrop={(e) => handleDrop(e, originalIndex)}
+                                onDragEnd={handleDragEnd}
                                 sx={{
+                                  opacity: isBeingDragged ? 0.45 : 1,
+                                  transform: isBeingDragged ? 'scale(0.98)' : 'none',
+                                  transition: 'all 0.15s ease',
                                   position: 'relative',
-                                  '&:hover .field-actions': { opacity: 1 },
-                                  p: 2,
-                                  border: '1px solid rgba(46, 125, 50, 0.08)',
-                                  borderRadius: 2.5,
-                                  bgcolor: '#ffffff',
-                                  transition: 'all 0.2s',
-                                  '&:hover': {
-                                    borderColor: 'primary.main',
-                                    boxShadow: '0 4px 12px rgba(46, 125, 50, 0.03)',
-                                  },
                                 }}
                               >
-                                {/* Field Action Overlay */}
-                                <Stack
-                                  className="field-actions"
-                                  direction="row"
-                                  spacing={0.5}
+                                {/* Visual insertion indicator lines */}
+                                {isOverBefore && (
+                                  <Box
+                                    sx={{
+                                      position: 'absolute',
+                                      top: -4,
+                                      left: 0,
+                                      right: 0,
+                                      height: 4,
+                                      bgcolor: 'primary.main',
+                                      borderRadius: 2,
+                                      zIndex: 20,
+                                      boxShadow: '0 0 8px rgba(46, 125, 50, 0.6)',
+                                    }}
+                                  />
+                                )}
+                                {isOverAfter && (
+                                  <Box
+                                    sx={{
+                                      position: 'absolute',
+                                      bottom: -4,
+                                      left: 0,
+                                      right: 0,
+                                      height: 4,
+                                      bgcolor: 'primary.main',
+                                      borderRadius: 2,
+                                      zIndex: 20,
+                                      boxShadow: '0 0 8px rgba(46, 125, 50, 0.6)',
+                                    }}
+                                  />
+                                )}
+
+                                {editing ? (
+                                  renderFieldEditor(f, originalIndex)
+                                ) : (
+                                  <Box
+                                    sx={{
+                                      position: 'relative',
+                                      '&:hover .field-actions': { opacity: 1 },
+                                      p: 2,
+                                      border: isBeingDragged
+                                        ? '2px dashed #2e7d32'
+                                        : '1px solid rgba(46, 125, 50, 0.12)',
+                                      borderRadius: 2.5,
+                                      bgcolor: isBeingDragged ? 'rgba(46, 125, 50, 0.04)' : '#ffffff',
+                                      transition: 'all 0.15s ease',
+                                      '&:hover': {
+                                        borderColor: 'primary.main',
+                                        boxShadow: '0 4px 12px rgba(46, 125, 50, 0.06)',
+                                      },
+                                    }}
+                                  >
+                                    {/* Field Action Overlay */}
+                                    <Stack
+                                      className="field-actions"
+                                      direction="row"
+                                      spacing={0.25}
+                                      sx={{
+                                        position: 'absolute',
+                                        top: -12,
+                                        right: 8,
+                                        bgcolor: '#ffffff',
+                                        border: '1px solid rgba(46, 125, 50, 0.18)',
+                                        borderRadius: '20px',
+                                        px: 0.75,
+                                        py: 0.25,
+                                        opacity: 0,
+                                        transition: 'opacity 0.2s',
+                                        zIndex: 10,
+                                        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                                      }}
+                                    >
+                                      <IconButton
+                                        size="small"
+                                        color="primary"
+                                        disabled={secIdx === 0}
+                                        onClick={() => void handleMoveField(f.key, 'up')}
+                                        sx={{ p: 0.4 }}
+                                        title="Move Up"
+                                      >
+                                        <ArrowUpIcon sx={{ fontSize: 16 }} />
+                                      </IconButton>
+                                      <IconButton
+                                        size="small"
+                                        color="primary"
+                                        disabled={secIdx === sectionFields.length - 1}
+                                        onClick={() => void handleMoveField(f.key, 'down')}
+                                        sx={{ p: 0.4 }}
+                                        title="Move Down"
+                                      >
+                                        <ArrowDownIcon sx={{ fontSize: 16 }} />
+                                      </IconButton>
+                                      <IconButton size="small" color="primary" onClick={() => handleStartEdit(originalIndex)} sx={{ p: 0.4 }} title="Edit">
+                                        <EditIcon sx={{ fontSize: 16 }} />
+                                      </IconButton>
+                                      <IconButton size="small" color="error" onClick={() => handleDeleteFieldDirect(originalIndex)} sx={{ p: 0.4 }} title="Delete">
+                                        <DeleteIcon sx={{ fontSize: 16 }} />
+                                      </IconButton>
+                                      <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'grab', px: 0.4 }} title="Drag to reorder">
+                                        <DragIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+                                      </Box>
+                                    </Stack>
+
+                                    {renderPreviewField(f)}
+                                  </Box>
+                                )}
+                              </Grid>
+
+                              {/* Drop slot placeholder for unpaired half-width field */}
+                              {unpairedHalfIndices.has(secIdx) && (
+                                <Grid
+                                  size={{ xs: 12, sm: 6 }}
+                                  onDragOver={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    e.dataTransfer.dropEffect = 'move';
+                                    if (draggedFieldKey && draggedFieldKey !== f.key) {
+                                      setDragOverTarget({ key: f.key, position: 'after' });
+                                    }
+                                  }}
+                                  onDragLeave={(e) => {
+                                    if (dragOverTarget?.key === f.key && dragOverTarget?.position === 'after') {
+                                      setDragOverTarget(null);
+                                    }
+                                  }}
+                                  onDrop={(e) => handleDrop(e, originalIndex, undefined, 'after')}
                                   sx={{
-                                    position: 'absolute',
-                                    top: -12,
-                                    right: 8,
-                                    bgcolor: '#ffffff',
-                                    border: '1px solid rgba(46, 125, 50, 0.18)',
-                                    borderRadius: '20px',
-                                    px: 1,
-                                    py: 0.25,
-                                    opacity: 0,
-                                    transition: 'opacity 0.2s',
-                                    zIndex: 10,
-                                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    minHeight: 80,
+                                    border:
+                                      dragOverTarget?.key === f.key && dragOverTarget?.position === 'after'
+                                        ? '2px dashed #2e7d32'
+                                        : '1px dashed rgba(46, 125, 50, 0.25)',
+                                    borderRadius: 2.5,
+                                    bgcolor:
+                                      dragOverTarget?.key === f.key && dragOverTarget?.position === 'after'
+                                        ? 'rgba(46, 125, 50, 0.08)'
+                                        : 'rgba(46, 125, 50, 0.02)',
+                                    transition: 'all 0.15s ease',
+                                    cursor: 'default',
                                   }}
                                 >
-                                  <IconButton size="small" color="primary" onClick={() => handleStartEdit(originalIndex)} sx={{ p: 0.5 }}>
-                                    <EditIcon sx={{ fontSize: 16 }} />
-                                  </IconButton>
-                                  <IconButton size="small" color="error" onClick={() => handleDeleteFieldDirect(originalIndex)} sx={{ p: 0.5 }}>
-                                    <DeleteIcon sx={{ fontSize: 16 }} />
-                                  </IconButton>
-                                  <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'grab', pl: 0.5 }}>
-                                    <DragIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
-                                  </Box>
-                                </Stack>
-
-                                {renderPreviewField(f)}
-                              </Box>
-                            )}
-                          </Grid>
-                        );
-                      })}
+                                  <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                                    {dragOverTarget?.key === f.key && dragOverTarget?.position === 'after'
+                                      ? `Drop beside ${f.name || 'field'}`
+                                      : '+ Drop field here'}
+                                  </Typography>
+                                </Grid>
+                              )}
+                            </React.Fragment>
+                          );
+                        });
+                      })()}
 
                       {/* Add Field, scoped to this section */}
                       <Grid size={12}>

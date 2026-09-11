@@ -29,10 +29,13 @@ import {
   Dns as DnsIcon,
   Fullscreen as FullscreenIcon,
   FullscreenExit as FullscreenExitIcon,
+  ArrowBack as ArrowBackIcon,
+  Key as KeyIcon,
 } from '@mui/icons-material';
-import { checkDrizzleConnection, DbStatus, getOrCreateUserRole } from './actions';
+import { checkDrizzleConnection, DbStatus, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword } from './actions';
 import { authClient } from '@/lib/auth/client';
 import { useRouter } from 'next/navigation';
+
 
 export default function Home() {
   const router = useRouter();
@@ -50,6 +53,18 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Forgot Password States
+  const [isForgotPasswordMode, setIsForgotPasswordMode] = useState(false);
+  const [forgotStep, setForgotStep] = useState<1 | 2>(1);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotCode, setForgotCode] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+  const [forgotSuccess, setForgotSuccess] = useState<string | null>(null);
+
 
   // Clock States
   const [timeStr, setTimeStr] = useState('');
@@ -171,6 +186,75 @@ export default function Home() {
       setAuthLoading(false);
     }
   };
+
+  const handleRequestReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotLoading(true);
+    setForgotError(null);
+    setForgotSuccess(null);
+
+    try {
+      const res = await requestPasswordReset(forgotEmail);
+      if (!res.success) {
+        setForgotError(res.error || 'Failed to send reset code.');
+      } else {
+        setForgotSuccess(res.message || 'Verification code sent to your email.');
+        setForgotStep(2);
+      }
+    } catch (err: any) {
+      setForgotError(err.message || 'An unexpected error occurred.');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleVerifyAndReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setForgotError('Passwords do not match.');
+      return;
+    }
+    setForgotLoading(true);
+    setForgotError(null);
+    setForgotSuccess(null);
+
+    try {
+      const res = await verifyAndResetPassword(forgotEmail, forgotCode, forgotNewPassword);
+      if (!res.success) {
+        setForgotError(res.error || 'Failed to reset password.');
+      } else {
+        setAuthSuccess('Password reset successfully. You can now sign in.');
+        setEmail(forgotEmail);
+        setIsForgotPasswordMode(false);
+        setForgotStep(1);
+        setForgotCode('');
+        setForgotNewPassword('');
+        setForgotConfirmPassword('');
+      }
+    } catch (err: any) {
+      setForgotError(err.message || 'An unexpected error occurred.');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleOpenForgotPassword = () => {
+    setAuthError(null);
+    setAuthSuccess(null);
+    setForgotError(null);
+    setForgotSuccess(null);
+    setForgotEmail(email || '');
+    setForgotStep(1);
+    setIsForgotPasswordMode(true);
+  };
+
+  const handleBackToSignIn = () => {
+    setIsForgotPasswordMode(false);
+    setForgotStep(1);
+    setForgotError(null);
+    setForgotSuccess(null);
+  };
+
 
   // Loading Session State
   if (session.isPending || (session.data && checkingRole)) {
@@ -317,83 +401,284 @@ export default function Home() {
           {/* Form Header */}
           <Box sx={{ mb: 4 }}>
             <Typography variant="h4" color="text.primary" sx={{ fontWeight: '800', letterSpacing: '-0.5px' }}>
-              Sign In
+              {isForgotPasswordMode ? 'Reset Password' : 'Sign In'}
             </Typography>
           </Box>
 
-          {authError && (
-            <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
-              {authError}
-            </Alert>
+          {!isForgotPasswordMode ? (
+            <>
+              {authError && (
+                <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
+                  {authError}
+                </Alert>
+              )}
+
+              {authSuccess && (
+                <Alert severity="success" sx={{ mb: 3, borderRadius: 2 }}>
+                  {authSuccess}
+                </Alert>
+              )}
+
+              {/* Login Form */}
+              <form onSubmit={handleSignIn}>
+                <Stack spacing={3}>
+                  <TextField
+                    label="Email Address"
+                    type="email"
+                    required
+                    fullWidth
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    disabled={authLoading}
+                    slotProps={{
+                      input: {
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <EmailIcon color="action" />
+                          </InputAdornment>
+                        ),
+                      },
+                    }}
+                  />
+
+                  <TextField
+                    label="Password"
+                    type="password"
+                    required
+                    fullWidth
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    disabled={authLoading}
+                    slotProps={{
+                      input: {
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <LockIcon color="action" />
+                          </InputAdornment>
+                        ),
+                      },
+                    }}
+                  />
+
+                  <Stack direction="row" sx={{ justifyContent: 'flex-end', mt: -1 }}>
+                    <Button
+                      variant="text"
+                      color="primary"
+                      onClick={handleOpenForgotPassword}
+                      disabled={authLoading}
+                      sx={{
+                        textTransform: 'none',
+                        p: 0,
+                        minWidth: 'auto',
+                        fontSize: '0.875rem',
+                        fontWeight: 600,
+                        '&:hover': { bgcolor: 'transparent', textDecoration: 'underline' },
+                      }}
+                    >
+                      Forgot Password?
+                    </Button>
+                  </Stack>
+
+                  <Button
+                    type="submit"
+                    variant="contained"
+                    color="primary"
+                    fullWidth
+                    size="large"
+                    disabled={authLoading}
+                    sx={{
+                      py: 1.7,
+                      fontSize: '1.05rem',
+                      boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)',
+                      '&:hover': {
+                        boxShadow: '0 6px 16px rgba(46, 125, 50, 0.35)',
+                      },
+                    }}
+                  >
+                    {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Enter'}
+                  </Button>
+                </Stack>
+              </form>
+            </>
+          ) : (
+            <>
+              {forgotError && (
+                <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
+                  {forgotError}
+                </Alert>
+              )}
+
+              {forgotSuccess && (
+                <Alert severity="success" sx={{ mb: 3, borderRadius: 2 }}>
+                  {forgotSuccess}
+                </Alert>
+              )}
+
+              {forgotStep === 1 ? (
+                /* Forgot Password Step 1: Request Code */
+                <form onSubmit={handleRequestReset}>
+                  <Stack spacing={3}>
+                    <TextField
+                      label="Email Address"
+                      type="email"
+                      required
+                      fullWidth
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      disabled={forgotLoading}
+                      slotProps={{
+                        input: {
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <EmailIcon color="action" />
+                            </InputAdornment>
+                          ),
+                        },
+                      }}
+                    />
+
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      color="primary"
+                      fullWidth
+                      size="large"
+                      disabled={forgotLoading}
+                      sx={{
+                        py: 1.7,
+                        fontSize: '1.05rem',
+                        boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)',
+                        '&:hover': {
+                          boxShadow: '0 6px 16px rgba(46, 125, 50, 0.35)',
+                        },
+                      }}
+                    >
+                      {forgotLoading ? <CircularProgress size={24} color="inherit" /> : 'Send Verification Code'}
+                    </Button>
+
+                    <Button
+                      variant="text"
+                      color="secondary"
+                      fullWidth
+                      onClick={handleBackToSignIn}
+                      disabled={forgotLoading}
+                      startIcon={<ArrowBackIcon />}
+                      sx={{ textTransform: 'none', fontWeight: 600 }}
+                    >
+                      Back to Sign In
+                    </Button>
+                  </Stack>
+                </form>
+              ) : (
+                /* Forgot Password Step 2: Verify Code & Reset */
+                <form onSubmit={handleVerifyAndReset}>
+                  <Stack spacing={2.5}>
+                    <TextField
+                      label="Verification Code"
+                      placeholder="6-digit code"
+                      required
+                      fullWidth
+                      value={forgotCode}
+                      onChange={(e) => setForgotCode(e.target.value)}
+                      disabled={forgotLoading}
+                      slotProps={{
+                        input: {
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <KeyIcon color="action" />
+                            </InputAdornment>
+                          ),
+                        },
+                      }}
+                    />
+
+                    <TextField
+                      label="New Password"
+                      type="password"
+                      required
+                      fullWidth
+                      value={forgotNewPassword}
+                      onChange={(e) => setForgotNewPassword(e.target.value)}
+                      disabled={forgotLoading}
+                      slotProps={{
+                        input: {
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <LockIcon color="action" />
+                            </InputAdornment>
+                          ),
+                        },
+                      }}
+                    />
+
+                    <TextField
+                      label="Confirm New Password"
+                      type="password"
+                      required
+                      fullWidth
+                      value={forgotConfirmPassword}
+                      onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                      disabled={forgotLoading}
+                      slotProps={{
+                        input: {
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <LockIcon color="action" />
+                            </InputAdornment>
+                          ),
+                        },
+                      }}
+                    />
+
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      color="primary"
+                      fullWidth
+                      size="large"
+                      disabled={forgotLoading}
+                      sx={{
+                        py: 1.7,
+                        fontSize: '1.05rem',
+                        boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)',
+                        '&:hover': {
+                          boxShadow: '0 6px 16px rgba(46, 125, 50, 0.35)',
+                        },
+                      }}
+                    >
+                      {forgotLoading ? <CircularProgress size={24} color="inherit" /> : 'Update Password'}
+                    </Button>
+
+                    <Stack direction="row" spacing={1} sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Button
+                        variant="text"
+                        color="primary"
+                        size="small"
+                        onClick={handleRequestReset}
+                        disabled={forgotLoading}
+                        sx={{ textTransform: 'none', fontWeight: 600 }}
+                      >
+                        Resend Code
+                      </Button>
+
+                      <Button
+                        variant="text"
+                        color="secondary"
+                        size="small"
+                        onClick={handleBackToSignIn}
+                        disabled={forgotLoading}
+                        startIcon={<ArrowBackIcon />}
+                        sx={{ textTransform: 'none', fontWeight: 600 }}
+                      >
+                        Sign In
+                      </Button>
+                    </Stack>
+                  </Stack>
+                </form>
+              )}
+            </>
           )}
 
-          {authSuccess && (
-            <Alert severity="success" sx={{ mb: 3, borderRadius: 2 }}>
-              {authSuccess}
-            </Alert>
-          )}
-
-          {/* Login Form */}
-          <form onSubmit={handleSignIn}>
-            <Stack spacing={3}>
-              <TextField
-                label="Email Address"
-                type="email"
-                required
-                fullWidth
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={authLoading}
-                slotProps={{
-                  input: {
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <EmailIcon color="action" />
-                      </InputAdornment>
-                    ),
-                  },
-                }}
-              />
-
-              <TextField
-                label="Password"
-                type="password"
-                required
-                fullWidth
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                disabled={authLoading}
-                slotProps={{
-                  input: {
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <LockIcon color="action" />
-                      </InputAdornment>
-                    ),
-                  },
-                }}
-              />
-
-              <Button
-                type="submit"
-                variant="contained"
-                color="primary"
-                fullWidth
-                size="large"
-                disabled={authLoading}
-                sx={{
-                  py: 1.7,
-                  fontSize: '1.05rem',
-                  boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)',
-                  '&:hover': {
-                    boxShadow: '0 6px 16px rgba(46, 125, 50, 0.35)',
-                  },
-                }}
-              >
-                {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Enter'}
-              </Button>
-            </Stack>
-          </form>
 
           {/* Spacing bottom */}
           <Box sx={{ mt: 4 }} />

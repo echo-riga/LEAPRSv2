@@ -2,10 +2,12 @@
 
 import React, { Suspense, useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { AppBar, Box, Chip, CircularProgress, IconButton, Stack, Toolbar, Tooltip, Typography } from '@mui/material';
+import { AppBar, Box, Chip, IconButton, Stack, Toolbar, Tooltip, Typography } from '@mui/material';
 import { ArrowBack as ArrowBackIcon, ExitToApp as ExitToAppIcon, Fullscreen as FullscreenIcon, FullscreenExit as FullscreenExitIcon, Settings as SettingsIcon } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess, type AppRole } from '@/app/actions';
+import { ResourceGridSkeleton } from '@/components/Skeletons';
+import NotificationsMenu from '@/components/NotificationsMenu';
 
 const ADMIN_ROUTES = ['/admin', '/admin/analytics', '/admin/reports', '/admin/settings', '/admin/users', '/admin/settings/capdev', '/admin/settings/request'];
 
@@ -23,7 +25,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   const session = authClient.useSession();
   const [greeting, setGreeting] = useState(getGreeting);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [role, setRole] = useState<AppRole>('employee');
+  const [role, setRole] = useState<AppRole | null>(null);
 
   useEffect(() => {
     const interval = window.setInterval(() => setGreeting(getGreeting()), 60_000);
@@ -67,7 +69,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   };
 
   if (session.isPending) {
-    return <Box sx={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', bgcolor: '#fafcfa' }}><CircularProgress color="primary" /></Box>;
+    return <Box sx={{ minHeight: '100vh', bgcolor: '#fafcfa', p: 3, pt: 12 }}><ResourceGridSkeleton /></Box>;
   }
   if (!session.data) return null;
 
@@ -85,7 +87,9 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
         : '/admin';
   const settingsHref = `/admin/settings?from=${encodeURIComponent(pathname)}`;
   const isDashboard = pathname === '/admin';
-  const roleLabel = role === 'viewer-full'
+  const roleLabel = !role
+    ? '...'
+    : role === 'viewer-full'
     ? 'Viewer (All)'
     : `${role.charAt(0).toUpperCase()}${role.slice(1)}`;
 
@@ -97,9 +101,10 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
             <Typography variant="h6" noWrap sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 700, color: 'text.primary' }}>{greeting}, {userName}</Typography>
             <Chip label={roleLabel} size="small" color="primary" sx={{ flexShrink: 0, fontWeight: 700, height: 24, borderRadius: '6px' }} />
           </Stack>
-          <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
+          <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0, alignItems: 'center' }}>
             {!isDashboard && <Tooltip title="Back"><IconButton color="primary" onClick={() => router.push(backHref)} aria-label="Back"><ArrowBackIcon /></IconButton></Tooltip>}
-            {role !== 'employee' && !isSettingsPage && <Tooltip title="Settings"><IconButton color="primary" onClick={() => router.push(settingsHref)} aria-label="Settings"><SettingsIcon /></IconButton></Tooltip>}
+            <NotificationsMenu />
+            {role && role !== 'employee' && !isSettingsPage && <Tooltip title="Settings"><IconButton color="primary" onClick={() => router.push(settingsHref)} aria-label="Settings"><SettingsIcon /></IconButton></Tooltip>}
             <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}><IconButton color="primary" onClick={handleFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>{isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}</IconButton></Tooltip>
             <Tooltip title="Sign out"><IconButton color="error" onClick={handleSignOut} aria-label="Sign out"><ExitToAppIcon /></IconButton></Tooltip>
           </Stack>
@@ -112,7 +117,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
-    <Suspense fallback={<Box sx={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', bgcolor: '#fafcfa' }}><CircularProgress color="primary" /></Box>}>
+    <Suspense fallback={<Box sx={{ minHeight: '100vh', bgcolor: '#fafcfa', p: 3, pt: 12 }}><ResourceGridSkeleton /></Box>}>
       <AdminLayoutContent>{children}</AdminLayoutContent>
     </Suspense>
   );

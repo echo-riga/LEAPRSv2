@@ -28,6 +28,7 @@ import {
   Typography,
 } from '@mui/material';
 import { getAnalyticsData } from '@/app/actions';
+import { AnalyticsSkeleton } from '@/components/Skeletons';
 import DateField from '@/components/DateField';
 
 type AnalyticsData = Awaited<ReturnType<typeof getAnalyticsData>>;
@@ -216,11 +217,7 @@ export default function AnalyticsPage() {
   );
 
   if (loading) {
-    return (
-      <Box sx={{ display: 'grid', minHeight: 'calc(100vh - 72px)', placeItems: 'center' }}>
-        <CircularProgress color="primary" />
-      </Box>
-    );
+    return <AnalyticsSkeleton />;
   }
 
   const isAllDepartmentsSelected = allDepartments.length > 0 && filters.departments.length === allDepartments.length;
@@ -304,7 +301,7 @@ export default function AnalyticsPage() {
 
         <Grid container spacing={2.5}>
           <Grid size={{ xs: 12, lg: 5 }}>
-            <ChartCard title="Budget utilization">
+            <ChartCard title="Balance utilization">
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} sx={{ alignItems: 'center' }}>
                 <Box sx={{ position: 'relative', display: 'grid', placeItems: 'center', width: 190, height: 190, flexShrink: 0 }}>
                   <Box
@@ -331,14 +328,14 @@ export default function AnalyticsPage() {
                       {utilization}%
                     </Typography>
                     <Typography variant="caption" color="text.secondary" sx={{ mt: -0.25 }}>
-                      of total budget
+                      of initial balance
                     </Typography>
                   </Box>
                 </Box>
                 <Stack spacing={1.25} sx={{ flexGrow: 1, minWidth: 0, width: { xs: '100%', md: 'auto' } }}>
                   <Box>
                     <Typography variant="body2" color="text.secondary">
-                      Initial budget
+                      Initial balance
                     </Typography>
                     <Typography sx={{ fontWeight: 800, fontSize: '1.1rem' }}>
                       {currency.format(initialBudget)}
@@ -371,7 +368,7 @@ export default function AnalyticsPage() {
             </ChartCard>
           </Grid>
           <Grid size={{ xs: 12, lg: 7 }}>
-            <ChartCard title="Budget allocation by department">
+            <ChartCard title="Balance allocation by department">
               <Stack direction="row" spacing={{ xs: 1, sm: 2 }} sx={{ minHeight: 250, alignItems: 'flex-end', overflowX: 'auto', pt: 1 }}>
                 {allocations.map((allocation) => (
                   <Stack key={allocation.name} spacing={1} sx={{ alignItems: 'center', justifyContent: 'flex-end', minWidth: 88, height: 240, flex: 1 }}>
@@ -395,7 +392,7 @@ export default function AnalyticsPage() {
                 ))}
                 {allocations.length === 0 && (
                   <Typography color="text.secondary" sx={{ m: 'auto' }}>
-                    No budget allocation for this filter.
+                    No balance allocation for this filter.
                   </Typography>
                 )}
               </Stack>

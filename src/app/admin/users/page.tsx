@@ -8,7 +8,6 @@ import {
   Typography,
   Stack,
   Chip,
-  CircularProgress,
   Grid,
   Card,
   CardContent,
@@ -16,6 +15,8 @@ import {
   Avatar,
   Divider,
   Fab,
+  IconButton,
+  Tooltip,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -26,14 +27,17 @@ import {
   MenuItem,
   InputAdornment,
 } from '@mui/material';
+import { ResourceGridSkeleton } from '@/components/Skeletons';
 import {
   Add as AddIcon,
   ChevronRight as ChevronRightIcon,
+  DeleteOutlined as DeleteIcon,
   Search as SearchIcon,
   Lock as LockIcon,
   Email as EmailIcon,
   Person as PersonIcon,
   FilterList as FilterIcon,
+  VisibilityOutlined as VisibilityIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
 import { createDirectoryUser, deleteDirectoryUser, getCurrentUserAccess, getUsersDirectory, updateDirectoryUser, createUser } from '@/app/actions';
@@ -240,19 +244,7 @@ export default function UsersManagementPage() {
   }, [searchQuery]);
 
   if (session.isPending || loading) {
-    return (
-      <Box
-        sx={{
-          display: 'flex',
-          minHeight: '100vh',
-          alignItems: 'center',
-          justifyContent: 'center',
-          bgcolor: '#fafcfa',
-        }}
-      >
-        <CircularProgress color="primary" />
-      </Box>
-    );
+    return <ResourceGridSkeleton titleWidth={180} />;
   }
 
   if (!session.data) {
@@ -402,36 +394,28 @@ export default function UsersManagementPage() {
 
                     <Divider sx={{ my: 2 }} />
 
-                    {/* Action buttons aligned at the bottom - Consistent text button design */}
-                    <Stack direction="row" spacing={3} sx={{ mt: 'auto', justifyContent: 'flex-end' }}>
-                      <Button
-                        variant="text"
-                        color="primary"
-                        endIcon={<ChevronRightIcon />}
-                        onClick={() => handleOpenEditDialog(user)}
-                        sx={{
-                          p: 0,
-                          minWidth: 0,
-                          fontWeight: '700',
-                          '&:hover': { bgcolor: 'transparent', color: 'primary.dark' },
-                        }}
-                      >
-                        Details
-                      </Button>
-                      
-                      <Button
-                        variant="text"
-                        color="error"
-                        onClick={() => handleDeleteUser(user.id, user.isMock)}
-                        sx={{
-                          p: 0,
-                          minWidth: 0,
-                          fontWeight: '700',
-                          '&:hover': { bgcolor: 'transparent', color: '#b71c1c' },
-                        }}
-                      >
-                        Delete
-                      </Button>
+                    {/* Action buttons aligned at the bottom - Icon button design */}
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 'auto', justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <Tooltip title="View & Edit User">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => handleOpenEditDialog(user)}
+                          aria-label={`View details for ${user.name}`}
+                        >
+                          <VisibilityIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Delete User">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => handleDeleteUser(user.id, user.isMock)}
+                          aria-label={`Delete user ${user.name}`}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
                     </Stack>
                   </CardContent>
                 </Card>

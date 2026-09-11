@@ -56,16 +56,17 @@ Chronological logs track request progression. Status updates are **fixed** (not 
 * Status update text
 * Remarks
 * Multi-file uploads (via Google Drive integration)
+* `status_mark` (required enum: `pending`, `completed`, `denied`). Setting a status mark on an individual status update indicates the status of that specific step and does *not* prematurely close or deny the entire request timeline.
 * `mark_as_complete` (boolean)
-* `subtracts_requested_amount` (boolean)
+* `subtracts_requested_amount` (boolean with configurable deduction amount modal)
 
 ---
 
 ## 3. Key Business Constraints & Logic
 
 ### A. One-Time Timeline Flags
-* **Timeline Completion**: Once a status update has `mark_as_complete = true`, the request is finished. No further updates are permitted. Only one status update in a request's timeline can have this true.
-* **Budget Deduction**: Once a status update has `subtracts_requested_amount = true`, the request budget is automatically deducted from the parent CapDev's overall budget. Only one status update per request can trigger this deduction.
+* **Timeline Completion**: Once a status update has `mark_as_complete = true` or the request is concluded as Completed via timeline resolution, the request is finished. No further updates are permitted.
+* **Budget Deduction**: Once a status update has `subtracts_requested_amount = true`, the deduction modal opens allowing the user to review/edit the amount deducted before it is subtracted from the parent CapDev's balance. Only one status update per request can trigger this deduction.
 * **Budget Availability**: A request's requested budget cannot exceed its parent CapDev's remaining budget. The same check is enforced again when a deduction status update is saved.
 * **Budget History**: A CapDev stores its initial and remaining budgets. Its details view lists every deducted request amount and the status-update author.
 * *Enforcement*: Enforced via PostgreSQL partial unique indexes to block concurrency race conditions.
@@ -78,3 +79,18 @@ All files are uploaded to Google Drive.
 ### C. Form Configuration & Custom Layouts
 * Admins can configure the forms for CapDev and Requests.
 * Dynamic field types supported: `text` (combobox: dropdown + text entry), `number`, `date` (datepicker), `file` (drag & drop upload).
+
+### D. Cascading Entity Deletions
+* **Allow Delete & Cascade Children**: When deleting any parent entity (such as a CapDev project or a Requisition request), the system must permit deletion by automatically removing all attached foreign-key child records (e.g., status updates, timeline logs, and sub-references) in the same operation. Never block parent deletion due to existing child history logs.
+
+### E. Request Status vs. Status Update Marks
+* **Whole Request Statuses**: `in_progress`, `completed`, `denied`.
+* **Individual Status Update Marks**: `pending`, `completed`, `denied`.
+* Marking a status update as `denied` or `completed` documents that specific milestone without terminating or overriding the overarching request timeline. Only explicit concluding actions (`Complete` or `Deny` resolution) finalize the request.
+
+### F. Post-Completion Training Feedback & Evaluation Google Forms
+* Upon concluding a request as **Completed**, the system generates links to two Google Forms for feedback and post-training evaluation:
+  1. **Participant Evaluation & Feedback Form**: For participants/attendees to rate training content, trainer delivery, and logistics (`https://forms.gle/c8BjUUoPxYWiBxnF8`).
+  2. **Supervisor / Post-Activity Evaluation Form**: For supervisors and coordinators to assess workplace application, action plans, and skill improvements (`https://forms.gle/c8BjUUoPxYWiBxnF8`).
+* The forms are presented via a celebratory completion modal dialog immediately upon completion, and persist in the timeline's final resolution card with direct **Open Form** and **Copy Link** actions.
+

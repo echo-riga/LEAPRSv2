@@ -23,8 +23,8 @@ const TEMPLATE_SECTIONS = [
   { title: 'AVERAGE ACTIVITY RATING', color: '#47d45a', fields: ['QUALITY', 'EFFICIENCY', 'TIMELINESS', 'TOTAL'] },
   { title: 'HRDO ANALYSIS', color: '#47d45a', fields: ['ANALYSIS'] },
 ];
-const CAPDEV_FIXED_FIELDS = ['AIP Code', 'Department', 'Description', 'Initial Budget', 'Remaining Budget'] as const;
-const REQUEST_FIXED_FIELDS = ['Setting', 'Description', 'Requested Budget', 'Requestor'] as const;
+const CAPDEV_FIXED_FIELDS = ['AIP Code', 'Department', 'Description', 'Initial Balance', 'Remaining Balance'] as const;
+const REQUEST_FIXED_FIELDS = ['Setting', 'Description', 'Requested Amount', 'Requestor'] as const;
 const CAPDEV_FIXED_KEYS = ['aipCode', 'department', 'description', 'initialBudget', 'budget'];
 const REQUEST_FIXED_KEYS = ['setting', 'description', 'requestedBudget', 'requestorName'];
 

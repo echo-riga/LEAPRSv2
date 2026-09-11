@@ -83,6 +83,7 @@ export const requests = pgTable('requests', {
   description: text('description').notNull().default(''),
   requestedBudget: numeric('requested_budget', { precision: 12, scale: 2 }).notNull(),
   additionalInfo: jsonb('additional_info').default({}).notNull(),
+  status: varchar('status', { length: 50 }).default('in_progress').notNull(),
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED FORM DATA LAST
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -97,6 +98,7 @@ export const requestStatusUpdates = pgTable('request_status_updates', {
   statusUpdate: text('status_update').notNull(),
   remarks: text('remarks'),
   files: jsonb('files').default([]).notNull(),
+  statusMark: varchar('status_mark', { length: 50 }),
   markAsComplete: boolean('mark_as_complete').default(false).notNull(),
   subtractsRequestedAmount: boolean('subtracts_requested_amount').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -108,3 +110,38 @@ export const requestStatusUpdates = pgTable('request_status_updates', {
     .on(table.requestId)
     .where(sql`subtracts_requested_amount = true`),
 ]);
+
+// Password Resets table
+export const passwordResets = pgTable('password_resets', {
+  id: serial('id').primaryKey(),
+  email: varchar('email', { length: 255 }).notNull(),
+  code: varchar('code', { length: 10 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// Notifications table
+export const notifications = pgTable('notifications', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').references(() => users.id),
+  actorId: text('actor_id').references(() => users.id),
+  title: varchar('title', { length: 255 }).notNull(),
+  message: text('message').notNull(),
+  link: text('link').notNull(),
+  type: varchar('type', { length: 50 }).default('status_update').notNull(),
+  isRead: boolean('is_read').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// Notification reads tracking per user
+export const notificationReads = pgTable('notification_reads', {
+  id: serial('id').primaryKey(),
+  notificationId: integer('notification_id').references(() => notifications.id, { onDelete: 'cascade' }).notNull(),
+  userId: text('user_id').references(() => users.id).notNull(),
+  readAt: timestamp('read_at').defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('unique_user_notification_idx')
+    .on(table.notificationId, table.userId),
+]);
+
+

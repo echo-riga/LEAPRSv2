@@ -8,7 +8,6 @@ import {
   Typography,
   Stack,
   Chip,
-  CircularProgress,
   Grid,
   Card,
   CardContent,
@@ -21,6 +20,7 @@ import {
   DialogContent,
   DialogTitle,
 } from '@mui/material';
+import { SettingsGridSkeleton } from '@/components/Skeletons';
 import {
   People as PeopleIcon,
   Assessment as ReportsIcon,
@@ -39,13 +39,23 @@ export default function SettingsPage() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [auditLogsOpen, setAuditLogsOpen] = useState(false);
   const [counts, setCounts] = useState({ capdevFieldsCount: 0, requestFieldsCount: 0 });
-  const [role, setRole] = useState<AppRole>('employee');
+  const [role, setRole] = useState<AppRole | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
 
   useEffect(() => {
     getDynamicFieldCounts().then(setCounts);
   }, []);
 
-  useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
+  useEffect(() => {
+    if (session.data) {
+      void getCurrentUserAccess().then((access) => {
+        if (access.success) setRole(access.role);
+        setAccessLoading(false);
+      });
+    } else if (!session.isPending) {
+      setAccessLoading(false);
+    }
+  }, [session.data, session.isPending]);
 
   // Redirect if not logged in
   useEffect(() => {
@@ -54,20 +64,8 @@ export default function SettingsPage() {
     }
   }, [session.isPending, session.data, router]);
 
-  if (session.isPending) {
-    return (
-      <Box
-        sx={{
-          display: 'flex',
-          minHeight: '100vh',
-          alignItems: 'center',
-          justifyContent: 'center',
-          bgcolor: '#fafcfa',
-        }}
-      >
-        <CircularProgress color="primary" />
-      </Box>
-    );
+  if (session.isPending || accessLoading) {
+    return <SettingsGridSkeleton />;
   }
 
   if (!session.data) {

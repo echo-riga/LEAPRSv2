@@ -1,8 +1,15 @@
 import { defineConfig } from 'drizzle-kit';
+import process from 'node:process';
+
+try {
+  process.loadEnvFile?.('.env.local');
+} catch {}
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is not defined in environment variables');
 }
+
+
 
 export default defineConfig({
   schema: './src/db/schema.ts',

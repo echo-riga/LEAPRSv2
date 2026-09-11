@@ -11,12 +11,14 @@ This document outlines the core design system and principles for the LEAPRS (Lif
 
 ---
 
-## 1. Core Principle: "Don't State What's Implied"
+## 1. Core Principle: "Don't State What's Implied" (Zero Fluff)
 
-The primary goal of LEAPRS is utility. Seminar coordinators and government staff are recurring users who already know the purpose of the screens they visit.
-- **Zero Fluff**: Eliminate all unnecessary help text, descriptions, footnotes, or decorative text.
-- **Self-Explanatory UI**: Design interfaces where actions are clear based on the controls themselves (e.g., standard text fields, clearly labeled action buttons).
-- **Legible Layout**: Rely on spacing, font sizes, and layout to guide the user rather than paragraphs of text.
+The primary goal of LEAPRS is utility and speed. Seminar coordinators and government staff are recurring daily users who already understand the purpose of the screens, forms, and dialogs they interact with.
+- **Zero Fluff & No Redundant Explanations**: Strictly eliminate all unnecessary helper text, explanatory paragraphs, subtitles, footnotes, and decorative descriptions across all cards, dialogs, modals, and forms.
+  - **No Obvious Descriptions**: Never add subtitles explaining what a known item is (e.g., do *not* write "For attendees to rate speakers..." under a "Participant Feedback Form" label, or "Modify this if actual training expenses differed..." under a budget input).
+  - **No Verbose Dialog Narratives**: When a dialog title (e.g., "Complete Request") and action button (e.g., "Confirm Complete") already define the action, do not pad the dialog body with obvious narrative text.
+  - **Self-Explanatory Controls**: Let clear headings, labeled inputs, and action buttons speak for themselves.
+- **Legible, Compact Layout**: Rely on clean spacing, clear typography, and structured controls to guide the user rather than descriptive text.
 
 ## 2. UI Consistency Is the Primary Rule
 
@@ -160,7 +162,20 @@ export default function StandardPage() {
 
 ---
 
-## 8. Zero / Depleted Remaining Budget Styling
+## 8. Zero / Depleted Remaining Balance Styling
 
-- **Red Font Color**: When remaining budget reaches 0 (or is depleted), its font color must be styled with `error.main` (red) across both summary card boxes (partial view) and detailed edit/history modals (full view), as well as utilization summaries, to clearly signal exhaustion of funds.
+- **Red Font Color**: When remaining balance reaches 0 (or is depleted), its font color must be styled with `error.main` (red) across both summary card boxes (partial view) and detailed edit/history modals (full view), as well as utilization summaries, to clearly signal exhaustion of funds.
+
+---
+
+## 9. Page Transition & Skeleton Loading Standard
+
+- **No Full-Screen Spinner Interstitials**: Never use generic `<CircularProgress />` spinners or blank white screens when navigating between pages or waiting for data to load.
+- **Dedicated Page Skeletons**: Every page must display a high-fidelity skeleton representation of its target layout during route transitions (`loading.tsx`) and internal client component loading (`if (session.isPending || loading)`):
+  - **Resource Listings (CapDev, Requests, Users)**: Display a 2-row × 3-column (6 box) grid skeleton (`ResourceGridSkeleton`) with matching title, search/filter bars, card shells, metadata placeholders, and pagination footer.
+  - **Settings Dashboard**: Display a 3-column equal card grid skeleton (`SettingsGridSkeleton`) matching settings cards.
+  - **Status Timeline**: Display a 3-column status update card grid skeleton (`TimelineGridSkeleton`).
+  - **Form Config & Previews**: Display a form layout preview skeleton (`FormConfigSkeleton`).
+  - **Analytics & Reports**: Display KPI cards and chart panel skeletons (`AnalyticsSkeleton`, `ReportsSkeleton`).
+- **Implementation**: Reuse centralized skeleton components from `@/components/Skeletons`.
 

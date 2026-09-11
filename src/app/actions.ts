@@ -1,12 +1,16 @@
 'use server';
 
 import { db } from '@/db';
-import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates } from '@/db/schema';
-import { sql, count, and, eq, getTableColumns } from 'drizzle-orm';
+import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads } from '@/db/schema';
+import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, ne } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
+import { sendPasswordResetEmail } from '@/lib/email';
+import { hashPassword } from 'better-auth/crypto';
 import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+
+
 
 export interface DbStatus {
   success: boolean;
@@ -60,7 +64,7 @@ export async function getCurrentUserAccess() {
 export async function checkDrizzleConnection(): Promise<DbStatus> {
   const testedAt = new Date().toISOString();
   const start = Date.now();
-  
+
   try {
     // 1. Test Read Connection
     await db.execute(sql`SELECT NOW()`);
@@ -272,6 +276,10 @@ async function getMissingRequiredCapdevFields(additionalInfo: Record<string, unk
     .filter((field) => {
       const value = additionalInfo[field.name];
       if (field.type === 'file') return !Array.isArray(value) || value.length === 0;
+      if (field.type === 'table') {
+        if (!Array.isArray(value) || value.length === 0) return true;
+        return !value.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
+      }
       return value === undefined || value === null || String(value).trim().length === 0;
     })
     .map((field) => field.name);
@@ -467,9 +475,20 @@ export async function createCapdev(data: CapdevInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    const aipCodePattern = /^\d{4}-\d{3}-\d{2}-\d{2}-\d{2}-\d{3}-\d{3}$/;
+    if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
+      return { success: false, error: 'AIP Code must follow the format: 3000-002-04-03-26-006-022' };
+    }
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [created] = await db.insert(capdevs).values({ ...data, updatedById: access.userId, initialBudget: data.budget }).returning();
+    void createNotification({
+      actorId: access.userId,
+      title: `New CapDev Project: ${created.aipCode}`,
+      message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+      link: `/admin/capdev/${created.id}/requests`,
+      type: 'capdev_created',
+    });
     return { success: true, capdev: created };
   } catch (error) {
     console.error('Failed to create CapDev project:', error);
@@ -481,6 +500,10 @@ export async function updateCapdev(id: number, data: CapdevInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    const aipCodePattern = /^\d{4}-\d{3}-\d{2}-\d{2}-\d{2}-\d{3}-\d{3}$/;
+    if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
+      return { success: false, error: 'AIP Code must follow the format: 3000-002-04-03-26-006-022' };
+    }
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [updated] = await db
@@ -849,13 +872,20 @@ export async function createRequest(data: RequestInput) {
     const { data: session } = await auth.getSession();
 
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, data.capdevId)).limit(1);
-    if (!capdev || Number(data.requestedBudget) > Number(capdev.budget)) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
+    if (!capdev || Number(data.requestedBudget) > Number(capdev.budget)) return { success: false, error: 'Requested amount exceeds the remaining CapDev balance.' };
     const [created] = await db.insert(requests).values({
       ...data,
       userId: access.userId,
       updatedById: access.userId,
       requestorName: session?.user?.name || session?.user?.email || 'Requestor',
     }).returning();
+    void createNotification({
+      actorId: access.userId,
+      title: `New Requisition: ${created.setting || 'CapDev Request'}`,
+      message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+      link: `/admin/capdev/${created.capdevId}/requests/${created.id}/status`,
+      type: 'new_request',
+    });
     return { success: true, request: created };
   } catch (error) {
     console.error('Failed to create request:', error);
@@ -885,7 +915,23 @@ export async function deleteRequest(id: number) {
   try {
     const access = await getCurrentAccess();
     if (!access || (access.role !== 'admin' && access.role !== 'employee') || !await getAccessibleRequest(access, id)) return unauthorized;
-    await db.delete(requests).where(eq(requests.id, id));
+
+    // Delete child records (status updates) first, then the request in one atomic database execution
+    const result = await db.execute(sql`
+      WITH deleted_status_updates AS (
+        DELETE FROM request_status_updates
+        WHERE request_id = ${id}
+        RETURNING id
+      ),
+      deleted_request AS (
+        DELETE FROM requests
+        WHERE id = ${id}
+          AND (SELECT COUNT(*) FROM deleted_status_updates) >= 0
+        RETURNING id
+      )
+      SELECT id FROM deleted_request
+    `);
+    if (result.rows.length === 0) return { success: false, error: 'Request not found.' };
     return { success: true };
   } catch (error) {
     console.error('Failed to delete request:', error);
@@ -899,8 +945,10 @@ export type StatusUpdateInput = {
   statusUpdate: string;
   remarks?: string;
   files: StatusAttachment[];
-  markAsComplete: boolean;
-  subtractsRequestedAmount: boolean;
+  statusMark?: 'pending' | 'denied' | 'accepted' | 'completed' | null;
+  markAsComplete?: boolean;
+  subtractsRequestedAmount?: boolean;
+  deductedAmount?: string;
 };
 
 export type StatusAttachment = {
@@ -998,68 +1046,411 @@ export async function getRequestStatusUpdates(requestId: number) {
   }
 }
 
+export async function updateRequestStatus(requestId: number, status: 'completed' | 'denied') {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || (access.role !== 'admin' && access.role !== 'employee')) return unauthorized;
+    const req = await getAccessibleRequest(access, requestId);
+    if (!req) return unauthorized;
+
+    await db
+      .update(requests)
+      .set({
+        status,
+        updatedById: access.userId,
+        updatedAt: new Date(),
+      })
+      .where(eq(requests.id, requestId));
+
+    void createNotification({
+      actorId: access.userId,
+      userId: req.userId || null,
+      title: `Request #${requestId} ${status === 'completed' ? 'Completed' : 'Denied'}`,
+      message: `Request #${requestId} was resolved as ${status}.`,
+      link: `/admin/capdev/${req.capdevId}/requests/${requestId}/status`,
+      type: status,
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to update request status:', error);
+    return { success: false, error: 'Database update failed' };
+  }
+}
+
 export async function createRequestStatusUpdate(data: StatusUpdateInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || (access.role !== 'admin' && access.role !== 'employee') || !await getAccessibleRequest(access, data.requestId)) return unauthorized;
     const { data: session } = await auth.getSession();
-    // Neon HTTP does not implement Drizzle's callback transaction API. This single
-    // PostgreSQL statement is still atomic: it creates the update and applies the
-    // optional budget deduction together, or applies neither one.
-    const result = await db.execute(sql`
-      WITH target_request AS (
-        SELECT id, capdev_id, requested_budget
-        FROM requests
-        WHERE id = ${data.requestId}
-      ),
-      inserted_update AS (
-        INSERT INTO request_status_updates (
-          request_id, user_id, author_name, status_update, remarks, files,
-          mark_as_complete, subtracts_requested_amount
-        )
-        SELECT
-          target_request.id,
-          ${access.userId},
-          ${session?.user?.name || session?.user?.email || 'Staff member'},
-          ${data.statusUpdate},
-          ${data.remarks || null},
-          ${JSON.stringify(data.files)}::jsonb,
-          ${data.markAsComplete},
-          ${data.subtractsRequestedAmount}
-        FROM target_request
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM request_status_updates
-          WHERE request_id = ${data.requestId}
-            AND mark_as_complete = true
-        )
-        AND (
-          ${data.subtractsRequestedAmount} = false
-          OR EXISTS (
-            SELECT 1 FROM capdevs
-            WHERE capdevs.id = target_request.capdev_id
-              AND capdevs.budget >= target_request.requested_budget
-          )
-        )
-        RETURNING request_id, subtracts_requested_amount
-      ),
-      deducted_budget AS (
-        UPDATE capdevs
-        SET budget = capdevs.budget - target_request.requested_budget,
-            updated_at = NOW()
-        FROM target_request
-        JOIN inserted_update ON inserted_update.request_id = target_request.id
-        WHERE capdevs.id = target_request.capdev_id
-          AND inserted_update.subtracts_requested_amount = true
-          AND capdevs.budget >= target_request.requested_budget
-        RETURNING capdevs.id
-      )
-      SELECT request_id FROM inserted_update
-    `);
-    if (result.rows.length === 0) throw new Error('This request is already complete, no longer exists, or exceeds the remaining CapDev budget.');
+
+    // Check if request is already concluded (completed or denied)
+    const existingReq = await db.select().from(requests).where(eq(requests.id, data.requestId)).limit(1);
+    if (!existingReq[0] || existingReq[0].status === 'completed' || existingReq[0].status === 'denied') {
+      return { success: false, error: 'This request is already concluded. No further updates can be added.' };
+    }
+
+    if (!data.statusMark || !['pending', 'completed', 'denied', 'accepted'].includes(data.statusMark)) {
+      return { success: false, error: 'A valid status mark (Pending, Completed, or Denied) is required for every status update.' };
+    }
+
+    // 1. Handle budget deduction if requested
+    if (data.subtractsRequestedAmount) {
+      const [alreadyDeducted] = await db
+        .select({ id: requestStatusUpdates.id })
+        .from(requestStatusUpdates)
+        .where(and(eq(requestStatusUpdates.requestId, data.requestId), eq(requestStatusUpdates.subtractsRequestedAmount, true)))
+        .limit(1);
+
+      if (alreadyDeducted) {
+        return { success: false, error: 'Budget has already been deducted for this request.' };
+      }
+
+      const [capdev] = await db
+        .select({ budget: capdevs.budget })
+        .from(capdevs)
+        .where(eq(capdevs.id, existingReq[0].capdevId))
+        .limit(1);
+
+      const amountToDeduct = data.deductedAmount && Number(data.deductedAmount) > 0
+        ? String(data.deductedAmount)
+        : String(existingReq[0].requestedBudget);
+
+      if (!capdev || Number(capdev.budget) < Number(amountToDeduct)) {
+        return { success: false, error: 'Insufficient CapDev budget balance to deduct.' };
+      }
+
+      // Deduct from CapDev budget
+      await db
+        .update(capdevs)
+        .set({
+          budget: sql`${capdevs.budget} - ${amountToDeduct}::numeric`,
+          updatedAt: new Date(),
+        })
+        .where(eq(capdevs.id, existingReq[0].capdevId));
+
+      // Update request's requested budget with final utilized amount
+      await db
+        .update(requests)
+        .set({
+          requestedBudget: amountToDeduct,
+          updatedAt: new Date(),
+        })
+        .where(eq(requests.id, data.requestId));
+    }
+    // 2. Insert status update log
+    await db.insert(requestStatusUpdates).values({
+      requestId: data.requestId,
+      userId: access.userId,
+      authorName: session?.user?.name || session?.user?.email || 'Staff member',
+      statusUpdate: data.statusUpdate,
+      remarks: data.remarks || null,
+      files: data.files || [],
+      statusMark: data.statusMark || null,
+      markAsComplete: Boolean(data.markAsComplete),
+      subtractsRequestedAmount: Boolean(data.subtractsRequestedAmount),
+    });
+
+    // 3. Send notification (notifies request owner or other staff, never the actor who posted the status update)
+    void createNotification({
+      actorId: access.userId,
+      userId: existingReq[0].userId !== access.userId ? existingReq[0].userId : null,
+      title: data.statusMark
+        ? `Request #${data.requestId} Update: [${data.statusMark.toUpperCase()}]`
+        : `Status Update on Request #${data.requestId}`,
+      message: `${session?.user?.name || session?.user?.email || 'Staff'}: ${data.statusUpdate.slice(0, 90)}`,
+      link: `/admin/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status`,
+      type: 'status_update',
+    });
+
     return { success: true };
   } catch (error) {
     console.error('Failed to create request status update:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Database insert failed' };
   }
 }
+
+export type NotificationItem = {
+  id: number;
+  userId: string | null;
+  actorId?: string | null;
+  title: string;
+  message: string;
+  link: string;
+  type: string;
+  isRead: boolean;
+  createdAt: Date | string;
+};
+
+export async function getNotifications(): Promise<{ success: boolean; notifications: NotificationItem[]; unreadCount: number }> {
+  try {
+    const access = await getCurrentAccess();
+    if (!access) return { success: false, notifications: [], unreadCount: 0 };
+
+    // Auto-seed if table is completely empty
+    const [existingCount] = await db.select({ val: count() }).from(notifications);
+    if ((existingCount?.val || 0) === 0) {
+      const recentReqs = await db.select({
+        id: requests.id,
+        capdevId: requests.capdevId,
+        requestorName: requests.requestorName,
+        setting: requests.setting,
+        requestedBudget: requests.requestedBudget,
+        createdAt: requests.createdAt,
+      }).from(requests).orderBy(desc(requests.createdAt)).limit(4);
+
+      for (const req of recentReqs) {
+        await db.insert(notifications).values({
+          title: `Requisition: ${req.setting || 'CapDev Request'}`,
+          message: `${req.requestorName || 'Employee'} submitted requisition #${req.id} for ₱${Number(req.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+          link: `/admin/capdev/${req.capdevId}/requests/${req.id}/status`,
+          type: 'new_request',
+          createdAt: req.createdAt,
+        });
+      }
+
+      const recentUpdates = await db.select({
+        id: requestStatusUpdates.id,
+        requestId: requestStatusUpdates.requestId,
+        authorName: requestStatusUpdates.authorName,
+        statusUpdate: requestStatusUpdates.statusUpdate,
+        statusMark: requestStatusUpdates.statusMark,
+        markAsComplete: requestStatusUpdates.markAsComplete,
+        createdAt: requestStatusUpdates.createdAt,
+        capdevId: requests.capdevId,
+      }).from(requestStatusUpdates)
+        .innerJoin(requests, eq(requestStatusUpdates.requestId, requests.id))
+        .orderBy(desc(requestStatusUpdates.createdAt)).limit(4);
+
+      for (const upd of recentUpdates) {
+        await db.insert(notifications).values({
+          title: upd.markAsComplete ? `Request #${upd.requestId} Completed` : upd.statusMark === 'denied' ? `Request #${upd.requestId} Denied` : `Status Update on Request #${upd.requestId}`,
+          message: `${upd.authorName || 'Staff'}: ${upd.statusUpdate.slice(0, 90)}`,
+          link: `/admin/capdev/${upd.capdevId}/requests/${upd.requestId}/status`,
+          type: upd.markAsComplete ? 'completed' : upd.statusMark === 'denied' ? 'denied' : 'status_update',
+          createdAt: upd.createdAt,
+        });
+      }
+    }
+
+    const userReads = await db.select({ notificationId: notificationReads.notificationId })
+      .from(notificationReads)
+      .where(eq(notificationReads.userId, access.userId));
+    const readIds = new Set(userReads.map(r => r.notificationId));
+
+    const rows = await db.select()
+      .from(notifications)
+      .where(
+        and(
+          or(isNull(notifications.userId), eq(notifications.userId, access.userId)),
+          or(isNull(notifications.actorId), ne(notifications.actorId, access.userId))
+        )
+      )
+      .orderBy(desc(notifications.createdAt))
+      .limit(30);
+
+    const formatted: NotificationItem[] = rows.map(n => ({
+      id: n.id,
+      userId: n.userId,
+      actorId: n.actorId,
+      title: n.title,
+      message: n.message,
+      link: n.link,
+      type: n.type,
+      isRead: n.isRead || readIds.has(n.id),
+      createdAt: n.createdAt,
+    }));
+
+    const unreadCount = formatted.filter(n => !n.isRead).length;
+
+    return { success: true, notifications: formatted, unreadCount };
+  } catch (error) {
+    console.error('Failed to get notifications:', error);
+    return { success: false, notifications: [], unreadCount: 0 };
+  }
+}
+
+export async function markNotificationAsRead(notificationId: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access) return { success: false };
+
+    await db.insert(notificationReads).values({
+      notificationId,
+      userId: access.userId,
+    }).onConflictDoNothing();
+
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to mark notification as read:', error);
+    return { success: false };
+  }
+}
+
+export async function markAllNotificationsAsRead() {
+  try {
+    const access = await getCurrentAccess();
+    if (!access) return { success: false };
+
+    const unreadRows = await db.select({ id: notifications.id })
+      .from(notifications)
+      .where(
+        and(
+          or(isNull(notifications.userId), eq(notifications.userId, access.userId)),
+          or(isNull(notifications.actorId), ne(notifications.actorId, access.userId))
+        )
+      );
+
+    for (const item of unreadRows) {
+      await db.insert(notificationReads).values({
+        notificationId: item.id,
+        userId: access.userId,
+      }).onConflictDoNothing();
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to mark all notifications as read:', error);
+    return { success: false };
+  }
+}
+
+export async function createNotification(data: {
+  userId?: string | null;
+  actorId?: string | null;
+  title: string;
+  message: string;
+  link: string;
+  type?: string;
+}) {
+  try {
+    const [created] = await db.insert(notifications).values({
+      userId: data.userId || null,
+      actorId: data.actorId || null,
+      title: data.title,
+      message: data.message,
+      link: data.link,
+      type: data.type || 'status_update',
+    }).returning();
+    return { success: true, notification: created };
+  } catch (error) {
+    console.error('Failed to create notification:', error);
+    return { success: false };
+  }
+}
+
+export async function requestPasswordReset(rawEmail: string) {
+
+  try {
+    const email = rawEmail.trim().toLowerCase();
+    if (!email) {
+      return { success: false, error: 'Please enter your email address.' };
+    }
+
+    // Check if user exists in neon_auth.user
+    const userResult = await db.execute(sql`
+      SELECT id, email FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1
+    `);
+
+    if (userResult.rows.length === 0) {
+      return { success: false, error: 'No account found with this email address.' };
+    }
+
+    const matchedEmail = String(userResult.rows[0].email);
+
+    // Generate 6-digit numeric verification code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes validity
+
+    // Remove any previous active reset codes for this email
+    await db.delete(passwordResets).where(eq(passwordResets.email, email));
+
+    // Save reset code
+    await db.insert(passwordResets).values({
+      email,
+      code,
+      expiresAt,
+    });
+
+    // Send plain text email via Resend
+    await sendPasswordResetEmail(matchedEmail, code);
+
+    return {
+      success: true,
+      message: 'A 6-digit verification code has been sent to your email address.',
+    };
+  } catch (error: any) {
+    console.error('Password reset request failed:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to send password reset email. Please try again.',
+    };
+  }
+}
+
+export async function verifyAndResetPassword(rawEmail: string, rawCode: string, newPassword: string) {
+  try {
+    const email = rawEmail.trim().toLowerCase();
+    const code = rawCode.trim();
+
+    if (!email || !code || !newPassword) {
+      return { success: false, error: 'Please fill in all required fields.' };
+    }
+
+    if (newPassword.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters long.' };
+    }
+
+    // Check code in database
+    const [resetRecord] = await db
+      .select()
+      .from(passwordResets)
+      .where(and(eq(passwordResets.email, email), eq(passwordResets.code, code)))
+      .limit(1);
+
+    if (!resetRecord) {
+      return { success: false, error: 'Invalid verification code.' };
+    }
+
+    if (new Date() > resetRecord.expiresAt) {
+      await db.delete(passwordResets).where(eq(passwordResets.id, resetRecord.id));
+      return { success: false, error: 'Verification code has expired. Please request a new one.' };
+    }
+
+    // Find the user ID in neon_auth.user
+    const userResult = await db.execute(sql`
+      SELECT id FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1
+    `);
+
+    if (userResult.rows.length === 0) {
+      return { success: false, error: 'User account not found.' };
+    }
+
+    const userId = String(userResult.rows[0].id);
+    const hashedPassword = await hashPassword(newPassword);
+
+    // Update the password in neon_auth.account
+    await db.execute(sql`
+      UPDATE neon_auth.account
+      SET password = ${hashedPassword},
+          "updatedAt" = NOW()
+      WHERE "userId" = ${userId}
+    `);
+
+    // Invalidate existing sessions for this user so they log in fresh
+    await db.execute(sql`
+      DELETE FROM neon_auth.session
+      WHERE "userId" = ${userId}
+    `);
+
+    // Delete used reset record
+    await db.delete(passwordResets).where(eq(passwordResets.email, email));
+
+    return { success: true, message: 'Password has been successfully updated.' };
+  } catch (error: any) {
+    console.error('Password reset failed:', error);
+    return { success: false, error: error.message || 'Failed to reset password.' };
+  }
+}
+
+
