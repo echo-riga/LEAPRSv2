@@ -10,7 +10,10 @@ import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
   Payments as PaymentsIcon,
   Search as SearchIcon,
+<<<<<<< HEAD
   VisibilityOutlined as VisibilityIcon,
+=======
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
   WarningAmber as WarningIcon,
 } from '@mui/icons-material';
 import {
@@ -21,6 +24,10 @@ import {
   Card,
   CardContent,
   Chip,
+<<<<<<< HEAD
+=======
+  CircularProgress,
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
   Container,
   Dialog,
   DialogActions,
@@ -28,14 +35,21 @@ import {
   DialogTitle,
   Divider,
   Fab,
+<<<<<<< HEAD
   Fade,
   Grid,
   IconButton,
+=======
+  Grid,
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
   InputAdornment,
   MenuItem,
   Stack,
   TextField,
+<<<<<<< HEAD
   Tooltip,
+=======
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
   Typography,
 } from '@mui/material';
 import { useRouter } from 'next/navigation';
@@ -47,7 +61,10 @@ import {
   createRequest,
   deleteRequest,
   getCapdevById,
+<<<<<<< HEAD
   getCapdevFieldDefinitions,
+=======
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
   getCurrentUserAccess,
   getRequestFieldDefinitions,
   getRequestStatusUpdates,
@@ -244,6 +261,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     event.target.value = '';
   };
   const removeSelectedFile = (fieldName: string, file: File) => setPendingFiles((current) => ({ ...current, [fieldName]: (current[fieldName] || []).filter((candidate) => candidate !== file) }));
+<<<<<<< HEAD
   const hasDynamicValue = (field: DynamicField) => {
     if (field.type === 'file') return getAttachments(form.additionalInfo[field.name]).length > 0 || (pendingFiles[field.name] || []).length > 0;
     if (field.type === 'table') {
@@ -257,23 +275,32 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     return value !== undefined && value !== null && String(value).trim().length > 0;
   };
   const areRequiredFieldsComplete = requiredDefinitions.every(hasDynamicValue);
+=======
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
 
   const saveRequest = async () => {
     if (!session.data || !form.description || !form.requestedBudget) return;
 
+<<<<<<< HEAD
     const missingRequiredFields = requiredDefinitions.filter((field) => !hasDynamicValue(field));
     if (missingRequiredFields.length > 0) {
       setError(`Complete the required field${missingRequiredFields.length === 1 ? '' : 's'}: ${missingRequiredFields.map((field) => field.name).join(', ')}.`);
       return;
     }
 
+=======
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
     const requestedAmount = Number(form.requestedBudget);
     const availableBudget = Number(capdev?.budget || 0);
 
     // Validation check for requested budget vs remaining CapDev budget
     if (!editing?.hasDeductedBudget && requestedAmount > availableBudget) {
       setBudgetValidationMessage(
+<<<<<<< HEAD
         `The requested amount of ${formatCurrency(requestedAmount)} exceeds the available CapDev balance of ${formatCurrency(availableBudget)}. Please adjust the requested amount.`
+=======
+        `The requested amount of ${formatCurrency(requestedAmount)} exceeds the available CapDev budget of ${formatCurrency(availableBudget)}. Please adjust the requested amount.`
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
       );
       setBudgetValidationOpen(true);
       return;
@@ -509,6 +536,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                         </Typography>
                       </Box>
                       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
+<<<<<<< HEAD
                         <Chip
                           label={request.status === 'completed' || request.isComplete ? 'Complete' : request.status === 'denied' ? 'Denied' : 'In progress'}
                           color={request.status === 'completed' || request.isComplete ? 'success' : request.status === 'denied' ? 'error' : 'primary'}
@@ -516,6 +544,10 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                           sx={{ fontWeight: 700 }}
                         />
                         {request.hasDeductedBudget && <Chip icon={<PaymentsIcon />} label="Amount deducted" color="success" variant="outlined" size="small" sx={{ fontWeight: 700 }} />}
+=======
+                        <Chip label={request.isComplete ? 'Complete' : 'In progress'} color={request.isComplete ? 'success' : 'primary'} size="small" sx={{ fontWeight: 700 }} />
+                        {request.hasDeductedBudget && <Chip icon={<PaymentsIcon />} label="Budget deducted" color="success" variant="outlined" size="small" sx={{ fontWeight: 700 }} />}
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
                       </Stack>
                     </Stack>
                     <Stack spacing={1.5} sx={{ my: 1 }}>
@@ -524,7 +556,11 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                         <Typography variant="body2" sx={{ fontWeight: 700 }}>{request.requestorName || 'Requestor'}</Typography>
                       </Stack>
                       <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+<<<<<<< HEAD
                         <Typography variant="body2" color="text.secondary">Requested amount</Typography>
+=======
+                        <Typography variant="body2" color="text.secondary">Requested budget</Typography>
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
                         <Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(request.requestedBudget)}</Typography>
                       </Stack>
                     </Stack>
@@ -533,6 +569,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                       <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/admin/capdev/${capdevId}/requests/${request.id}/status`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
                         Track Progress
                       </Button>
+<<<<<<< HEAD
                       <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                         <Tooltip title="View & Edit Details">
                           <IconButton size="small" color="primary" onClick={() => openEdit(request)} aria-label="View request details">
@@ -545,6 +582,16 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                               <DeleteIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
+=======
+                      <Stack direction="row" spacing={3}>
+                        <Button variant="text" color="primary" onClick={() => openEdit(request)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
+                          Details
+                        </Button>
+                        {canEditRequest(request) && (
+                          <Button variant="text" color="error" onClick={() => setDeleting(request)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: '#b71c1c' } }}>
+                            Delete
+                          </Button>
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
                         )}
                       </Stack>
                     </Stack>
@@ -580,6 +627,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       {/* Add / Edit Request Dialog */}
       <Dialog open={editorOpen} onClose={() => !saving && setEditorOpen(false)} fullWidth maxWidth="md">
         <DialogTitle sx={{ fontWeight: 800 }}>{editing ? 'Edit Request' : 'Add Request'}</DialogTitle>
+<<<<<<< HEAD
         <DialogContent
           dividers
           sx={{ position: 'relative' }}
@@ -709,11 +757,117 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               </React.Fragment>
             );
           })}
+=======
+        <DialogContent dividers>
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          <Grid container spacing={2.5} sx={{ pt: 0.5 }}>
+            {editing && (
+              <Grid size={12}>
+                <Typography variant="body2" color="text.secondary">Requestor</Typography>
+                <Typography sx={{ fontWeight: 700 }}>{editing.requestorName || 'Requestor'}</Typography>
+              </Grid>
+            )}
+            <Grid size={12}>
+              <TextField select required fullWidth label="Setting" value={form.setting} onChange={(event) => setValue({ setting: event.target.value })}>
+                <MenuItem value="internal">Internal</MenuItem>
+                <MenuItem value="external">External</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid size={12}>
+              <TextField required fullWidth label="Description" multiline minRows={2} value={form.description} onChange={(event) => setValue({ description: event.target.value })} />
+            </Grid>
+            <Grid size={12}>
+              <TextField
+                required
+                fullWidth
+                label="Requested Budget"
+                type="number"
+                value={form.requestedBudget}
+                onChange={(event) => setValue({ requestedBudget: event.target.value })}
+                helperText={
+                  isCapdevBudgetDepleted
+                    ? `Remaining CapDev budget: ${formatCurrency(capdev.budget)} (Depleted)`
+                    : `Remaining CapDev budget: ${formatCurrency(capdev.budget)}`
+                }
+                slotProps={{
+                  formHelperText: {
+                    sx: {
+                      color: isCapdevBudgetDepleted ? 'error.main' : 'text.secondary',
+                      fontWeight: isCapdevBudgetDepleted ? 700 : 400,
+                    },
+                  },
+                }}
+                disabled={editing?.hasDeductedBudget}
+              />
+            </Grid>
+            {definitions.length > 0 && (
+              <>
+                <Grid size={12}>
+                  <Divider sx={{ my: 0.5 }} />
+                  <Typography variant="subtitle1" sx={{ fontWeight: 800, mt: 2 }}>
+                    Additional Information
+                  </Typography>
+                </Grid>
+                {definitions.map((field) => (
+                  <Grid key={field.id} size={field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
+                    {field.type === 'text' && field.options && field.options.length > 0 ? (
+                      <Autocomplete
+                        freeSolo
+                        options={field.options}
+                        value={String(form.additionalInfo[field.name] || '')}
+                        onChange={(_, value) => setDynamicValue(field.name, value || '')}
+                        onInputChange={(_, value) => setDynamicValue(field.name, value)}
+                        renderInput={(params) => <TextField {...params} required={field.isRequired} fullWidth label={field.name} placeholder={field.placeholder || 'Select or type...'} />}
+                      />
+                    ) : field.type === 'date' ? (
+                      <DateField
+                        label={field.name}
+                        required={field.isRequired}
+                        value={String(form.additionalInfo[field.name] || '')}
+                        onChange={(value) => setDynamicValue(field.name, value)}
+                      />
+                    ) : field.type === 'file' ? (
+                      <Stack spacing={1}>
+                        <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
+                          {field.name}
+                          <input hidden type="file" multiple onChange={(event) => addSelectedFiles(field.name, event)} />
+                        </Button>
+                        {getAttachments(form.additionalInfo[field.name]).map((file) => (
+                          <Button key={file.id} component="a" href={file.url} target="_blank" rel="noreferrer" size="small" startIcon={<AttachFileIcon />} sx={{ width: 'fit-content', textTransform: 'none' }}>
+                            {file.name}
+                          </Button>
+                        ))}
+                        {(pendingFiles[field.name] || []).length > 0 && (
+                          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                            {pendingFiles[field.name].map((file) => (
+                              <Chip key={`${file.name}-${file.lastModified}-${file.size}`} label={file.name} size="small" onDelete={() => removeSelectedFile(field.name, file)} />
+                            ))}
+                          </Stack>
+                        )}
+                      </Stack>
+                    ) : (
+                      <TextField
+                        required={field.isRequired}
+                        fullWidth
+                        label={field.name}
+                        type={field.type === 'number' ? 'number' : 'text'}
+                        value={String(form.additionalInfo[field.name] || '')}
+                        placeholder={field.placeholder || ''}
+                        onChange={(event) => setDynamicValue(field.name, event.target.value)}
+                      />
+                    )}
+                  </Grid>
+                ))}
+              </>
+            )}
+          </Grid>
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
           {editing && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 3 }}>
               Added {formatDate(editing.createdAt)}
             </Typography>
           )}
+<<<<<<< HEAD
 
           {/* Subtle floating down arrow when CapDev section is on screen */}
           <Fade in={showScrollArrow}>
@@ -749,17 +903,23 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               </Tooltip>
             </Box>
           </Fade>
+=======
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
           <Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">
             Close
           </Button>
           {(!editing || canEditRequest(editing)) && canManageRequest && (
+<<<<<<< HEAD
             <Button
               onClick={saveRequest}
               disabled={saving || !form.description || !form.requestedBudget || !areRequiredFieldsComplete}
               variant="contained"
             >
+=======
+            <Button onClick={saveRequest} disabled={saving || !form.description || !form.requestedBudget} variant="contained">
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
               {saving ? 'Saving' : 'Save Request'}
             </Button>
           )}
@@ -775,16 +935,28 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       >
         <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
           <WarningIcon color="warning" />
+<<<<<<< HEAD
           Balance Limit Exceeded
+=======
+          Budget Limit Exceeded
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
         </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={1.5} sx={{ py: 1 }}>
             <Typography variant="body1" sx={{ color: 'text.primary' }}>
+<<<<<<< HEAD
               {budgetValidationMessage || 'The requested amount exceeds the remaining CapDev allocation.'}
             </Typography>
             <Box sx={{ p: 1.5, bgcolor: '#f4f7f4', borderRadius: 1.5 }}>
               <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
                 <Typography variant="caption" color="text.secondary">Remaining Project Balance</Typography>
+=======
+              {budgetValidationMessage || 'The requested budget exceeds the remaining CapDev allocation.'}
+            </Typography>
+            <Box sx={{ p: 1.5, bgcolor: '#f4f7f4', borderRadius: 1.5 }}>
+              <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
+                <Typography variant="caption" color="text.secondary">Remaining Project Budget</Typography>
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
                 <Typography variant="caption" sx={{ fontWeight: 700, color: isCapdevBudgetDepleted ? 'error.main' : 'primary.dark' }}>
                   {formatCurrency(capdev.budget)}
                 </Typography>
@@ -812,10 +984,17 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               </TextField>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
+<<<<<<< HEAD
               <TextField fullWidth type="number" label="Requested amount from" value={draftFilters.min} onChange={(e) => setDraftFilters({ ...draftFilters, min: e.target.value })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <TextField fullWidth type="number" label="Requested amount to" value={draftFilters.max} onChange={(e) => setDraftFilters({ ...draftFilters, max: e.target.value })} />
+=======
+              <TextField fullWidth type="number" label="Requested budget from" value={draftFilters.min} onChange={(e) => setDraftFilters({ ...draftFilters, min: e.target.value })} />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth type="number" label="Requested budget to" value={draftFilters.max} onChange={(e) => setDraftFilters({ ...draftFilters, max: e.target.value })} />
+>>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <DateField
