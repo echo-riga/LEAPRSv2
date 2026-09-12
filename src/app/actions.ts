@@ -2,7 +2,7 @@
 
 import { db } from '@/db';
 import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads, auditLogs } from '@/db/schema';
-import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
+import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail } from '@/lib/email';
 import { hashPassword } from 'better-auth/crypto';
@@ -1280,6 +1280,16 @@ export async function stopRequestProgress(data: StopRequestInput) {
     }).returning();
     await db.update(requests).set({ isStopped: true, activeStopperId: stopper.id, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, data.requestId));
     await writeAuditLog(access, { action: 'stopped', entityType: 'request', entityId: data.requestId, entityLabel: `Request #${data.requestId}`, details: { reason: data.reason.trim(), statusUpdateId: stopper.id } });
+    void createNotification({
+      actorId: access.userId,
+      userId: request.userId,
+      capdevId: request.capdevId,
+      requestId: data.requestId,
+      title: `Request #${data.requestId} Stopped`,
+      message: `${session?.user?.name || session?.user?.email || 'Staff'} stopped progress: ${data.reason.trim().slice(0, 90)}`,
+      link: `/admin/capdev/${request.capdevId}/requests/${data.requestId}/status`,
+      type: 'status_update',
+    });
     return { success: true };
   } catch (error) {
     console.error('Failed to stop request progress:', error);
@@ -1297,6 +1307,16 @@ export async function resumeRequestProgress(requestId: number) {
     await db.insert(requestStatusUpdates).values({ requestId, userId: access.userId, authorName: session?.user?.name || session?.user?.email || 'Staff member', statusUpdate: 'Progress resumed.', isResume: true, stopperId: request.activeStopperId });
     await db.update(requests).set({ isStopped: false, activeStopperId: null, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, requestId));
     await writeAuditLog(access, { action: 'resumed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { stopperId: request.activeStopperId } });
+    void createNotification({
+      actorId: access.userId,
+      userId: request.userId,
+      capdevId: request.capdevId,
+      requestId,
+      title: `Request #${requestId} Resumed`,
+      message: `${session?.user?.name || session?.user?.email || 'Staff'} resumed progress.`,
+      link: `/admin/capdev/${request.capdevId}/requests/${requestId}/status`,
+      type: 'status_update',
+    });
     return { success: true };
   } catch (error) {
     console.error('Failed to resume request progress:', error);
@@ -1436,78 +1456,64 @@ export type NotificationItem = {
   createdAt: Date | string;
 };
 
+const REQUEST_NOTIFICATION_TYPES = ['new_request', 'status_update', 'completed', 'denied'];
+const ALL_NOTIFICATION_TYPES = ['capdev_created', ...REQUEST_NOTIFICATION_TYPES];
+const OWNER_NOTIFICATION_TYPES = ['status_update', 'completed', 'denied'];
+
+function notificationAudienceCondition(access: UserAccess): SQL {
+  const hasLiveRecord = or(
+    and(isNotNull(notifications.requestId), isNotNull(requests.id)),
+    and(isNull(notifications.requestId), isNotNull(notifications.capdevId), isNotNull(capdevs.id)),
+  )!;
+  const isAnotherUsersAction = and(
+    isNotNull(notifications.actorId),
+    ne(notifications.actorId, access.userId),
+  )!;
+
+  let isInvolved: SQL;
+  if (access.role === 'admin') {
+    isInvolved = inArray(notifications.type, REQUEST_NOTIFICATION_TYPES);
+  } else if (access.role === 'employee') {
+    isInvolved = and(
+      inArray(notifications.type, OWNER_NOTIFICATION_TYPES),
+      eq(requests.userId, access.userId),
+    )!;
+  } else if (access.role === 'employee-department') {
+    isInvolved = and(
+      inArray(notifications.type, REQUEST_NOTIFICATION_TYPES),
+      eq(capdevs.department, access.department),
+    )!;
+  } else if (access.role === 'viewer') {
+    isInvolved = and(
+      inArray(notifications.type, ALL_NOTIFICATION_TYPES),
+      eq(capdevs.department, access.department),
+    )!;
+  } else {
+    isInvolved = inArray(notifications.type, ALL_NOTIFICATION_TYPES);
+  }
+
+  return and(hasLiveRecord, isAnotherUsersAction, isInvolved)!;
+}
+
 export async function getNotifications(): Promise<{ success: boolean; notifications: NotificationItem[]; unreadCount: number }> {
   try {
     const access = await getCurrentAccess();
     if (!access) return { success: false, notifications: [], unreadCount: 0 };
-
-    // Auto-seed if table is completely empty
-    const [existingCount] = await db.select({ val: count() }).from(notifications);
-    if ((existingCount?.val || 0) === 0) {
-      const recentReqs = await db.select({
-        id: requests.id,
-        capdevId: requests.capdevId,
-        requestorName: requests.requestorName,
-        setting: requests.setting,
-        requestedBudget: requests.requestedBudget,
-        createdAt: requests.createdAt,
-      }).from(requests).orderBy(desc(requests.createdAt)).limit(4);
-
-      for (const req of recentReqs) {
-        await db.insert(notifications).values({
-          capdevId: req.capdevId,
-          requestId: req.id,
-          title: `Requisition: ${req.setting || 'CapDev Request'}`,
-          message: `${req.requestorName || 'Employee'} submitted requisition #${req.id} for ₱${Number(req.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-          link: `/admin/capdev/${req.capdevId}/requests/${req.id}/status`,
-          type: 'new_request',
-          createdAt: req.createdAt,
-        });
-      }
-
-      const recentUpdates = await db.select({
-        id: requestStatusUpdates.id,
-        requestId: requestStatusUpdates.requestId,
-        authorName: requestStatusUpdates.authorName,
-        statusUpdate: requestStatusUpdates.statusUpdate,
-        statusMark: requestStatusUpdates.statusMark,
-        markAsComplete: requestStatusUpdates.markAsComplete,
-        createdAt: requestStatusUpdates.createdAt,
-        capdevId: requests.capdevId,
-      }).from(requestStatusUpdates)
-        .innerJoin(requests, eq(requestStatusUpdates.requestId, requests.id))
-        .orderBy(desc(requestStatusUpdates.createdAt)).limit(4);
-
-      for (const upd of recentUpdates) {
-        await db.insert(notifications).values({
-          capdevId: upd.capdevId,
-          requestId: upd.requestId,
-          title: upd.markAsComplete ? `Request #${upd.requestId} Completed` : upd.statusMark === 'denied' ? `Request #${upd.requestId} Denied` : `Status Update on Request #${upd.requestId}`,
-          message: `${upd.authorName || 'Staff'}: ${upd.statusUpdate.slice(0, 90)}`,
-          link: `/admin/capdev/${upd.capdevId}/requests/${upd.requestId}/status`,
-          type: upd.markAsComplete ? 'completed' : upd.statusMark === 'denied' ? 'denied' : 'status_update',
-          createdAt: upd.createdAt,
-        });
-      }
-    }
 
     const userReads = await db.select({ notificationId: notificationReads.notificationId })
       .from(notificationReads)
       .where(eq(notificationReads.userId, access.userId));
     const readIds = new Set(userReads.map(r => r.notificationId));
 
-    const rows = await db.select()
+    const rows = await db.select({ notification: getTableColumns(notifications) })
       .from(notifications)
-      .where(
-        and(
-          or(isNull(notifications.userId), eq(notifications.userId, access.userId)),
-          or(isNull(notifications.actorId), ne(notifications.actorId, access.userId))
-        )
-      )
+      .leftJoin(requests, eq(notifications.requestId, requests.id))
+      .leftJoin(capdevs, eq(notifications.capdevId, capdevs.id))
+      .where(notificationAudienceCondition(access))
       .orderBy(desc(notifications.createdAt))
       .limit(30);
 
-    const formatted: NotificationItem[] = rows.map(n => ({
+    const formatted: NotificationItem[] = rows.map(({ notification: n }) => ({
       id: n.id,
       userId: n.userId,
       actorId: n.actorId,
@@ -1533,6 +1539,14 @@ export async function markNotificationAsRead(notificationId: number) {
     const access = await getCurrentAccess();
     if (!access) return { success: false };
 
+    const [visibleNotification] = await db.select({ id: notifications.id })
+      .from(notifications)
+      .leftJoin(requests, eq(notifications.requestId, requests.id))
+      .leftJoin(capdevs, eq(notifications.capdevId, capdevs.id))
+      .where(and(eq(notifications.id, notificationId), notificationAudienceCondition(access)))
+      .limit(1);
+    if (!visibleNotification) return { success: false };
+
     await db.insert(notificationReads).values({
       notificationId,
       userId: access.userId,
@@ -1552,12 +1566,9 @@ export async function markAllNotificationsAsRead() {
 
     const unreadRows = await db.select({ id: notifications.id })
       .from(notifications)
-      .where(
-        and(
-          or(isNull(notifications.userId), eq(notifications.userId, access.userId)),
-          or(isNull(notifications.actorId), ne(notifications.actorId, access.userId))
-        )
-      );
+      .leftJoin(requests, eq(notifications.requestId, requests.id))
+      .leftJoin(capdevs, eq(notifications.capdevId, capdevs.id))
+      .where(notificationAudienceCondition(access));
 
     for (const item of unreadRows) {
       await db.insert(notificationReads).values({

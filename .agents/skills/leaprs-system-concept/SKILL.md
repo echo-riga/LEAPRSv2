@@ -105,6 +105,17 @@ All files are uploaded to Google Drive.
 * **Viewer** has read-only access to CapDev projects and requests in its department.
 * **Viewer (All Departments)** has read-only access across departments.
 
+### Notification Involvement
+
+Notifications are event records, but they are visible only while their associated CapDev/request still exists and only to involved users. An actor never receives a notification for their own action.
+
+* **Admin** receives new-request and request-status activity across all departments.
+* **Employee** receives status activity posted by someone else on requests they own. They do not receive general CapDev or unrelated request activity.
+* **Employee (Department Requests)** receives new-request and request-status activity in their department.
+* **Viewer** receives CapDev, request, and request-status activity in their department.
+* **Viewer (All Departments)** receives CapDev, request, and request-status activity across all departments.
+* Deleting an associated request or CapDev removes its notifications from every audience. Audit logs remain independent and persist.
+
 ### B. Self-Registration
 
 * The login page supports Neon Auth email registration with full name, email, password, role, and department.
