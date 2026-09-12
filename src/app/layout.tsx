@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Neon PG & Neon Auth Status",
+  title: "LEAPRS",
   description: "Status page for Neon PostgreSQL and Neon Auth with Next.js, Drizzle, and Material UI",
 };
 
@@ -30,4 +30,3 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     </html>
   );
 }
-
