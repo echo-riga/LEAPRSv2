@@ -162,7 +162,6 @@ export default function StandardPage() {
 
 ---
 
-<<<<<<< HEAD
 ## 8. Zero / Depleted Remaining Balance Styling
 
 - **Red Font Color**: When remaining balance reaches 0 (or is depleted), its font color must be styled with `error.main` (red) across both summary card boxes (partial view) and detailed edit/history modals (full view), as well as utilization summaries, to clearly signal exhaustion of funds.
@@ -179,9 +178,4 @@ export default function StandardPage() {
   - **Form Config & Previews**: Display a form layout preview skeleton (`FormConfigSkeleton`).
   - **Analytics & Reports**: Display KPI cards and chart panel skeletons (`AnalyticsSkeleton`, `ReportsSkeleton`).
 - **Implementation**: Reuse centralized skeleton components from `@/components/Skeletons`.
-=======
-## 8. Zero / Depleted Remaining Budget Styling
-
-- **Red Font Color**: When remaining budget reaches 0 (or is depleted), its font color must be styled with `error.main` (red) across both summary card boxes (partial view) and detailed edit/history modals (full view), as well as utilization summaries, to clearly signal exhaustion of funds.
->>>>>>> e2b98105f769298188689f7099446d1d56af2a3a
 
