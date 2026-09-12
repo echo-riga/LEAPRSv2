@@ -60,6 +60,20 @@ interface Field {
   isTemp?: boolean;
 }
 
+const formatAipCode = (value: string) => {
+  const digits = value.replace(/\D/g, '').slice(0, 17);
+  const groupLengths = [4, 3, 1, 1, 2, 3, 3];
+  const groups: string[] = [];
+  let offset = 0;
+  for (const length of groupLengths) {
+    const group = digits.slice(offset, offset + length);
+    if (!group) break;
+    groups.push(group);
+    offset += length;
+  }
+  return groups.join('-');
+};
+
 export default function CapdevConfigPage() {
   const router = useRouter();
   const session = authClient.useSession();
@@ -74,6 +88,17 @@ export default function CapdevConfigPage() {
   const [backups, setBackups] = useState<Record<string, Field>>({});
   const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
   const tempCounter = useRef(0);
+  const savedSignalPending = useRef(false);
+
+  useEffect(() => {
+    const status = editingKeys.size > 0 ? 'editing' : savedSignalPending.current ? 'saved' : 'idle';
+    savedSignalPending.current = false;
+    window.dispatchEvent(new CustomEvent<'idle' | 'editing' | 'saved'>('leaprs:config-editing', { detail: status }));
+  }, [editingKeys]);
+
+  useEffect(() => () => {
+    window.dispatchEvent(new CustomEvent<'idle'>('leaprs:config-editing', { detail: 'idle' }));
+  }, []);
 
   // Add-section state
   const [extraSections, setExtraSections] = useState<string[]>([]);
@@ -239,6 +264,7 @@ export default function CapdevConfigPage() {
             idx === originalIndex ? { ...field, id: result.id, key: `field-${result.id}`, isTemp: false } : field
           )
         );
+        savedSignalPending.current = true;
         clearEditingState(f.key);
       }
     } catch (error) {
@@ -989,9 +1015,9 @@ export default function CapdevConfigPage() {
                               <TextField
                                 fullWidth
                                 size="small"
-                                placeholder="3000-002-04-03-26-006-022"
+                                placeholder="0000-000-0-0-00-000-000"
                                 value={fixedPreviewData.aipCode}
-                                onChange={(e) => handleFixedPreviewChange('aipCode', e.target.value)}
+                                onChange={(e) => handleFixedPreviewChange('aipCode', formatAipCode(e.target.value))}
                                 sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
                               />
                             </Stack>

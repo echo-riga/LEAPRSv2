@@ -8,7 +8,8 @@ import {
   numeric, 
   boolean, 
   jsonb, 
-  uniqueIndex 
+  uniqueIndex,
+  index,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -84,6 +85,8 @@ export const requests = pgTable('requests', {
   requestedBudget: numeric('requested_budget', { precision: 12, scale: 2 }).notNull(),
   additionalInfo: jsonb('additional_info').default({}).notNull(),
   status: varchar('status', { length: 50 }).default('in_progress').notNull(),
+  isStopped: boolean('is_stopped').default(false).notNull(),
+  activeStopperId: integer('active_stopper_id'),
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED FORM DATA LAST
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -101,6 +104,10 @@ export const requestStatusUpdates = pgTable('request_status_updates', {
   statusMark: varchar('status_mark', { length: 50 }),
   markAsComplete: boolean('mark_as_complete').default(false).notNull(),
   subtractsRequestedAmount: boolean('subtracts_requested_amount').default(false).notNull(),
+  isStopper: boolean('is_stopper').default(false).notNull(),
+  isStopperResponse: boolean('is_stopper_response').default(false).notNull(),
+  isResume: boolean('is_resume').default(false).notNull(),
+  stopperId: integer('stopper_id'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
   uniqueIndex('unique_request_complete_idx')
@@ -125,6 +132,8 @@ export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
   userId: text('user_id').references(() => users.id),
   actorId: text('actor_id').references(() => users.id),
+  capdevId: integer('capdev_id').references(() => capdevs.id, { onDelete: 'cascade' }),
+  requestId: integer('request_id').references(() => requests.id, { onDelete: 'cascade' }),
   title: varchar('title', { length: 255 }).notNull(),
   message: text('message').notNull(),
   link: text('link').notNull(),
@@ -132,6 +141,24 @@ export const notifications = pgTable('notifications', {
   isRead: boolean('is_read').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+// Immutable activity history. Actor and entity values are snapshots by design,
+// so audit records survive deletion of users, CapDev projects, and requests.
+export const auditLogs = pgTable('audit_logs', {
+  id: serial('id').primaryKey(),
+  actorId: text('actor_id'),
+  actorName: varchar('actor_name', { length: 255 }).notNull(),
+  actorEmail: varchar('actor_email', { length: 255 }),
+  action: varchar('action', { length: 50 }).notNull(),
+  entityType: varchar('entity_type', { length: 50 }).notNull(),
+  entityId: text('entity_id'),
+  entityLabel: varchar('entity_label', { length: 255 }).notNull(),
+  details: jsonb('details').default({}).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('audit_logs_created_at_idx').on(table.createdAt),
+  index('audit_logs_entity_idx').on(table.entityType, table.entityId),
+]);
 
 // Notification reads tracking per user
 export const notificationReads = pgTable('notification_reads', {
@@ -143,5 +170,3 @@ export const notificationReads = pgTable('notification_reads', {
   uniqueIndex('unique_user_notification_idx')
     .on(table.notificationId, table.userId),
 ]);
-
-

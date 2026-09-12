@@ -278,3 +278,28 @@ export function ReportsSkeleton() {
     </Box>
   );
 }
+
+export function AuditLogsSkeleton() {
+  return (
+    <Container maxWidth={false} sx={{ p: 0, width: '100%' }}>
+      <Skeleton variant="text" width={210} height={48} sx={{ mb: 2 }} />
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 3 }}>
+        <Skeleton variant="rounded" height={48} sx={{ flexGrow: 1, borderRadius: 2 }} />
+        <Skeleton variant="rounded" width={180} height={48} sx={{ borderRadius: 2 }} />
+        <Skeleton variant="rounded" width={180} height={48} sx={{ borderRadius: 2 }} />
+      </Stack>
+      <Card variant="outlined" sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        {Array.from({ length: 8 }).map((_, index) => (
+          <React.Fragment key={index}>
+            <Stack direction="row" spacing={3} sx={{ p: 2.5, alignItems: 'center' }}>
+              <Skeleton variant="rounded" width={86} height={26} sx={{ borderRadius: 1 }} />
+              <Box sx={{ flexGrow: 1 }}><Skeleton variant="text" width="42%" /><Skeleton variant="text" width="28%" /></Box>
+              <Skeleton variant="text" width={140} />
+            </Stack>
+            {index < 7 && <Divider />}
+          </React.Fragment>
+        ))}
+      </Card>
+    </Container>
+  );
+}

@@ -9,12 +9,13 @@ import {
   Stack,
   TextField,
   Alert,
+  Autocomplete,
   CircularProgress,
   Divider,
-  Chip,
   Paper,
   InputAdornment,
   IconButton,
+  MenuItem,
   Tooltip,
 } from '@mui/material';
 import {
@@ -32,7 +33,7 @@ import {
   ArrowBack as ArrowBackIcon,
   Key as KeyIcon,
 } from '@mui/icons-material';
-import { checkDrizzleConnection, DbStatus, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword } from './actions';
+import { checkDrizzleConnection, completeSelfRegistration, DbStatus, getDepartmentOptions, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword } from './actions';
 import { authClient } from '@/lib/auth/client';
 import { useRouter } from 'next/navigation';
 
@@ -52,6 +53,14 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const [isSignUpMode, setIsSignUpMode] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [fullName, setFullName] = useState('');
+  const [signUpEmail, setSignUpEmail] = useState('');
+  const [signUpPassword, setSignUpPassword] = useState('');
+  const [signUpRole, setSignUpRole] = useState<'employee' | 'viewer' | 'viewer-full'>('employee');
+  const [signUpDepartment, setSignUpDepartment] = useState('');
+  const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Forgot Password States
@@ -130,9 +139,14 @@ export default function Home() {
   }, [session.data]);
 
   useEffect(() => {
+    void getDepartmentOptions().then(setDepartmentOptions);
+  }, []);
+
+  useEffect(() => {
     let isMounted = true;
     const checkUserRole = async () => {
       if (session.data) {
+        if (isRegistering) return;
         setCheckingRole(true);
         try {
           await getOrCreateUserRole(
@@ -159,7 +173,7 @@ export default function Home() {
     return () => {
       isMounted = false;
     };
-  }, [session.data, router]);
+  }, [isRegistering, session.data, router]);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,6 +196,47 @@ export default function Home() {
       }
     } catch (err: any) {
       setAuthError(err.message || 'An unexpected server error occurred.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setIsRegistering(true);
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    try {
+      const result = await authClient.signUp.email({
+        name: fullName.trim(),
+        email: signUpEmail.trim(),
+        password: signUpPassword,
+      });
+      if (result?.error) {
+        setAuthError(result.error.message || 'Unable to create the account.');
+        setIsRegistering(false);
+        return;
+      }
+
+      const profile = await completeSelfRegistration({ role: signUpRole, department: signUpDepartment });
+      if (!profile.success) {
+        await authClient.signOut();
+        setAuthError(profile.error || 'Unable to complete registration.');
+        setIsRegistering(false);
+        return;
+      }
+
+      setAuthSuccess('Account created. Loading Portal...');
+      setFullName('');
+      setSignUpEmail('');
+      setSignUpPassword('');
+      setSignUpDepartment('');
+      router.replace('/admin');
+    } catch (err: any) {
+      setAuthError(err.message || 'An unexpected server error occurred.');
+      setIsRegistering(false);
     } finally {
       setAuthLoading(false);
     }
@@ -248,8 +303,16 @@ export default function Home() {
     setIsForgotPasswordMode(true);
   };
 
+  const handleOpenSignUp = () => {
+    setAuthError(null);
+    setAuthSuccess(null);
+    setIsForgotPasswordMode(false);
+    setIsSignUpMode(true);
+  };
+
   const handleBackToSignIn = () => {
     setIsForgotPasswordMode(false);
+    setIsSignUpMode(false);
     setForgotStep(1);
     setForgotError(null);
     setForgotSuccess(null);
@@ -401,11 +464,35 @@ export default function Home() {
           {/* Form Header */}
           <Box sx={{ mb: 4 }}>
             <Typography variant="h4" color="text.primary" sx={{ fontWeight: '800', letterSpacing: '-0.5px' }}>
-              {isForgotPasswordMode ? 'Reset Password' : 'Sign In'}
+              {isForgotPasswordMode ? 'Reset Password' : isSignUpMode ? 'Sign Up' : 'Sign In'}
             </Typography>
           </Box>
 
-          {!isForgotPasswordMode ? (
+          {isSignUpMode ? (
+            <>
+              {authError && <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>{authError}</Alert>}
+              {authSuccess && <Alert severity="success" sx={{ mb: 3, borderRadius: 2 }}>{authSuccess}</Alert>}
+              <form onSubmit={handleSignUp}>
+                <Stack spacing={2.5}>
+                  <TextField label="Full Name" required fullWidth value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><PersonIcon color="action" /></InputAdornment> } }} />
+                  <TextField label="Email Address" type="email" required fullWidth value={signUpEmail} onChange={(e) => setSignUpEmail(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><EmailIcon color="action" /></InputAdornment> } }} />
+                  <TextField label="Password" type="password" required fullWidth value={signUpPassword} onChange={(e) => setSignUpPassword(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><LockIcon color="action" /></InputAdornment> } }} />
+                  <TextField select label="Role" required fullWidth value={signUpRole} onChange={(e) => setSignUpRole(e.target.value as 'employee' | 'viewer' | 'viewer-full')} disabled={authLoading}>
+                    <MenuItem value="employee">Employee</MenuItem>
+                    <MenuItem value="viewer">Viewer</MenuItem>
+                    <MenuItem value="viewer-full">Viewer (All Departments)</MenuItem>
+                  </TextField>
+                  <Autocomplete freeSolo options={departmentOptions} value={signUpDepartment} inputValue={signUpDepartment} onChange={(_, value) => setSignUpDepartment(typeof value === 'string' ? value : '')} onInputChange={(_, value) => setSignUpDepartment(value)} disabled={authLoading} renderInput={(params) => <TextField {...params} label="Department" required fullWidth />} />
+                  <Button type="submit" variant="contained" color="primary" fullWidth size="large" disabled={authLoading || !fullName.trim() || !signUpDepartment.trim()} sx={{ py: 1.7, fontSize: '1.05rem', boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)' }}>
+                    {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Create Account'}
+                  </Button>
+                  <Button variant="text" color="secondary" fullWidth onClick={handleBackToSignIn} disabled={authLoading} startIcon={<ArrowBackIcon />} sx={{ textTransform: 'none', fontWeight: 600 }}>
+                    Back to Sign In
+                  </Button>
+                </Stack>
+              </form>
+            </>
+          ) : !isForgotPasswordMode ? (
             <>
               {authError && (
                 <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
@@ -499,6 +586,9 @@ export default function Home() {
                   </Button>
                 </Stack>
               </form>
+              <Button variant="text" color="secondary" fullWidth onClick={handleOpenSignUp} disabled={authLoading} sx={{ mt: 2, textTransform: 'none', fontWeight: 600 }}>
+                Create an account
+              </Button>
             </>
           ) : (
             <>

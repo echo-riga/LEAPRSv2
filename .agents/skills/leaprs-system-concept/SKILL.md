@@ -30,6 +30,7 @@ graph TD
 A CapDev is a parent project or educational program.
 * **Fixed Fields (In Codebase)**:
   * `AIP Code` (Unique project code)
+  * **UI Identifier**: Always display and reference a CapDev by its `AIP Code`; never expose the internal database ID as the CapDev identifier in user-facing UI, audit history, notifications, or reports.
   * `Initial Budget` (Original project fund)
   * `Remaining Budget` (Available project fund after deductions)
   * `Department` (Owner department)
@@ -94,3 +95,32 @@ All files are uploaded to Google Drive.
   2. **Supervisor / Post-Activity Evaluation Form**: For supervisors and coordinators to assess workplace application, action plans, and skill improvements (`https://forms.gle/c8BjUUoPxYWiBxnF8`).
 * The forms are presented via a celebratory completion modal dialog immediately upon completion, and persist in the timeline's final resolution card with direct **Open Form** and **Copy Link** actions.
 
+## 4. Access, Registration, and Departments
+
+### A. Roles
+
+* **Admin** manages users, configuration, CapDev projects, and requests.
+* **Employee** can view CapDev projects and create, update, and delete only their own requests.
+* **Employee (Department Requests)** is an admin-assigned department assistant role. It can view and manage requests belonging to CapDev projects in its department, including other employees' requests, and can post timeline updates.
+* **Viewer** has read-only access to CapDev projects and requests in its department.
+* **Viewer (All Departments)** has read-only access across departments.
+
+### B. Self-Registration
+
+* The login page supports Neon Auth email registration with full name, email, password, role, and department.
+* Self-registration offers only **Employee**, **Viewer**, and **Viewer (All Departments)**. Admin and Employee (Department Requests) are assigned only through Users Management.
+* A newly registered account receives its selected application role and department immediately after Neon Auth creates the account.
+
+### C. Shared Department Values
+
+* Department is a fixed important field, not a configurable dynamic field.
+* Department inputs in CapDev CRUD, signup, and Users Management are free-text comboboxes. Users can select a previously used department or type a new one.
+* The shared suggestion list is read from saved user profiles and CapDev projects. Saving a new department value makes it available as a future suggestion; departments intentionally have create/read behavior only, with no separate update or delete screen.
+
+## 5. Stopper and Resume Workflow
+
+* An **Admin** or **Employee (Department Requests)** can add a stopper at any time by supplying a reason and optional attachments. A request may be stopped again after it has been resumed.
+* A stopper is retained as a timeline card with a **Stopped** badge, a pin visual, its reason, and its attachments. It remains in the history after resumption and shows that it was resumed.
+* While a request is stopped, normal Employees cannot add ordinary status updates. Instead, the active stopper card provides them a text and attachment response area so they can submit what the stopper reason asks for.
+* While stopped, Admin and Employee (Department Requests) see **Resume Progress** in place of adding a status update. Resuming re-enables normal Employee status updates.
+* Server authorization enforces these rules: regular Employees can submit only a response to the active stopper on their own request; only Admin and Employee (Department Requests) can stop or resume progress.

@@ -1,8 +1,8 @@
 'use server';
 
 import { db } from '@/db';
-import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads } from '@/db/schema';
-import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, ne } from 'drizzle-orm';
+import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads, auditLogs } from '@/db/schema';
+import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail } from '@/lib/email';
 import { hashPassword } from 'better-auth/crypto';
@@ -21,10 +21,11 @@ export interface DbStatus {
   errorMessage?: string;
 }
 
-export type AppRole = 'admin' | 'employee' | 'viewer' | 'viewer-full';
+export type AppRole = 'admin' | 'employee' | 'employee-department' | 'viewer' | 'viewer-full';
 export type UserAccess = { userId: string; role: AppRole; department: string };
 
-const VALID_ROLES: AppRole[] = ['admin', 'employee', 'viewer', 'viewer-full'];
+const VALID_ROLES: AppRole[] = ['admin', 'employee', 'employee-department', 'viewer', 'viewer-full'];
+const SELF_REGISTRATION_ROLES = ['employee', 'viewer', 'viewer-full'] as const;
 const unauthorized = { success: false as const, error: 'You do not have permission to perform this action.' };
 
 async function getCurrentAccess(): Promise<UserAccess | null> {
@@ -39,8 +40,94 @@ async function getCurrentAccess(): Promise<UserAccess | null> {
   };
 }
 
+async function getActorSnapshot(access: UserAccess) {
+  const { data: session } = await auth.getSession();
+  return {
+    actorId: access.userId,
+    actorName: session?.user?.name || session?.user?.email || 'Unknown user',
+    actorEmail: session?.user?.email || null,
+  };
+}
+
+async function writeAuditLog(access: UserAccess, entry: {
+  action: 'created' | 'updated' | 'deleted' | 'status_changed' | 'stopped' | 'resumed';
+  entityType: 'capdev' | 'request' | 'status_update' | 'user' | 'capdev_field' | 'request_field';
+  entityId?: string | number | null;
+  entityLabel: string;
+  details?: Record<string, unknown>;
+}) {
+  const actor = await getActorSnapshot(access);
+  const details = { ...(entry.details || {}) };
+  if (typeof details.capdevId === 'number' && typeof details.capdevAipCode !== 'string') {
+    const [capdev] = await db.select({ aipCode: capdevs.aipCode }).from(capdevs).where(eq(capdevs.id, details.capdevId)).limit(1);
+    if (capdev) details.capdevAipCode = capdev.aipCode;
+  }
+  await db.insert(auditLogs).values({
+    ...actor,
+    action: entry.action,
+    entityType: entry.entityType,
+    entityId: entry.entityId == null ? null : String(entry.entityId),
+    entityLabel: entry.entityLabel,
+    details,
+  });
+}
+
+export type AuditLogItem = typeof auditLogs.$inferSelect;
+
+export async function getAuditLogs(input: { search?: string; action?: string; entityType?: string; page?: number; pageSize?: number } = {}) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return { success: false as const, logs: [] as AuditLogItem[], total: 0, error: unauthorized.error };
+  try {
+    const pageSize = Math.min(50, Math.max(1, input.pageSize || 12));
+    const page = Math.max(1, input.page || 1);
+    const conditions: SQL[] = [];
+    if (input.action) conditions.push(eq(auditLogs.action, input.action));
+    if (input.entityType) conditions.push(eq(auditLogs.entityType, input.entityType));
+    const search = input.search?.trim();
+    if (search) {
+      const pattern = `%${search}%`;
+      conditions.push(or(
+        ilike(auditLogs.actorName, pattern),
+        ilike(auditLogs.actorEmail, pattern),
+        ilike(auditLogs.entityLabel, pattern),
+        ilike(auditLogs.entityId, pattern),
+      )!);
+    }
+    const where = conditions.length ? and(...conditions) : undefined;
+    const [logs, totals] = await Promise.all([
+      db.select().from(auditLogs).where(where).orderBy(desc(auditLogs.createdAt)).limit(pageSize).offset((page - 1) * pageSize),
+      db.select({ value: count() }).from(auditLogs).where(where),
+    ]);
+    const capdevIds = Array.from(new Set(logs.flatMap((log) => {
+      const details = log.details && typeof log.details === 'object' && !Array.isArray(log.details) ? log.details as Record<string, unknown> : {};
+      return typeof details.capdevId === 'number' && typeof details.capdevAipCode !== 'string' ? [details.capdevId] : [];
+    })));
+    const capdevRows = capdevIds.length > 0
+      ? await db.select({ id: capdevs.id, aipCode: capdevs.aipCode }).from(capdevs).where(inArray(capdevs.id, capdevIds))
+      : [];
+    const aipCodesByCapdevId = new Map(capdevRows.map((capdev) => [capdev.id, capdev.aipCode]));
+    const enrichedLogs = logs.map((log) => {
+      const details = log.details && typeof log.details === 'object' && !Array.isArray(log.details) ? log.details as Record<string, unknown> : {};
+      const capdevAipCode = typeof details.capdevId === 'number' ? aipCodesByCapdevId.get(details.capdevId) : undefined;
+      return capdevAipCode ? { ...log, details: { ...details, capdevAipCode } } : log;
+    });
+    return { success: true as const, logs: enrichedLogs, total: totals[0]?.value || 0 };
+  } catch (error) {
+    console.error('Failed to get audit logs:', error);
+    return { success: false as const, logs: [] as AuditLogItem[], total: 0, error: 'Unable to load audit logs.' };
+  }
+}
+
 function canAccessCapdev(access: UserAccess, capdev: { department: string }) {
   return access.role === 'admin' || access.role === 'viewer-full' || access.role === 'employee' || capdev.department === access.department;
+}
+
+function canManageRequests(access: UserAccess) {
+  return access.role === 'admin' || access.role === 'employee' || access.role === 'employee-department';
+}
+
+function canControlRequestStop(access: UserAccess) {
+  return access.role === 'admin' || access.role === 'employee-department';
 }
 
 async function getAccessibleCapdev(access: UserAccess, capdevId: number) {
@@ -52,6 +139,7 @@ async function getAccessibleRequest(access: UserAccess, requestId: number) {
   const [record] = await db.select({ request: getTableColumns(requests), capdevDepartment: capdevs.department }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(eq(requests.id, requestId)).limit(1);
   if (!record) return null;
   if (access.role === 'employee') return record.request.userId === access.userId ? record.request : null;
+  if (access.role === 'employee-department') return record.capdevDepartment === access.department ? record.request : null;
   if (access.role === 'viewer') return record.capdevDepartment === access.department ? record.request : null;
   return record.request;
 }
@@ -121,8 +209,7 @@ export async function getOrCreateUserRole(userId: string, email: string): Promis
       return existing[0].role;
     }
 
-    // Determine role. If email has "admin", set to admin. Else employee.
-    const role = email.toLowerCase().includes('admin') ? 'admin' : 'employee';
+    const role = 'employee';
 
     await db.insert(users).values({
       id: userId,
@@ -132,7 +219,44 @@ export async function getOrCreateUserRole(userId: string, email: string): Promis
     return role;
   } catch (error) {
     console.error('Error fetching or creating user role:', error);
-    return email.toLowerCase().includes('admin') ? 'admin' : 'employee';
+    return 'employee';
+  }
+}
+
+export async function getDepartmentOptions() {
+  try {
+    const [userDepartments, capdevDepartments] = await Promise.all([
+      db.select({ department: users.department }).from(users),
+      db.select({ department: capdevs.department }).from(capdevs),
+    ]);
+    return Array.from(new Set([...userDepartments, ...capdevDepartments]
+      .map((record) => record.department.trim())
+      .filter((department) => department && department !== 'Unassigned')))
+      .sort((a, b) => a.localeCompare(b));
+  } catch (error) {
+    console.error('Failed to load department options:', error);
+    return [];
+  }
+}
+
+export async function completeSelfRegistration(input: { role: string; department: string }) {
+  const access = await getCurrentAccess();
+  const role = input.role as (typeof SELF_REGISTRATION_ROLES)[number];
+  const department = input.department.trim();
+  if (!access) return unauthorized;
+  if (!SELF_REGISTRATION_ROLES.includes(role) || !department || department.length > 255) {
+    return { success: false, error: 'Provide a valid role and department.' };
+  }
+
+  try {
+    const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.id, access.userId)).limit(1);
+    if (existing) return { success: false, error: 'This account has already been registered.' };
+    await db.insert(users).values({ id: access.userId, role, department });
+    await writeAuditLog(access, { action: 'created', entityType: 'user', entityId: access.userId, entityLabel: access.userId, details: { role, department, source: 'self_registration' } });
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to complete self-registration:', error);
+    return { success: false, error: 'Unable to complete registration.' };
   }
 }
 
@@ -179,6 +303,7 @@ export async function updateUserRole(userId: string, newRole: string, department
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin' || !VALID_ROLES.includes(newRole as AppRole)) return unauthorized;
     await db.update(users).set({ role: newRole, ...(department ? { department } : {}) }).where(eq(users.id, userId));
+    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: userId, details: { role: newRole, ...(department ? { department } : {}) } });
     return { success: true };
   } catch (error) {
     console.error('Failed to update user role:', error);
@@ -193,6 +318,7 @@ export async function updateDirectoryUser(userId: string, input: { name: string;
     const { error } = await auth.admin.updateUser({ userId, data: { name: input.name, email: input.email } });
     if (error) return { success: false, error: error.message || 'Unable to update the Neon Auth user.' };
     await db.update(users).set({ role: input.role, department: input.department }).where(eq(users.id, userId));
+    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department: input.department } });
     return { success: true };
   } catch (error) {
     console.error('Failed to update user directory record:', error);
@@ -209,6 +335,7 @@ export async function createUser(userId: string, role: string, department = 'Una
       role: role,
       department,
     });
+    await writeAuditLog(access, { action: 'created', entityType: 'user', entityId: userId, entityLabel: userId, details: { role, department } });
     return { success: true };
   } catch (error) {
     console.error('Failed to create user in DB:', error);
@@ -223,6 +350,7 @@ export async function createDirectoryUser(input: { name: string; email: string; 
     const { data, error } = await auth.admin.createUser({ email: input.email, password: input.password, name: input.name });
     if (error || !data?.user) return { success: false, error: error?.message || 'Unable to create the Neon Auth user.' };
     await db.insert(users).values({ id: data.user.id, role: input.role, department: input.department });
+    await writeAuditLog(access, { action: 'created', entityType: 'user', entityId: data.user.id, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department: input.department } });
     return { success: true, user: data.user };
   } catch (error) {
     console.error('Failed to create user directory record:', error);
@@ -234,7 +362,9 @@ export async function deleteUser(userId: string) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
+    const [target] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     await db.delete(users).where(eq(users.id, userId));
+    await writeAuditLog(access, { action: 'deleted', entityType: 'user', entityId: userId, entityLabel: userId, details: target ? { role: target.role, department: target.department } : {} });
     return { success: true };
   } catch (error) {
     console.error('Failed to delete user from DB:', error);
@@ -246,9 +376,16 @@ export async function deleteDirectoryUser(userId: string) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
   try {
+    const [{ data: authUsers }, targetRows] = await Promise.all([
+      auth.admin.listUsers({ query: { limit: 100 } }),
+      db.select().from(users).where(eq(users.id, userId)).limit(1),
+    ]);
+    const targetAuthUser = authUsers?.users?.find((user) => user.id === userId);
     const { error } = await auth.admin.removeUser({ userId });
     if (error) return { success: false, error: error.message || 'Unable to delete the Neon Auth user.' };
     await db.delete(users).where(eq(users.id, userId));
+    const target = targetRows[0];
+    await writeAuditLog(access, { action: 'deleted', entityType: 'user', entityId: userId, entityLabel: targetAuthUser?.name || targetAuthUser?.email || userId, details: { email: targetAuthUser?.email || null, role: target?.role || null, department: target?.department || null } });
     return { success: true };
   } catch (error) {
     console.error('Failed to delete user directory record:', error);
@@ -300,7 +437,7 @@ export async function getAllCapdevs() {
 export async function getAnalyticsData() {
   try {
     const access = await getCurrentAccess();
-    if (!access || access.role === 'employee') return { capdevs: [], requests: [], statusUpdates: [] };
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [], statusUpdates: [] };
     const [capdevData, requestData, statusUpdateData] = await Promise.all([
       db.select({ id: capdevs.id, aipCode: capdevs.aipCode, description: capdevs.description, department: capdevs.department, initialBudget: capdevs.initialBudget, budget: capdevs.budget, createdAt: capdevs.createdAt }).from(capdevs),
       db.select({ id: requests.id, capdevId: requests.capdevId, setting: requests.setting, createdAt: requests.createdAt }).from(requests),
@@ -325,7 +462,7 @@ export async function getAnalyticsData() {
 export async function getMonitoringReportData() {
   try {
     const access = await getCurrentAccess();
-    if (!access || access.role === 'employee') return { capdevs: [], requests: [], capdevFields: [], requestFields: [] };
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [], capdevFields: [], requestFields: [] };
     const [capdevData, requestData, capdevFields, requestFields] = await Promise.all([
       db.select().from(capdevs).orderBy(capdevs.aipCode),
       db.select().from(requests).orderBy(requests.createdAt),
@@ -358,7 +495,7 @@ function columnLetter(column: number) {
 export async function generateMonitoringSheet(input: { capdevIds: number[]; capdevFieldIds: number[]; requestFieldIds: number[]; capdevFixedFields: string[]; requestFixedFields: string[] }) {
   try {
     const access = await getCurrentAccess();
-    if (!access || access.role === 'employee') return unauthorized;
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return unauthorized;
     if (input.capdevIds.length === 0) return { success: false, error: 'Select at least one CapDev project.' };
     const [allCapdevs, allRequests, capdevFields, requestFields] = await Promise.all([
       db.select().from(capdevs), db.select().from(requests),
@@ -475,15 +612,17 @@ export async function createCapdev(data: CapdevInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
-    const aipCodePattern = /^\d{4}-\d{3}-\d{2}-\d{2}-\d{2}-\d{3}-\d{3}$/;
+    const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;
     if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
-      return { success: false, error: 'AIP Code must follow the format: 3000-002-04-03-26-006-022' };
+      return { success: false, error: 'AIP Code must follow the format: 0000-000-0-0-00-000-000' };
     }
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [created] = await db.insert(capdevs).values({ ...data, updatedById: access.userId, initialBudget: data.budget }).returning();
+    await writeAuditLog(access, { action: 'created', entityType: 'capdev', entityId: created.id, entityLabel: created.aipCode, details: { department: created.department, initialBudget: created.initialBudget } });
     void createNotification({
       actorId: access.userId,
+      capdevId: created.id,
       title: `New CapDev Project: ${created.aipCode}`,
       message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
       link: `/admin/capdev/${created.id}/requests`,
@@ -500,9 +639,9 @@ export async function updateCapdev(id: number, data: CapdevInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
-    const aipCodePattern = /^\d{4}-\d{3}-\d{2}-\d{2}-\d{2}-\d{3}-\d{3}$/;
+    const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;
     if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
-      return { success: false, error: 'AIP Code must follow the format: 3000-002-04-03-26-006-022' };
+      return { success: false, error: 'AIP Code must follow the format: 0000-000-0-0-00-000-000' };
     }
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
@@ -511,6 +650,8 @@ export async function updateCapdev(id: number, data: CapdevInput) {
       .set({ aipCode: data.aipCode, description: data.description, department: data.department, additionalInfo: data.additionalInfo, updatedById: access.userId, updatedAt: new Date() })
       .where(eq(capdevs.id, id))
       .returning();
+    if (!updated) return { success: false, error: 'CapDev project not found.' };
+    await writeAuditLog(access, { action: 'updated', entityType: 'capdev', entityId: updated.id, entityLabel: updated.aipCode, details: { department: updated.department } });
     return { success: true, capdev: updated };
   } catch (error) {
     console.error('Failed to update CapDev project:', error);
@@ -548,6 +689,7 @@ export async function deleteCapdev(id: number) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    const actor = await getActorSnapshot(access);
     // Delete child records first, then the project, in one database statement.
     // The dependencies between the CTEs ensure PostgreSQL respects the foreign keys.
     const result = await db.execute(sql`
@@ -566,9 +708,16 @@ export async function deleteCapdev(id: number) {
         DELETE FROM capdevs
         WHERE id = ${id}
           AND (SELECT COUNT(*) FROM deleted_requests) >= 0
+        RETURNING id, aip_code, department
+      ),
+      inserted_audit AS (
+        INSERT INTO audit_logs (actor_id, actor_name, actor_email, action, entity_type, entity_id, entity_label, details)
+        SELECT ${actor.actorId}, ${actor.actorName}, ${actor.actorEmail}, 'deleted', 'capdev', id::text, aip_code,
+          jsonb_build_object('department', department)
+        FROM deleted_capdev
         RETURNING id
       )
-      SELECT id FROM deleted_capdev
+      SELECT id FROM inserted_audit
     `);
     if (result.rows.length === 0) return { success: false, error: 'CapDev project not found.' };
     return { success: true };
@@ -581,7 +730,7 @@ export async function deleteCapdev(id: number) {
 export async function getDynamicFieldCounts() {
   try {
     const access = await getCurrentAccess();
-    if (!access || access.role === 'employee') return { capdevFieldsCount: 0, requestFieldsCount: 0 };
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevFieldsCount: 0, requestFieldsCount: 0 };
     const capdevCount = await db
       .select({ value: count() })
       .from(capdevFieldDefinitions)
@@ -646,6 +795,7 @@ export async function saveCapdevFieldDefinition(data: {
           updatedAt: new Date(),
         })
         .where(eq(capdevFieldDefinitions.id, data.id));
+      await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityId: data.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
       return { success: true, id: data.id };
     } else {
       const existing = await db
@@ -667,6 +817,7 @@ export async function saveCapdevFieldDefinition(data: {
           updatedById: data.updatedById,
         })
         .returning({ id: capdevFieldDefinitions.id });
+      await writeAuditLog(access, { action: 'created', entityType: 'capdev_field', entityId: inserted.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
       return { success: true, id: inserted.id };
     }
   } catch (error) {
@@ -679,6 +830,7 @@ export async function deleteCapdevFieldDefinition(id: number, updatedById: strin
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    const [field] = await db.select({ name: capdevFieldDefinitions.name }).from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.id, id)).limit(1);
     await db
       .update(capdevFieldDefinitions)
       .set({
@@ -687,6 +839,7 @@ export async function deleteCapdevFieldDefinition(id: number, updatedById: strin
         updatedAt: new Date(),
       })
       .where(eq(capdevFieldDefinitions.id, id));
+    await writeAuditLog(access, { action: 'deleted', entityType: 'capdev_field', entityId: id, entityLabel: field?.name || `CapDev field #${id}` });
     return { success: true };
   } catch (error) {
     console.error('Failed to delete CapDev field:', error);
@@ -710,6 +863,7 @@ export async function updateCapdevFieldsOrder(idOrderArray: number[], updatedByI
       FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order)
       WHERE field.id = ordered.id
     `);
+    await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'CapDev field order', details: { fieldIds: idOrderArray } });
     return { success: true };
   } catch (error) {
     console.error('Failed to reorder CapDev fields:', error);
@@ -761,6 +915,7 @@ export async function saveRequestFieldDefinition(data: {
           updatedAt: new Date(),
         })
         .where(eq(requestFieldDefinitions.id, data.id));
+      await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityId: data.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
       return { success: true, id: data.id };
     }
 
@@ -783,6 +938,7 @@ export async function saveRequestFieldDefinition(data: {
         updatedById: data.updatedById,
       })
       .returning({ id: requestFieldDefinitions.id });
+    await writeAuditLog(access, { action: 'created', entityType: 'request_field', entityId: inserted.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
     return { success: true, id: inserted.id };
   } catch (error) {
     console.error('Failed to save Request field:', error);
@@ -794,10 +950,12 @@ export async function deleteRequestFieldDefinition(id: number, updatedById: stri
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    const [field] = await db.select({ name: requestFieldDefinitions.name }).from(requestFieldDefinitions).where(eq(requestFieldDefinitions.id, id)).limit(1);
     await db
       .update(requestFieldDefinitions)
       .set({ isActive: false, updatedById, updatedAt: new Date() })
       .where(eq(requestFieldDefinitions.id, id));
+    await writeAuditLog(access, { action: 'deleted', entityType: 'request_field', entityId: id, entityLabel: field?.name || `Request field #${id}` });
     return { success: true };
   } catch (error) {
     console.error('Failed to delete Request field:', error);
@@ -821,6 +979,7 @@ export async function updateRequestFieldsOrder(idOrderArray: number[], updatedBy
       FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order)
       WHERE field.id = ordered.id
     `);
+    await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityLabel: 'Request field order', details: { fieldIds: idOrderArray } });
     return { success: true };
   } catch (error) {
     console.error('Failed to reorder Request fields:', error);
@@ -867,7 +1026,7 @@ export async function getRequestById(id: number) {
 export async function createRequest(data: RequestInput) {
   try {
     const access = await getCurrentAccess();
-    if (!access || (access.role !== 'admin' && access.role !== 'employee')) return unauthorized;
+    if (!access || !canManageRequests(access)) return unauthorized;
     if (!await getAccessibleCapdev(access, data.capdevId)) return unauthorized;
     const { data: session } = await auth.getSession();
 
@@ -879,8 +1038,11 @@ export async function createRequest(data: RequestInput) {
       updatedById: access.userId,
       requestorName: session?.user?.name || session?.user?.email || 'Requestor',
     }).returning();
+    await writeAuditLog(access, { action: 'created', entityType: 'request', entityId: created.id, entityLabel: `Request #${created.id}`, details: { capdevId: created.capdevId, setting: created.setting, requestedBudget: created.requestedBudget, requestorName: created.requestorName } });
     void createNotification({
       actorId: access.userId,
+      capdevId: created.capdevId,
+      requestId: created.id,
       title: `New Requisition: ${created.setting || 'CapDev Request'}`,
       message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
       link: `/admin/capdev/${created.capdevId}/requests/${created.id}/status`,
@@ -896,7 +1058,7 @@ export async function createRequest(data: RequestInput) {
 export async function updateRequest(id: number, data: RequestInput) {
   try {
     const access = await getCurrentAccess();
-    if (!access || (access.role !== 'admin' && access.role !== 'employee')) return unauthorized;
+    if (!access || !canManageRequests(access)) return unauthorized;
     const existing = await getAccessibleRequest(access, id);
     if (!existing) return { success: false, error: 'Request not found.' };
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, existing.capdevId)).limit(1);
@@ -904,6 +1066,8 @@ export async function updateRequest(id: number, data: RequestInput) {
     if (deduction && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested budget cannot be changed after it has been deducted.' };
     if (!deduction && (!capdev || Number(data.requestedBudget) > Number(capdev.budget))) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
     const [updated] = await db.update(requests).set({ ...data, capdevId: existing.capdevId, userId: existing.userId, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
+    if (!updated) return { success: false, error: 'Request not found.' };
+    await writeAuditLog(access, { action: 'updated', entityType: 'request', entityId: updated.id, entityLabel: `Request #${updated.id}`, details: { capdevId: updated.capdevId, setting: updated.setting, requestedBudget: updated.requestedBudget } });
     return { success: true, request: updated };
   } catch (error) {
     console.error('Failed to update request:', error);
@@ -914,7 +1078,9 @@ export async function updateRequest(id: number, data: RequestInput) {
 export async function deleteRequest(id: number) {
   try {
     const access = await getCurrentAccess();
-    if (!access || (access.role !== 'admin' && access.role !== 'employee') || !await getAccessibleRequest(access, id)) return unauthorized;
+    const existing = access ? await getAccessibleRequest(access, id) : null;
+    if (!access || !canManageRequests(access) || !existing) return unauthorized;
+    const actor = await getActorSnapshot(access);
 
     // Delete child records (status updates) first, then the request in one atomic database execution
     const result = await db.execute(sql`
@@ -927,9 +1093,17 @@ export async function deleteRequest(id: number) {
         DELETE FROM requests
         WHERE id = ${id}
           AND (SELECT COUNT(*) FROM deleted_status_updates) >= 0
+        RETURNING id, capdev_id, setting, requestor_name
+      ),
+      inserted_audit AS (
+        INSERT INTO audit_logs (actor_id, actor_name, actor_email, action, entity_type, entity_id, entity_label, details)
+        SELECT ${actor.actorId}, ${actor.actorName}, ${actor.actorEmail}, 'deleted', 'request', deleted_request.id::text, 'Request #' || deleted_request.id,
+          jsonb_build_object('capdevId', deleted_request.capdev_id, 'capdevAipCode', capdev.aip_code, 'setting', deleted_request.setting, 'requestorName', deleted_request.requestor_name)
+        FROM deleted_request
+        INNER JOIN capdevs AS capdev ON capdev.id = deleted_request.capdev_id
         RETURNING id
       )
-      SELECT id FROM deleted_request
+      SELECT id FROM inserted_audit
     `);
     if (result.rows.length === 0) return { success: false, error: 'Request not found.' };
     return { success: true };
@@ -949,7 +1123,11 @@ export type StatusUpdateInput = {
   markAsComplete?: boolean;
   subtractsRequestedAmount?: boolean;
   deductedAmount?: string;
+  isStopperResponse?: boolean;
+  stopperId?: number;
 };
+
+export type StopRequestInput = { requestId: number; reason: string; files: StatusAttachment[] };
 
 export type StatusAttachment = {
   id: string;
@@ -1019,7 +1197,7 @@ async function uploadFileToGoogleDrive(file: File, accessToken: string): Promise
 export async function uploadFilesToGoogleDrive(formData: FormData) {
   try {
     const access = await getCurrentAccess();
-    if (!access || (access.role !== 'admin' && access.role !== 'employee')) return { ...unauthorized, files: [] as StatusAttachment[] };
+    if (!access || !canManageRequests(access)) return { ...unauthorized, files: [] as StatusAttachment[] };
 
     const files = formData.getAll('files').filter((value): value is File => value instanceof File && value.size > 0);
     if (files.length > MAX_STATUS_ATTACHMENTS) return { success: false, error: `You can attach up to ${MAX_STATUS_ATTACHMENTS} files at once.`, files: [] as StatusAttachment[] };
@@ -1049,7 +1227,7 @@ export async function getRequestStatusUpdates(requestId: number) {
 export async function updateRequestStatus(requestId: number, status: 'completed' | 'denied') {
   try {
     const access = await getCurrentAccess();
-    if (!access || (access.role !== 'admin' && access.role !== 'employee')) return unauthorized;
+    if (!access || !canManageRequests(access)) return unauthorized;
     const req = await getAccessibleRequest(access, requestId);
     if (!req) return unauthorized;
 
@@ -1062,9 +1240,13 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
       })
       .where(eq(requests.id, requestId));
 
+    await writeAuditLog(access, { action: 'status_changed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { capdevId: req.capdevId, status } });
+
     void createNotification({
       actorId: access.userId,
       userId: req.userId || null,
+      capdevId: req.capdevId,
+      requestId,
       title: `Request #${requestId} ${status === 'completed' ? 'Completed' : 'Denied'}`,
       message: `Request #${requestId} was resolved as ${status}.`,
       link: `/admin/capdev/${req.capdevId}/requests/${requestId}/status`,
@@ -1078,10 +1260,54 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
   }
 }
 
+export async function stopRequestProgress(data: StopRequestInput) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !canControlRequestStop(access) || !await getAccessibleRequest(access, data.requestId)) return unauthorized;
+    if (!data.reason.trim()) return { success: false, error: 'A stopper reason is required.' };
+    const { data: session } = await auth.getSession();
+    const [request] = await db.select().from(requests).where(eq(requests.id, data.requestId)).limit(1);
+    if (!request || request.status === 'completed' || request.status === 'denied') return { success: false, error: 'This request is already concluded.' };
+    if (request.isStopped) return { success: false, error: 'This request is already stopped.' };
+
+    const [stopper] = await db.insert(requestStatusUpdates).values({
+      requestId: data.requestId,
+      userId: access.userId,
+      authorName: session?.user?.name || session?.user?.email || 'Staff member',
+      statusUpdate: data.reason.trim(),
+      files: data.files || [],
+      isStopper: true,
+    }).returning();
+    await db.update(requests).set({ isStopped: true, activeStopperId: stopper.id, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, data.requestId));
+    await writeAuditLog(access, { action: 'stopped', entityType: 'request', entityId: data.requestId, entityLabel: `Request #${data.requestId}`, details: { reason: data.reason.trim(), statusUpdateId: stopper.id } });
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to stop request progress:', error);
+    return { success: false, error: 'Unable to stop request progress.' };
+  }
+}
+
+export async function resumeRequestProgress(requestId: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !canControlRequestStop(access) || !await getAccessibleRequest(access, requestId)) return unauthorized;
+    const { data: session } = await auth.getSession();
+    const [request] = await db.select().from(requests).where(eq(requests.id, requestId)).limit(1);
+    if (!request?.isStopped || !request.activeStopperId) return { success: false, error: 'This request is not stopped.' };
+    await db.insert(requestStatusUpdates).values({ requestId, userId: access.userId, authorName: session?.user?.name || session?.user?.email || 'Staff member', statusUpdate: 'Progress resumed.', isResume: true, stopperId: request.activeStopperId });
+    await db.update(requests).set({ isStopped: false, activeStopperId: null, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, requestId));
+    await writeAuditLog(access, { action: 'resumed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { stopperId: request.activeStopperId } });
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to resume request progress:', error);
+    return { success: false, error: 'Unable to resume request progress.' };
+  }
+}
+
 export async function createRequestStatusUpdate(data: StatusUpdateInput) {
   try {
     const access = await getCurrentAccess();
-    if (!access || (access.role !== 'admin' && access.role !== 'employee') || !await getAccessibleRequest(access, data.requestId)) return unauthorized;
+    if (!access || !canManageRequests(access) || !await getAccessibleRequest(access, data.requestId)) return unauthorized;
     const { data: session } = await auth.getSession();
 
     // Check if request is already concluded (completed or denied)
@@ -1090,12 +1316,21 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
       return { success: false, error: 'This request is already concluded. No further updates can be added.' };
     }
 
-    if (!data.statusMark || !['pending', 'completed', 'denied', 'accepted'].includes(data.statusMark)) {
+    const isStopperResponse = Boolean(data.isStopperResponse);
+    if (existingReq[0].isStopped) {
+      if (access.role !== 'employee' || !isStopperResponse || data.stopperId !== existingReq[0].activeStopperId) {
+        return { success: false, error: 'Only an employee response to the active stopper can be added while progress is stopped.' };
+      }
+    } else if (isStopperResponse) {
+      return { success: false, error: 'This request is not currently stopped.' };
+    }
+
+    if (!isStopperResponse && (!data.statusMark || !['pending', 'completed', 'denied', 'accepted'].includes(data.statusMark))) {
       return { success: false, error: 'A valid status mark (Pending, Completed, or Denied) is required for every status update.' };
     }
 
     // 1. Handle budget deduction if requested
-    if (data.subtractsRequestedAmount) {
+    if (data.subtractsRequestedAmount && !isStopperResponse) {
       const [alreadyDeducted] = await db
         .select({ id: requestStatusUpdates.id })
         .from(requestStatusUpdates)
@@ -1139,7 +1374,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
         .where(eq(requests.id, data.requestId));
     }
     // 2. Insert status update log
-    await db.insert(requestStatusUpdates).values({
+    const [createdUpdate] = await db.insert(requestStatusUpdates).values({
       requestId: data.requestId,
       userId: access.userId,
       authorName: session?.user?.name || session?.user?.email || 'Staff member',
@@ -1149,12 +1384,31 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
       statusMark: data.statusMark || null,
       markAsComplete: Boolean(data.markAsComplete),
       subtractsRequestedAmount: Boolean(data.subtractsRequestedAmount),
+      isStopperResponse,
+      stopperId: isStopperResponse ? data.stopperId : null,
+    }).returning({ id: requestStatusUpdates.id });
+
+    await writeAuditLog(access, {
+      action: 'created',
+      entityType: 'status_update',
+      entityId: createdUpdate.id,
+      entityLabel: `Status update for Request #${data.requestId}`,
+      details: {
+        requestId: data.requestId,
+        capdevId: existingReq[0].capdevId,
+        statusMark: data.statusMark || null,
+        isStopperResponse,
+        subtractsRequestedAmount: Boolean(data.subtractsRequestedAmount),
+        deductedAmount: data.subtractsRequestedAmount ? (data.deductedAmount || existingReq[0].requestedBudget) : null,
+      },
     });
 
     // 3. Send notification (notifies request owner or other staff, never the actor who posted the status update)
     void createNotification({
       actorId: access.userId,
       userId: existingReq[0].userId !== access.userId ? existingReq[0].userId : null,
+      capdevId: existingReq[0].capdevId,
+      requestId: data.requestId,
       title: data.statusMark
         ? `Request #${data.requestId} Update: [${data.statusMark.toUpperCase()}]`
         : `Status Update on Request #${data.requestId}`,
@@ -1201,6 +1455,8 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
 
       for (const req of recentReqs) {
         await db.insert(notifications).values({
+          capdevId: req.capdevId,
+          requestId: req.id,
           title: `Requisition: ${req.setting || 'CapDev Request'}`,
           message: `${req.requestorName || 'Employee'} submitted requisition #${req.id} for ₱${Number(req.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
           link: `/admin/capdev/${req.capdevId}/requests/${req.id}/status`,
@@ -1224,6 +1480,8 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
 
       for (const upd of recentUpdates) {
         await db.insert(notifications).values({
+          capdevId: upd.capdevId,
+          requestId: upd.requestId,
           title: upd.markAsComplete ? `Request #${upd.requestId} Completed` : upd.statusMark === 'denied' ? `Request #${upd.requestId} Denied` : `Status Update on Request #${upd.requestId}`,
           message: `${upd.authorName || 'Staff'}: ${upd.statusUpdate.slice(0, 90)}`,
           link: `/admin/capdev/${upd.capdevId}/requests/${upd.requestId}/status`,
@@ -1315,9 +1573,11 @@ export async function markAllNotificationsAsRead() {
   }
 }
 
-export async function createNotification(data: {
+async function createNotification(data: {
   userId?: string | null;
   actorId?: string | null;
+  capdevId?: number | null;
+  requestId?: number | null;
   title: string;
   message: string;
   link: string;
@@ -1327,6 +1587,8 @@ export async function createNotification(data: {
     const [created] = await db.insert(notifications).values({
       userId: data.userId || null,
       actorId: data.actorId || null,
+      capdevId: data.capdevId || null,
+      requestId: data.requestId || null,
       title: data.title,
       message: data.message,
       link: data.link,
@@ -1452,5 +1714,3 @@ export async function verifyAndResetPassword(rawEmail: string, rawCode: string, 
     return { success: false, error: error.message || 'Failed to reset password.' };
   }
 }
-
-

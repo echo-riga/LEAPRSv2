@@ -573,7 +573,7 @@ export default function AnalyticsPage() {
                           {capdev.aipCode}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          {capdev.department} · {capdev.description}
+                          {capdev.department}
                         </Typography>
                       </Stack>
                     }

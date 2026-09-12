@@ -74,6 +74,17 @@ export default function RequestConfigPage() {
   const [backups, setBackups] = useState<Record<string, Field>>({});
   const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
   const tempCounter = useRef(0);
+  const savedSignalPending = useRef(false);
+
+  useEffect(() => {
+    const status = editingKeys.size > 0 ? 'editing' : savedSignalPending.current ? 'saved' : 'idle';
+    savedSignalPending.current = false;
+    window.dispatchEvent(new CustomEvent<'idle' | 'editing' | 'saved'>('leaprs:config-editing', { detail: status }));
+  }, [editingKeys]);
+
+  useEffect(() => () => {
+    window.dispatchEvent(new CustomEvent<'idle'>('leaprs:config-editing', { detail: 'idle' }));
+  }, []);
 
   // Add-section state
   const [extraSections, setExtraSections] = useState<string[]>([]);
@@ -238,6 +249,7 @@ export default function RequestConfigPage() {
             idx === originalIndex ? { ...field, id: result.id, key: `field-${result.id}`, isTemp: false } : field
           )
         );
+        savedSignalPending.current = true;
         clearEditingState(f.key);
       }
     } catch (error) {
@@ -1017,7 +1029,7 @@ export default function RequestConfigPage() {
                               <TextField
                                 fullWidth
                                 size="small"
-                                value="₱ 500,000.00"
+                                value="₱"
                                 disabled
                                 slotProps={{
                                   input: {

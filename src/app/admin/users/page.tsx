@@ -26,6 +26,7 @@ import {
   TextField,
   MenuItem,
   InputAdornment,
+  Autocomplete,
 } from '@mui/material';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import {
@@ -40,7 +41,7 @@ import {
   VisibilityOutlined as VisibilityIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
-import { createDirectoryUser, deleteDirectoryUser, getCurrentUserAccess, getUsersDirectory, updateDirectoryUser, createUser } from '@/app/actions';
+import { createDirectoryUser, deleteDirectoryUser, getCurrentUserAccess, getDepartmentOptions, getUsersDirectory, updateDirectoryUser, createUser } from '@/app/actions';
 import DateField from '@/components/DateField';
 
 interface UserEntity {
@@ -54,17 +55,21 @@ interface UserEntity {
   department: string;
 }
 
+const ALL_ROLES = ['admin', 'employee', 'employee-department', 'viewer', 'viewer-full'];
+const roleLabel = (role: string) => role === 'viewer-full' ? 'Viewer (All Departments)' : role === 'employee-department' ? 'Employee (Department Requests)' : role.charAt(0).toUpperCase() + role.slice(1);
+
 export default function UsersManagementPage() {
   const router = useRouter();
   const session = authClient.useSession();
   const [loading, setLoading] = useState(true);
   const [usersList, setUsersList] = useState<UserEntity[]>([]);
+  const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState<string[]>([]);
+  const [roleFilter, setRoleFilter] = useState<string[]>(ALL_ROLES);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [draftRoleFilter, setDraftRoleFilter] = useState<string[]>([]);
+  const [draftRoleFilter, setDraftRoleFilter] = useState<string[]>(ALL_ROLES);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [draftDateFrom, setDraftDateFrom] = useState('');
@@ -107,7 +112,7 @@ export default function UsersManagementPage() {
 
     setLoading(true);
     try {
-      const directoryUsers = await getUsersDirectory();
+      const [directoryUsers, departments] = await Promise.all([getUsersDirectory(), getDepartmentOptions()]);
       
       const formattedDbUsers = directoryUsers.map(u => ({
         id: u.id,
@@ -121,6 +126,10 @@ export default function UsersManagementPage() {
       }));
 
       setUsersList(formattedDbUsers);
+      setDepartmentOptions(departments);
+      const initialDepartments = Array.from(new Set(formattedDbUsers.map((user) => user.department))).sort();
+      setDepartmentFilter(initialDepartments);
+      setDraftDepartmentFilter(initialDepartments);
     } catch (err) {
       console.error('Error loading users:', err);
     } finally {
@@ -177,12 +186,14 @@ export default function UsersManagementPage() {
         if (!result.success) { console.error('Error updating user:', result.error); return; }
       }
       setUsersList(prev => prev.map(u => u.id === editingUser.id ? updatedUser : u));
+      if (formDepartment.trim()) setDepartmentOptions((current) => Array.from(new Set([...current, formDepartment.trim()])).sort((a, b) => a.localeCompare(b)));
     } else {
       // ADD OPERATION
       if (!formPassword) return;
       const created = await createDirectoryUser({ name: formName, email: formEmail, password: formPassword, role: formRole, department: formDepartment || 'Unassigned' });
       if (!created.success || !created.user) { console.error('Error creating user:', created.error); return; }
       setUsersList((current) => [{ id: created.user.id, name: created.user.name || formName, email: created.user.email, role: formRole, password: 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢', createdAt: created.user.createdAt, department: formDepartment || 'Unassigned' }, ...current]);
+      if (formDepartment.trim()) setDepartmentOptions((current) => Array.from(new Set([...current, formDepartment.trim()])).sort((a, b) => a.localeCompare(b)));
       setDialogOpen(false);
       return;
       const newId = `user-${Math.random().toString(36).substr(2, 9)}`;
@@ -227,9 +238,9 @@ export default function UsersManagementPage() {
     const matchesSearch =
       user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       user.email.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesRole = roleFilter.length === 0 || roleFilter.includes(user.role);
+    const matchesRole = roleFilter.includes(user.role);
     const added = new Date(user.createdAt).getTime();
-    return matchesSearch && matchesRole && (departmentFilter.length === 0 || departmentFilter.includes(user.department)) && (!dateFrom || added >= new Date(dateFrom).getTime()) && (!dateTo || added <= new Date(`${dateTo}T23:59:59`).getTime());
+    return matchesSearch && matchesRole && departmentFilter.includes(user.department) && (!dateFrom || added >= new Date(dateFrom).getTime()) && (!dateTo || added <= new Date(`${dateTo}T23:59:59`).getTime());
   }).sort((a, b) => sortOrder === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   // Pagination Logic
@@ -375,7 +386,7 @@ export default function UsersManagementPage() {
                           Role
                         </Typography>
                         <Chip
-                          label={user.role.toUpperCase()}
+                          label={roleLabel(user.role)}
                           size="small"
                           color={user.role === 'admin' ? 'primary' : 'default'}
                           sx={{ fontWeight: '700', borderRadius: '6px' }}
@@ -557,11 +568,12 @@ export default function UsersManagementPage() {
               onChange={(e) => setFormRole(e.target.value)}
             >
               <MenuItem value="employee">Employee</MenuItem>
+              <MenuItem value="employee-department">Employee (Department Requests)</MenuItem>
               <MenuItem value="admin">Admin</MenuItem>
               <MenuItem value="viewer">Viewer</MenuItem>
               <MenuItem value="viewer-full">Viewer (All Departments)</MenuItem>
             </TextField>
-            <TextField label="Department" fullWidth value={formDepartment} onChange={(e) => setFormDepartment(e.target.value)} />
+            <Autocomplete freeSolo options={departmentOptions} value={formDepartment} inputValue={formDepartment} onChange={(_, value) => setFormDepartment(typeof value === 'string' ? value : '')} onInputChange={(_, value) => setFormDepartment(value)} renderInput={(params) => <TextField {...params} label="Department" fullWidth />} />
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
@@ -573,7 +585,7 @@ export default function UsersManagementPage() {
           </Button>
         </DialogActions>
       </Dialog>
-      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} maxWidth="sm" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Filter Users</DialogTitle><DialogContent dividers><Stack spacing={2}><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Roles</Typography>{['admin', 'employee', 'viewer', 'viewer-full'].map((role, _, roles) => <FormControlLabel key={role} control={<Checkbox checked={draftRoleFilter.length === 0 || draftRoleFilter.includes(role)} onChange={() => setDraftRoleFilter((current) => current.length === 0 ? roles.filter((item) => item !== role) : current.includes(role) ? current.filter((item) => item !== role) : [...current, role])} />} label={role === 'viewer-full' ? 'Viewer (All Departments)' : role.charAt(0).toUpperCase() + role.slice(1)} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{Array.from(new Set(usersList.map((user) => user.department))).sort().map((department, _, departments) => <FormControlLabel key={department} control={<Checkbox checked={draftDepartmentFilter.length === 0 || draftDepartmentFilter.includes(department)} onChange={() => setDraftDepartmentFilter((current) => current.length === 0 ? departments.filter((item) => item !== department) : current.includes(department) ? current.filter((item) => item !== department) : [...current, department])} />} label={department} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Grid container spacing={2}><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftDateFrom} onChange={setDraftDateFrom} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftDateTo} onChange={setDraftDateTo} /></Grid></Grid><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const today = new Date().toISOString().slice(0, 10); setDraftDateFrom(today); setDraftDateTo(today); }}>Today</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This month</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-01-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This year</Button></Stack><TextField select fullWidth label="Sort" value={draftSortOrder} onChange={(event) => setDraftSortOrder(event.target.value as 'newest' | 'oldest')}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => { setDraftRoleFilter([]); setDraftDepartmentFilter([]); setDraftDateFrom(''); setDraftDateTo(''); setDraftSortOrder('newest'); }}>Reset</Button><Button variant="contained" onClick={() => { setRoleFilter([...draftRoleFilter]); setDepartmentFilter([...draftDepartmentFilter]); setDateFrom(draftDateFrom); setDateTo(draftDateTo); setSortOrder(draftSortOrder); setCurrentPage(1); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} maxWidth="sm" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Filter Users</DialogTitle><DialogContent dividers><Stack spacing={2}><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Roles</Typography>{ALL_ROLES.map((role) => <FormControlLabel key={role} control={<Checkbox checked={draftRoleFilter.includes(role)} onChange={() => setDraftRoleFilter((current) => current.includes(role) ? current.filter((item) => item !== role) : [...current, role])} />} label={roleLabel(role)} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{Array.from(new Set(usersList.map((user) => user.department))).sort().map((department) => <FormControlLabel key={department} control={<Checkbox checked={draftDepartmentFilter.includes(department)} onChange={() => setDraftDepartmentFilter((current) => current.includes(department) ? current.filter((item) => item !== department) : [...current, department])} />} label={department} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Grid container spacing={2}><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftDateFrom} onChange={setDraftDateFrom} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftDateTo} onChange={setDraftDateTo} /></Grid></Grid><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const today = new Date().toISOString().slice(0, 10); setDraftDateFrom(today); setDraftDateTo(today); }}>Today</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This month</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-01-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This year</Button></Stack><TextField select fullWidth label="Sort" value={draftSortOrder} onChange={(event) => setDraftSortOrder(event.target.value as 'newest' | 'oldest')}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => { setDraftRoleFilter([...ALL_ROLES]); setDraftDepartmentFilter(Array.from(new Set(usersList.map((user) => user.department))).sort()); setDraftDateFrom(''); setDraftDateTo(''); setDraftSortOrder('newest'); }}>Reset</Button><Button variant="contained" onClick={() => { setRoleFilter([...draftRoleFilter]); setDepartmentFilter([...draftDepartmentFilter]); setDateFrom(draftDateFrom); setDateTo(draftDateTo); setSortOrder(draftSortOrder); setCurrentPage(1); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
     </Box>
   );
 }

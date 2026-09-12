@@ -15,10 +15,6 @@ import {
   FormControlLabel,
   Button,
   Divider,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
 } from '@mui/material';
 import { SettingsGridSkeleton } from '@/components/Skeletons';
 import {
@@ -37,7 +33,6 @@ export default function SettingsPage() {
   const router = useRouter();
   const session = authClient.useSession();
   const [maintenanceMode, setMaintenanceMode] = useState(false);
-  const [auditLogsOpen, setAuditLogsOpen] = useState(false);
   const [counts, setCounts] = useState({ capdevFieldsCount: 0, requestFieldsCount: 0 });
   const [role, setRole] = useState<AppRole | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
@@ -86,7 +81,7 @@ export default function SettingsPage() {
       footer: (
         <Stack direction="row" spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
           <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/admin/users')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Manage Users</Button>
-          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => setAuditLogsOpen(true)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>View Audit Logs</Button>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/admin/audit-logs')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>View Audit Logs</Button>
         </Stack>
       ),
     },
@@ -171,7 +166,7 @@ export default function SettingsPage() {
     },
   ].filter((item) => role === 'admin' || item.title === 'Reports' || item.title === 'Analytics');
 
-  if (role === 'employee') {
+  if (role === 'employee' || role === 'employee-department') {
     return <Box sx={{ display: 'grid', minHeight: 'calc(100vh - 72px)', placeItems: 'center' }}><Typography color="text.secondary">Settings are available to administrators and viewers only.</Typography></Box>;
   }
 
@@ -277,11 +272,6 @@ export default function SettingsPage() {
           ))}
         </Grid>
       </Container>
-      <Dialog open={auditLogsOpen} onClose={() => setAuditLogsOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle sx={{ fontWeight: 800 }}>Audit Logs</DialogTitle>
-        <DialogContent dividers><Typography color="text.secondary">Audit log records will appear here.</Typography></DialogContent>
-        <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setAuditLogsOpen(false)}>Close</Button></DialogActions>
-      </Dialog>
     </Box>
   );
 }

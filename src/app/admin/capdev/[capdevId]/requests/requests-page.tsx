@@ -121,7 +121,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [filters, setFilters] = useState({ setting: '', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' });
+  const [filters, setFilters] = useState({ setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' });
   const [draftFilters, setDraftFilters] = useState(filters);
   const [page, setPage] = useState(1);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -213,8 +213,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const filtered = useMemo(() => requests.filter((request) => {
     const date = new Date(request.createdAt).getTime();
     return (
-      `${request.requestorName} ${request.description}`.toLowerCase().includes(search.toLowerCase()) &&
-      (!filters.setting || request.setting === filters.setting) &&
+      (request.requestorName || '').toLowerCase().includes(search.toLowerCase()) &&
+      (filters.setting === 'all' || request.setting === filters.setting) &&
       (!filters.min || Number(request.requestedBudget) >= Number(filters.min)) &&
       (!filters.max || Number(request.requestedBudget) <= Number(filters.max)) &&
       (!filters.dateFrom || date >= new Date(filters.dateFrom).getTime()) &&
@@ -259,7 +259,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const areRequiredFieldsComplete = requiredDefinitions.every(hasDynamicValue);
 
   const saveRequest = async () => {
-    if (!session.data || !form.description || !form.requestedBudget) return;
+    if (!session.data || !form.requestedBudget) return;
 
     const missingRequiredFields = requiredDefinitions.filter((field) => !hasDynamicValue(field));
     if (missingRequiredFields.length > 0) {
@@ -426,9 +426,9 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   if (session.isPending || loading) return <ResourceGridSkeleton titleWidth={220} />;
   if (!session.data) return null;
   if (!capdev) return <Box sx={{ py: 8, textAlign: 'center' }}><Typography variant="h6" color="text.secondary">CapDev project not found.</Typography></Box>;
-  const canManageRequest = role === 'admin' || role === 'employee';
+  const canManageRequest = role === 'admin' || role === 'employee' || role === 'employee-department';
   const currentUserId = session.data.user.id;
-  const canEditRequest = (request: RequestRecord) => role === 'admin' || (role === 'employee' && request.userId === currentUserId);
+  const canEditRequest = (request: RequestRecord) => role === 'admin' || role === 'employee-department' || (role === 'employee' && request.userId === currentUserId);
   const isCapdevBudgetDepleted = Number(capdev.budget) <= 0;
 
   return (
@@ -451,7 +451,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
             <TextField
               size="small"
-              placeholder="Search requestor or description..."
+              placeholder="Search requestor..."
               value={search}
               onChange={(event) => { setSearch(event.target.value); resetPage(); }}
               slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> } }}
@@ -502,7 +502,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                       </Box>
                       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                         <Typography variant="h6" noWrap sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>
-                          {request.description}
+                          Request #{request.id}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
                           {request.setting === 'internal' ? 'Internal' : 'External'}
@@ -603,7 +603,6 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                   <TextField fullWidth label="Department" value={capdev.department || '—'} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
                 </Grid>
                 <Grid size={12}>
-                  <TextField fullWidth label="Description" multiline minRows={2} value={capdev.description || '—'} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
                   <TextField fullWidth label="Initial Balance" value={formatCurrency(capdev.initialBudget)} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
@@ -667,7 +666,6 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 </TextField>
               </Grid>
               <Grid size={12}>
-                <TextField required fullWidth label="Description" multiline minRows={2} value={form.description} onChange={(event) => setValue({ description: event.target.value })} />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField
@@ -757,7 +755,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           {(!editing || canEditRequest(editing)) && canManageRequest && (
             <Button
               onClick={saveRequest}
-              disabled={saving || !form.description || !form.requestedBudget || !areRequiredFieldsComplete}
+              disabled={saving || !form.requestedBudget || !areRequiredFieldsComplete}
               variant="contained"
             >
               {saving ? 'Saving' : 'Save Request'}
@@ -806,7 +804,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           <Grid container spacing={2} sx={{ pt: .5 }}>
             <Grid size={12}>
               <TextField select fullWidth label="Setting" value={draftFilters.setting} onChange={(e) => setDraftFilters({ ...draftFilters, setting: e.target.value })}>
-                <MenuItem value="">All settings</MenuItem>
+                <MenuItem value="all">All settings</MenuItem>
                 <MenuItem value="internal">Internal</MenuItem>
                 <MenuItem value="external">External</MenuItem>
               </TextField>
@@ -840,7 +838,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           </Grid>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
-          <Button onClick={() => setDraftFilters({ setting: '', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' })}>
+          <Button onClick={() => setDraftFilters({ setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' })}>
             Reset
           </Button>
           <Button variant="contained" onClick={() => { setFilters(draftFilters); resetPage(); setFiltersOpen(false); }}>

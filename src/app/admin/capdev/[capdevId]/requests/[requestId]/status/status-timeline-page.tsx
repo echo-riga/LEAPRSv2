@@ -12,6 +12,8 @@ import {
   Description as FormIcon,
   OpenInNew as OpenInNewIcon,
   Payments as PaymentsIcon,
+  PlayArrow as ResumeIcon,
+  PushPin as StopperIcon,
 } from '@mui/icons-material';
 import {
   Alert,
@@ -44,13 +46,15 @@ import {
   getCurrentUserAccess,
   getRequestById,
   getRequestStatusUpdates,
+  resumeRequestProgress,
+  stopRequestProgress,
   updateRequestStatus,
   uploadFilesToGoogleDrive,
   type AppRole,
   type StatusAttachment,
 } from '@/app/actions';
 
-type RequestSummary = { id: number; capdevId: number; setting: string; requestedBudget: string; status: string };
+type RequestSummary = { id: number; capdevId: number; setting: string; requestedBudget: string; status: string; isStopped: boolean; activeStopperId: number | null };
 type StatusUpdate = {
   id: number;
   requestId: number;
@@ -61,6 +65,10 @@ type StatusUpdate = {
   statusMark?: string | null;
   markAsComplete: boolean;
   subtractsRequestedAmount: boolean;
+  isStopper: boolean;
+  isStopperResponse: boolean;
+  isResume: boolean;
+  stopperId: number | null;
   createdAt: Date | string;
 };
 type StatusForm = {
@@ -69,107 +77,42 @@ type StatusForm = {
   files: File[];
   statusMark: 'pending' | 'denied' | 'completed' | 'accepted' | null;
   subtractsRequestedAmount: boolean;
+  addStopper: boolean;
 };
 
 const GOOGLE_FORM_FEEDBACK_URL = 'https://forms.gle/c8BjUUoPxYWiBxnF8';
-const EMPTY_FORM: StatusForm = { statusUpdate: '', remarks: '', files: [], statusMark: 'pending', subtractsRequestedAmount: false };
+const EMPTY_FORM: StatusForm = { statusUpdate: '', remarks: '', files: [], statusMark: 'pending', subtractsRequestedAmount: false, addStopper: false };
 const formatDateTime = (value: Date | string) =>
   new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
 const formatCurrency = (value: string | number) =>
   new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
 
 function ConnectorDown({ toResolution = false }: { toResolution?: boolean }) {
-  if (toResolution) {
-    return (
-      <Box
-        sx={{
-          display: { xs: 'none', md: 'flex' },
-          position: 'absolute',
-          bottom: -63,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          color: 'primary.main',
-          zIndex: 1,
-        }}
-      >
-        <svg width="32" height="64" viewBox="0 0 32 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M16 0V44" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-          <path d="M16 64L2 38H30L16 64Z" fill="currentColor" />
-        </svg>
-      </Box>
-    );
-  }
-
+  const height = toResolution ? 88 : 40;
   return (
-    <Box sx={{ display: { xs: 'none', md: 'flex' }, position: 'absolute', bottom: -35, right: 24, color: 'primary.main', zIndex: 1 }}>
-      <svg width="32" height="36" viewBox="0 0 32 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M16 0V16" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-        <path d="M16 36L2 10H30L16 36Z" fill="currentColor" />
-      </svg>
+    <Box sx={{ display: { xs: 'none', md: 'block' }, position: 'absolute', bottom: `-${height}px`, left: '50%', width: 22, height, transform: 'translateX(-50%)', color: 'primary.main', zIndex: 1, pointerEvents: 'none' }}>
+      <Box sx={{ position: 'absolute', top: 0, bottom: 13, left: 8.5, width: 5, bgcolor: 'currentColor', borderRadius: 2 }} />
+      <Box sx={{ position: 'absolute', bottom: 0, left: 1, width: 0, height: 0, borderLeft: '10px solid transparent', borderRight: '10px solid transparent', borderTop: '13px solid currentColor' }} />
     </Box>
   );
 }
 
 function ConnectorRight({ toResolution = false }: { toResolution?: boolean }) {
-  if (toResolution) {
-    return (
-      <Box
-        sx={{
-          display: { xs: 'none', md: 'flex' },
-          position: 'absolute',
-          top: '50%',
-          right: -84,
-          transform: 'translateY(-50%)',
-          color: 'primary.main',
-          zIndex: 1,
-        }}
-      >
-        <svg width="84" height="32" viewBox="0 0 84 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M0 16H64" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-          <path d="M84 16L58 2V30L84 16Z" fill="currentColor" />
-        </svg>
-      </Box>
-    );
-  }
-
+  const width = toResolution ? 112 : 56;
   return (
-    <Box sx={{ display: { xs: 'none', md: 'flex' }, position: 'absolute', top: '50%', right: -48, transform: 'translateY(-50%)', color: 'primary.main', zIndex: 1 }}>
-      <svg width="48" height="32" viewBox="0 0 48 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M0 16H28" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-        <path d="M48 16L22 2V30L48 16Z" fill="currentColor" />
-      </svg>
+    <Box sx={{ display: { xs: 'none', md: 'block' }, position: 'absolute', top: '50%', right: `-${width}px`, width, height: 22, transform: 'translateY(-50%)', color: 'primary.main', zIndex: 1, pointerEvents: 'none' }}>
+      <Box sx={{ position: 'absolute', left: 0, right: 13, top: 8.5, height: 5, bgcolor: 'currentColor', borderRadius: 2 }} />
+      <Box sx={{ position: 'absolute', right: 0, top: 1, width: 0, height: 0, borderTop: '10px solid transparent', borderBottom: '10px solid transparent', borderLeft: '13px solid currentColor' }} />
     </Box>
   );
 }
 
 function ConnectorLeft({ toResolution = false }: { toResolution?: boolean }) {
-  if (toResolution) {
-    return (
-      <Box
-        sx={{
-          display: { xs: 'none', md: 'flex' },
-          position: 'absolute',
-          top: '50%',
-          left: -84,
-          transform: 'translateY(-50%)',
-          color: 'primary.main',
-          zIndex: 1,
-        }}
-      >
-        <svg width="84" height="32" viewBox="0 0 84 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M84 16H20" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-          <path d="M0 16L26 2V30L0 16Z" fill="currentColor" />
-        </svg>
-      </Box>
-    );
-  }
-
+  const width = toResolution ? 112 : 56;
   return (
-    <Box sx={{ display: { xs: 'none', md: 'flex' }, position: 'absolute', top: '50%', left: -48, transform: 'translateY(-50%)', color: 'primary.main', zIndex: 1 }}>
-      <svg width="48" height="32" viewBox="0 0 48 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M48 16H20" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-        <path d="M0 16L26 2V30L0 16Z" fill="currentColor" />
-      </svg>
+    <Box sx={{ display: { xs: 'none', md: 'block' }, position: 'absolute', top: '50%', left: `-${width}px`, width, height: 22, transform: 'translateY(-50%)', color: 'primary.main', zIndex: 1, pointerEvents: 'none' }}>
+      <Box sx={{ position: 'absolute', left: 13, right: 0, top: 8.5, height: 5, bgcolor: 'currentColor', borderRadius: 2 }} />
+      <Box sx={{ position: 'absolute', left: 0, top: 1, width: 0, height: 0, borderTop: '10px solid transparent', borderBottom: '10px solid transparent', borderRight: '13px solid currentColor' }} />
     </Box>
   );
 }
@@ -192,6 +135,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [deductModalOpen, setDeductModalOpen] = useState(false);
   const [editableDeductedAmount, setEditableDeductedAmount] = useState('');
   const [role, setRole] = useState<AppRole>('employee');
+  const [stopperResponse, setStopperResponse] = useState({ text: '', files: [] as File[] });
+  const [respondingToStopper, setRespondingToStopper] = useState(false);
 
   useEffect(() => {
     if (session.data) {
@@ -221,8 +166,11 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         setting: requestData.setting,
         requestedBudget: String(requestData.requestedBudget),
         status: requestData.status || 'in_progress',
+        isStopped: Boolean(requestData.isStopped),
+        activeStopperId: requestData.activeStopperId ?? null,
       });
       setUpdates(updateData.map((update) => ({ ...update, files: Array.isArray(update.files) ? update.files : [] })));
+      window.dispatchEvent(new CustomEvent('leaprs:request-timeline-changed', { detail: requestId }));
     }
     setLoading(false);
   }, [capdevId, requestId]);
@@ -235,6 +183,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const isCompleted = request?.status === 'completed';
   const isDenied = request?.status === 'denied';
   const isConcluded = isCompleted || isDenied;
+  const canControlStopper = role === 'admin' || role === 'employee-department';
+  const visibleUpdates = useMemo(() => updates.filter((update) => !update.isStopperResponse && !update.isResume), [updates]);
 
   const openAdd = () => {
     setError('');
@@ -265,8 +215,28 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const removeSelectedFile = (file: File) =>
     setForm((current) => ({ ...current, files: current.files.filter((candidate) => candidate !== file) }));
 
+  const addStopperResponseFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(event.target.files ?? []);
+    setStopperResponse((current) => ({ ...current, files: [...current.files, ...selected].filter((file, index, files) => files.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index) }));
+    event.target.value = '';
+  };
+
+  const submitStopperResponse = async (stopperId: number) => {
+    if (!session.data || !stopperResponse.text.trim()) return;
+    setRespondingToStopper(true);
+    const uploadData = new FormData();
+    stopperResponse.files.forEach((file) => uploadData.append('files', file));
+    const uploaded = await uploadFilesToGoogleDrive(uploadData);
+    if (!uploaded.success) { setError(uploaded.error || 'Unable to upload the selected files.'); setRespondingToStopper(false); return; }
+    const result = await createRequestStatusUpdate({ requestId, userId: session.data.user.id, statusUpdate: stopperResponse.text.trim(), files: uploaded.files, isStopperResponse: true, stopperId });
+    if (result.success) { setStopperResponse({ text: '', files: [] }); await loadData(); }
+    else setError(result.error || 'Unable to save the stopper response.');
+    setRespondingToStopper(false);
+  };
+
   const handleInitiateSave = () => {
     if (!session.data || !form.statusUpdate.trim()) return;
+    if (form.addStopper) { void executeStopper(); return; }
     if (!form.statusMark) {
       setError('Please select a Status Mark (Pending, Completed, or Denied).');
       return;
@@ -279,6 +249,27 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       return;
     }
     void executeSaveUpdate();
+  };
+
+  const executeStopper = async () => {
+    if (!session.data || !form.statusUpdate.trim()) return;
+    setSaving(true);
+    const uploadData = new FormData();
+    form.files.forEach((file) => uploadData.append('files', file));
+    const uploaded = await uploadFilesToGoogleDrive(uploadData);
+    if (!uploaded.success) { setError(uploaded.error || 'Unable to upload the selected files.'); setSaving(false); return; }
+    const result = await stopRequestProgress({ requestId, reason: form.statusUpdate.trim(), files: uploaded.files });
+    if (result.success) { setDialogOpen(false); await loadData(); }
+    else setError(result.error || 'Unable to stop request progress.');
+    setSaving(false);
+  };
+
+  const handleResumeProgress = async () => {
+    setSaving(true);
+    const result = await resumeRequestProgress(requestId);
+    if (result.success) await loadData();
+    else setError(result.error || 'Unable to resume request progress.');
+    setSaving(false);
   };
 
   const executeSaveUpdate = async (deductedAmountOverride?: string) => {
@@ -351,7 +342,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     );
   }
 
-  const allCardsCount = updates.length + 1;
+  const allCardsCount = visibleUpdates.length + 1;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px)' }}>
@@ -393,22 +384,26 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           sx={{
             display: 'grid',
             gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' },
-            columnGap: { xs: 3, md: 6 },
-            rowGap: { xs: 3, md: 4.5 },
+            columnGap: { xs: 3, md: 7 },
+            rowGap: { xs: 3, md: 5 },
             pb: 12,
           }}
         >
-          {updates.map((update, index) => {
+          {visibleUpdates.map((update, index) => {
             const row = Math.floor(index / 3);
             const column = row % 2 === 0 ? (index % 3) + 1 : 3 - (index % 3);
             const isRowEnd = (index + 1) % 3 === 0;
-            const isLastToResolution = index === updates.length - 1;
+            const isLastToResolution = index === visibleUpdates.length - 1;
             const files = Array.isArray(update.files)
               ? update.files.filter(
                 (file): file is StatusAttachment =>
                   typeof file === 'object' && file !== null && 'name' in file && 'url' in file
               )
               : [];
+            const isStopper = update.isStopper;
+            const stopperResponses = isStopper ? updates.filter((item) => item.isStopperResponse && item.stopperId === update.id) : [];
+            const wasResumed = isStopper && updates.some((item) => item.isResume && item.stopperId === update.id);
+            const isActiveStopper = isStopper && request.isStopped && request.activeStopperId === update.id;
 
             return (
               <Box
@@ -425,18 +420,18 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     borderRadius: 2,
                     bgcolor: '#ffffff',
                     height: '100%',
-                    minHeight: 220,
                     display: 'flex',
                     flexDirection: 'column',
                     transition: 'all 0.2s',
-                    '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' },
+                    borderColor: isStopper ? 'error.main' : undefined,
+                    '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: isStopper ? 'error.dark' : 'primary.main' },
                   }}
                 >
                   <CardContent sx={{ p: 2.75, flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
                     <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start', mb: 2 }}>
                       <Box
                         sx={{
-                          bgcolor: 'rgba(46, 125, 50, 0.08)',
+                          bgcolor: isStopper ? 'rgba(211, 47, 47, 0.1)' : 'rgba(46, 125, 50, 0.08)',
                           p: 1.1,
                           borderRadius: 2,
                           display: 'flex',
@@ -444,17 +439,27 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                           justifyContent: 'center',
                         }}
                       >
-                        <RequestIcon color="primary" />
+                        {isStopper ? <StopperIcon color="error" sx={{ transform: 'rotate(35deg)' }} /> : <RequestIcon color="primary" />}
                       </Box>
                       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                         <Typography variant="h6" sx={{ fontWeight: '700', lineHeight: 1.2 }}>
-                          Update {index + 1}
+                          {isStopper ? 'Stopper' : `Update ${index + 1}`}
                         </Typography>
                         <Typography variant="body2" color="text.secondary" noWrap>
                           {update.authorName || 'Staff member'} · {formatDateTime(update.createdAt)}
                         </Typography>
                       </Box>
-                      {update.statusMark && (
+                      {isStopper ? (
+                        <Chip
+                          icon={wasResumed
+                            ? <ResumeIcon sx={{ fontSize: '17px !important' }} />
+                            : <StopperIcon sx={{ fontSize: '15px !important' }} />}
+                          label={wasResumed ? 'Resumed' : 'Stopped'}
+                          color={wasResumed ? 'success' : 'error'}
+                          size="small"
+                          sx={{ fontWeight: 700 }}
+                        />
+                      ) : update.statusMark && (
                         <Chip
                           label={
                             update.statusMark === 'pending'
@@ -475,6 +480,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         />
                       )}
                     </Stack>
+                    {isStopper && <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Reason</Typography>}
                     <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary', mb: update.remarks ? 0.75 : 0 }}>
                       {update.statusUpdate}
                     </Typography>
@@ -501,6 +507,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         ))}
                       </Stack>
                     )}
+                    {isStopper && stopperResponses.length > 0 && <Stack spacing={1} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>{stopperResponses.map((response) => <Box key={response.id}><Typography variant="caption" color="text.secondary">{response.authorName || 'Employee'} · {formatDateTime(response.createdAt)}</Typography><Typography variant="body2" sx={{ fontWeight: 600 }}>{response.statusUpdate}</Typography>{Array.isArray(response.files) && response.files.length > 0 && <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>{response.files.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'name' in file && 'url' in file).map((file) => <Button key={file.id} component="a" href={file.url} target="_blank" rel="noreferrer" size="small" sx={{ minWidth: 0, px: 0.5, textTransform: 'none' }}>{file.name}</Button>)}</Stack>}</Box>)}</Stack>}
+                    {isActiveStopper && role === 'employee' && <Stack spacing={1.25} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}><TextField fullWidth multiline minRows={2} label="Status Update" value={stopperResponse.text} onChange={(event) => setStopperResponse((current) => ({ ...current, text: event.target.value }))} /><Button component="label" variant="outlined" size="small" startIcon={<AttachFileIcon />}>Attach Files<input hidden type="file" multiple onChange={addStopperResponseFiles} /></Button>{stopperResponse.files.length > 0 && <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>{stopperResponse.files.map((file) => <Chip key={`${file.name}-${file.lastModified}-${file.size}`} label={file.name} size="small" onDelete={() => setStopperResponse((current) => ({ ...current, files: current.files.filter((item) => item !== file) }))} />)}</Stack>}<Button variant="contained" size="small" onClick={() => void submitStopperResponse(update.id)} disabled={respondingToStopper || !stopperResponse.text.trim()}>{respondingToStopper ? 'Saving...' : 'Submit Update'}</Button></Stack>}
                     <Stack direction="row" spacing={1} sx={{ mt: 'auto', pt: 2, flexWrap: 'wrap', rowGap: 0.5 }}>
                       {update.markAsComplete && (
                         <Chip icon={<CheckCircleIcon />} label="Completed" color="success" size="small" sx={{ fontWeight: 700 }} />
@@ -532,10 +540,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
           {/* Floating Action / Conclude Option Beside Last Status Update */}
           {(() => {
-            const concludeIndex = updates.length;
+            const concludeIndex = visibleUpdates.length;
             const row = Math.floor(concludeIndex / 3);
             const column = row % 2 === 0 ? (concludeIndex % 3) + 1 : 3 - (concludeIndex % 3);
-            const isFromRowEnd = updates.length > 0 && updates.length % 3 === 0;
+            const isFromRowEnd = visibleUpdates.length > 0 && visibleUpdates.length % 3 === 0;
             const isFromLeft = !isFromRowEnd && row % 2 === 0;
             const isFromRight = !isFromRowEnd && row % 2 !== 0;
 
@@ -548,14 +556,13 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   display: 'flex',
                   alignItems: isFromRowEnd ? 'flex-start' : 'center',
                   justifyContent: isFromLeft ? 'flex-start' : isFromRight ? 'flex-end' : 'center',
-                  minHeight: 220,
                   pl: isFromLeft ? { md: 7, xs: 0 } : 0,
                   pr: isFromRight ? { md: 7, xs: 0 } : 0,
                   pt: isFromRowEnd ? { md: 6, xs: 0 } : 0,
                 }}
               >
                 {!isConcluded ? (
-                  (role === 'admin' || role === 'employee') ? (
+                  (role === 'admin' || role === 'employee' || role === 'employee-department') ? (
                     <Stack spacing={2} sx={{ width: '100%', maxWidth: 210 }}>
                       <Button
                         variant="contained"
@@ -717,11 +724,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         </Box>
       </Container>
 
-      {!isConcluded && (role === 'admin' || role === 'employee') && (
+      {!isConcluded && (request.isStopped ? canControlStopper : (role === 'admin' || role === 'employee' || role === 'employee-department')) && (
         <Fab
           variant="extended"
           color="primary"
-          onClick={openAdd}
+          onClick={request.isStopped ? () => void handleResumeProgress() : openAdd}
+          disabled={saving}
           sx={{
             position: 'fixed',
             right: 24,
@@ -732,8 +740,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)',
           }}
         >
-          <AddIcon sx={{ mr: 1 }} />
-          Add Status
+          {request.isStopped ? <ResumeIcon sx={{ mr: 1 }} /> : <AddIcon sx={{ mr: 1 }} />}
+          {request.isStopped ? 'Resume Progress' : 'Add Status'}
         </Fab>
       )}
 
@@ -749,7 +757,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               fullWidth
               multiline
               minRows={2}
-              label="Status Update"
+              label={form.addStopper ? 'Stopper Reason' : 'Status Update'}
               value={form.statusUpdate}
               onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
             />
@@ -778,7 +786,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               </Stack>
             )}
 
-            <Stack spacing={1}>
+            {!form.addStopper && <Stack spacing={1}>
               <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
                 Status Mark <Box component="span" sx={{ color: 'error.main' }}>*</Box>
               </Typography>
@@ -839,9 +847,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   Denied
                 </ToggleButton>
               </ToggleButtonGroup>
-            </Stack>
+            </Stack>}
 
-            <FormControlLabel
+            {!form.addStopper && <FormControlLabel
               control={
                 <Checkbox
                   checked={hasDeductedBudget ? false : form.subtractsRequestedAmount}
@@ -858,7 +866,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   {hasDeductedBudget && ' (Already deducted)'}
                 </Typography>
               }
-            />
+            />}
+
+            {canControlStopper && <FormControlLabel control={<Checkbox checked={form.addStopper} onChange={(event) => setForm((current) => ({ ...current, addStopper: event.target.checked }))} color="error" />} label={<Typography variant="body2" sx={{ fontWeight: 500 }}>Add stopper</Typography>} />}
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
@@ -868,10 +878,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           <Button
             variant="contained"
             onClick={handleInitiateSave}
-            disabled={saving || !form.statusUpdate.trim() || !form.statusMark}
+            disabled={saving || !form.statusUpdate.trim() || (!form.addStopper && !form.statusMark)}
             sx={{ fontWeight: 700, borderRadius: 2 }}
           >
-            {saving ? 'Saving...' : 'Save Status'}
+            {saving ? 'Saving...' : form.addStopper ? 'Stop Progress' : 'Save Status'}
           </Button>
         </DialogActions>
       </Dialog>
