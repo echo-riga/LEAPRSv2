@@ -10,6 +10,7 @@ import {
   CheckCircle as CheckCircleIcon,
   ContentCopy as ContentCopyIcon,
   Description as FormIcon,
+  Insights as SummaryIcon,
   OpenInNew as OpenInNewIcon,
   Payments as PaymentsIcon,
   PlayArrow as ResumeIcon,
@@ -39,12 +40,15 @@ import {
   Typography,
 } from '@mui/material';
 import { TimelineGridSkeleton } from '@/components/Skeletons';
+import EvaluationSummaryDialog from '@/components/EvaluationSummaryDialog';
 import { authClient } from '@/lib/auth/client';
 import {
   createRequestStatusUpdate,
   getCapdevById,
   getCurrentUserAccess,
+  getOrCreateRequestEvaluationForms,
   getRequestById,
+  getRequestEvaluationSummary,
   getRequestStatusUpdates,
   resumeRequestProgress,
   stopRequestProgress,
@@ -53,8 +57,21 @@ import {
   type AppRole,
   type StatusAttachment,
 } from '@/app/actions';
+import type { EvaluationSummary } from '@/lib/google-forms';
 
-type RequestSummary = { id: number; capdevId: number; setting: string; requestedBudget: string; status: string; isStopped: boolean; activeStopperId: number | null };
+type RequestSummary = {
+  id: number;
+  capdevId: number;
+  setting: string;
+  requestedBudget: string;
+  status: string;
+  isStopped: boolean;
+  activeStopperId: number | null;
+  participantFeedbackFormId: string | null;
+  participantFeedbackFormUrl: string | null;
+  supervisorEvaluationFormId: string | null;
+  supervisorEvaluationFormUrl: string | null;
+};
 type StatusUpdate = {
   id: number;
   requestId: number;
@@ -80,7 +97,6 @@ type StatusForm = {
   addStopper: boolean;
 };
 
-const GOOGLE_FORM_FEEDBACK_URL = 'https://forms.gle/c8BjUUoPxYWiBxnF8';
 const EMPTY_FORM: StatusForm = { statusUpdate: '', remarks: '', files: [], statusMark: 'pending', subtractsRequestedAmount: false, addStopper: false };
 const formatDateTime = (value: Date | string) =>
   new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
@@ -128,6 +144,11 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [concluding, setConcluding] = useState(false);
   const [formsModalOpen, setFormsModalOpen] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const [summaryModalOpen, setSummaryModalOpen] = useState(false);
+  const [summaryKind, setSummaryKind] = useState<'participant' | 'supervisor'>('participant');
+  const [evaluationSummary, setEvaluationSummary] = useState<EvaluationSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState('');
   const [form, setForm] = useState<StatusForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -160,6 +181,20 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       });
     }
     if (requestData?.capdevId === capdevId) {
+      let formFields = {
+        participantFeedbackFormId: requestData.participantFeedbackFormId,
+        participantFeedbackFormUrl: requestData.participantFeedbackFormUrl,
+        supervisorEvaluationFormId: requestData.supervisorEvaluationFormId,
+        supervisorEvaluationFormUrl: requestData.supervisorEvaluationFormUrl,
+      };
+      if (
+        requestData.status === 'completed' &&
+        (!formFields.participantFeedbackFormUrl || !formFields.supervisorEvaluationFormUrl)
+      ) {
+        const generated = await getOrCreateRequestEvaluationForms(requestId);
+        if (generated.success) formFields = generated.forms;
+        else setError(generated.error);
+      }
       setRequest({
         id: requestData.id,
         capdevId: requestData.capdevId,
@@ -168,6 +203,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         status: requestData.status || 'in_progress',
         isStopped: Boolean(requestData.isStopped),
         activeStopperId: requestData.activeStopperId ?? null,
+        ...formFields,
       });
       setUpdates(updateData.map((update) => ({ ...update, files: Array.isArray(update.files) ? update.files : [] })));
       window.dispatchEvent(new CustomEvent('leaprs:request-timeline-changed', { detail: requestId }));
@@ -304,10 +340,24 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     setSaving(false);
   };
 
-  const handleCopyFormLink = (formName: string) => {
-    void navigator.clipboard.writeText(GOOGLE_FORM_FEEDBACK_URL);
+  const handleCopyFormLink = (formName: string, url: string | null) => {
+    if (!url) return;
+    void navigator.clipboard.writeText(url);
     setCopiedLink(formName);
     setTimeout(() => setCopiedLink(null), 2500);
+  };
+
+  const loadEvaluationSummary = async (kind: 'participant' | 'supervisor') => {
+    setSummaryKind(kind);
+    setFormsModalOpen(false);
+    setSummaryModalOpen(true);
+    setSummaryLoading(true);
+    setSummaryError('');
+    setEvaluationSummary(null);
+    const result = await getRequestEvaluationSummary(requestId, kind);
+    if (result.success) setEvaluationSummary(result.summary);
+    else setSummaryError(result.error);
+    setSummaryLoading(false);
   };
 
   const handleConcludeRequest = async () => {
@@ -612,7 +662,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     variant="outlined"
                     sx={{
                       width: '100%',
-                      maxWidth: 360,
+                      maxWidth: 460,
                       borderRadius: 2,
                       bgcolor: '#ffffff',
                       borderColor: 'success.main',
@@ -636,7 +686,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       <Stack spacing={1}>
                         {/* Form 1 */}
                         <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: '#fafcfa', border: '1px solid rgba(0,0,0,0.06)' }}>
-                          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1 }}>
                             <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
                               Participant Feedback
                             </Typography>
@@ -647,9 +697,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 color="primary"
                                 startIcon={<OpenInNewIcon sx={{ fontSize: 13 }} />}
                                 component="a"
-                                href={GOOGLE_FORM_FEEDBACK_URL}
+                                href={request.participantFeedbackFormUrl || undefined}
                                 target="_blank"
                                 rel="noreferrer"
+                                disabled={!request.participantFeedbackFormUrl}
                                 sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
                               >
                                 Open
@@ -659,10 +710,21 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 variant="outlined"
                                 color="inherit"
                                 startIcon={copiedLink === 'Participant Form' ? <CheckIcon sx={{ fontSize: 13, color: 'success.main' }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
-                                onClick={() => handleCopyFormLink('Participant Form')}
+                                onClick={() => handleCopyFormLink('Participant Form', request.participantFeedbackFormUrl)}
+                                disabled={!request.participantFeedbackFormUrl}
                                 sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
                               >
                                 {copiedLink === 'Participant Form' ? 'Copied!' : 'Copy'}
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={<SummaryIcon sx={{ fontSize: 13 }} />}
+                                onClick={() => void loadEvaluationSummary('participant')}
+                                disabled={!request.participantFeedbackFormId}
+                                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
+                              >
+                                Summary
                               </Button>
                             </Stack>
                           </Stack>
@@ -670,7 +732,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
                         {/* Form 2 */}
                         <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: '#fafcfa', border: '1px solid rgba(0,0,0,0.06)' }}>
-                          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1 }}>
                             <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
                               Supervisor Evaluation
                             </Typography>
@@ -681,9 +743,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 color="primary"
                                 startIcon={<OpenInNewIcon sx={{ fontSize: 13 }} />}
                                 component="a"
-                                href={GOOGLE_FORM_FEEDBACK_URL}
+                                href={request.supervisorEvaluationFormUrl || undefined}
                                 target="_blank"
                                 rel="noreferrer"
+                                disabled={!request.supervisorEvaluationFormUrl}
                                 sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
                               >
                                 Open
@@ -693,10 +756,21 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 variant="outlined"
                                 color="inherit"
                                 startIcon={copiedLink === 'Supervisor Form' ? <CheckIcon sx={{ fontSize: 13, color: 'success.main' }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
-                                onClick={() => handleCopyFormLink('Supervisor Form')}
+                                onClick={() => handleCopyFormLink('Supervisor Form', request.supervisorEvaluationFormUrl)}
+                                disabled={!request.supervisorEvaluationFormUrl}
                                 sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
                               >
                                 {copiedLink === 'Supervisor Form' ? 'Copied!' : 'Copy'}
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={<SummaryIcon sx={{ fontSize: 13 }} />}
+                                onClick={() => void loadEvaluationSummary('supervisor')}
+                                disabled={!request.supervisorEvaluationFormId}
+                                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
+                              >
+                                Summary
                               </Button>
                             </Stack>
                           </Stack>
@@ -1038,7 +1112,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             {/* Form 1 */}
             <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#fafcfa' }}>
               <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1.5 }}>
                   <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', minWidth: 0 }}>
                     <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: 'rgba(21, 101, 192, 0.1)', color: '#1565c0', display: 'flex' }}>
                       <FormIcon fontSize="small" />
@@ -1054,9 +1128,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       size="small"
                       startIcon={<OpenInNewIcon fontSize="small" />}
                       component="a"
-                      href={GOOGLE_FORM_FEEDBACK_URL}
+                      href={request.participantFeedbackFormUrl || undefined}
                       target="_blank"
                       rel="noreferrer"
+                      disabled={!request.participantFeedbackFormUrl}
                       sx={{ fontWeight: 700, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
                     >
                       Open Form
@@ -1066,10 +1141,21 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       color="inherit"
                       size="small"
                       startIcon={copiedLink === 'Modal Participant' ? <CheckIcon color="success" fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
-                      onClick={() => handleCopyFormLink('Modal Participant')}
+                      onClick={() => handleCopyFormLink('Modal Participant', request.participantFeedbackFormUrl)}
+                      disabled={!request.participantFeedbackFormUrl}
                       sx={{ fontWeight: 600, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
                     >
                       {copiedLink === 'Modal Participant' ? 'Copied Link!' : 'Copy Link'}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<SummaryIcon fontSize="small" />}
+                      onClick={() => void loadEvaluationSummary('participant')}
+                      disabled={!request.participantFeedbackFormId}
+                      sx={{ fontWeight: 700, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
+                    >
+                      See Summary
                     </Button>
                   </Stack>
                 </Stack>
@@ -1079,7 +1165,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             {/* Form 2 */}
             <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#fafcfa' }}>
               <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1.5 }}>
                   <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', minWidth: 0 }}>
                     <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: 'rgba(46, 125, 50, 0.1)', color: 'primary.main', display: 'flex' }}>
                       <FormIcon fontSize="small" />
@@ -1095,9 +1181,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       size="small"
                       startIcon={<OpenInNewIcon fontSize="small" />}
                       component="a"
-                      href={GOOGLE_FORM_FEEDBACK_URL}
+                      href={request.supervisorEvaluationFormUrl || undefined}
                       target="_blank"
                       rel="noreferrer"
+                      disabled={!request.supervisorEvaluationFormUrl}
                       sx={{ fontWeight: 700, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
                     >
                       Open Form
@@ -1107,10 +1194,21 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       color="inherit"
                       size="small"
                       startIcon={copiedLink === 'Modal Supervisor' ? <CheckIcon color="success" fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
-                      onClick={() => handleCopyFormLink('Modal Supervisor')}
+                      onClick={() => handleCopyFormLink('Modal Supervisor', request.supervisorEvaluationFormUrl)}
+                      disabled={!request.supervisorEvaluationFormUrl}
                       sx={{ fontWeight: 600, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
                     >
                       {copiedLink === 'Modal Supervisor' ? 'Copied Link!' : 'Copy Link'}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<SummaryIcon fontSize="small" />}
+                      onClick={() => void loadEvaluationSummary('supervisor')}
+                      disabled={!request.supervisorEvaluationFormId}
+                      sx={{ fontWeight: 700, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
+                    >
+                      See Summary
                     </Button>
                   </Stack>
                 </Stack>
@@ -1129,6 +1227,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           </Button>
         </DialogActions>
       </Dialog>
+
+      <EvaluationSummaryDialog
+        open={summaryModalOpen}
+        loading={summaryLoading}
+        error={summaryError}
+        summary={evaluationSummary}
+        onClose={() => setSummaryModalOpen(false)}
+        onRefresh={() => void loadEvaluationSummary(summaryKind)}
+      />
     </Box>
   );
 }

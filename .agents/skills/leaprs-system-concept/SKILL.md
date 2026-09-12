@@ -90,10 +90,12 @@ All files are uploaded to Google Drive.
 * Marking a status update as `denied` or `completed` documents that specific milestone without terminating or overriding the overarching request timeline. Only explicit concluding actions (`Complete` or `Deny` resolution) finalize the request.
 
 ### F. Post-Completion Training Feedback & Evaluation Google Forms
-* Upon concluding a request as **Completed**, the system generates links to two Google Forms for feedback and post-training evaluation:
-  1. **Participant Evaluation & Feedback Form**: For participants/attendees to rate training content, trainer delivery, and logistics (`https://forms.gle/c8BjUUoPxYWiBxnF8`).
-  2. **Supervisor / Post-Activity Evaluation Form**: For supervisors and coordinators to assess workplace application, action plans, and skill improvements (`https://forms.gle/c8BjUUoPxYWiBxnF8`).
-* The forms are presented via a celebratory completion modal dialog immediately upon completion, and persist in the timeline's final resolution card with direct **Open Form** and **Copy Link** actions.
+* Upon concluding a request as **Completed**, the system dynamically creates and publishes two Google Forms that are unique to that request and accept responses from anyone with the link:
+  1. **Participant Evaluation & Feedback Form**: Ratings for overall satisfaction, content relevance, facilitator effectiveness, and logistics, plus written strengths, improvements, and comments.
+  2. **Supervisor / Post-Activity Evaluation Form**: Ratings for job relevance, knowledge or skill improvement, workplace application, and overall value, plus observed changes, follow-up support, and comments.
+* The generated form IDs and responder links are stored on the request. Retrying completion reuses any forms already stored instead of producing duplicates.
+* Each form is presented in the completion modal and final timeline card with **Open Form**, **Copy Link**, and **See Summary** actions.
+* **See Summary** fetches the latest responses on demand. Rating charts are calculated directly from response data; Gemini produces only the plain-language overview, strengths, improvements, and recommended actions. No webhook is required for this on-demand workflow.
 
 ## 4. Access, Registration, and Departments
 

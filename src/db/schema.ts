@@ -87,6 +87,10 @@ export const requests = pgTable('requests', {
   status: varchar('status', { length: 50 }).default('in_progress').notNull(),
   isStopped: boolean('is_stopped').default(false).notNull(),
   activeStopperId: integer('active_stopper_id'),
+  participantFeedbackFormId: text('participant_feedback_form_id'),
+  participantFeedbackFormUrl: text('participant_feedback_form_url'),
+  supervisorEvaluationFormId: text('supervisor_evaluation_form_id'),
+  supervisorEvaluationFormUrl: text('supervisor_evaluation_form_url'),
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED FORM DATA LAST
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

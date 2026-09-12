@@ -5,6 +5,11 @@ import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefini
 import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail } from '@/lib/email';
+import {
+  createRequestEvaluationForm,
+  getEvaluationSummary,
+  type EvaluationSummary,
+} from '@/lib/google-forms';
 import { hashPassword } from 'better-auth/crypto';
 import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
@@ -1224,12 +1229,78 @@ export async function getRequestStatusUpdates(requestId: number) {
   }
 }
 
+async function ensureRequestEvaluationForms(request: typeof requests.$inferSelect) {
+  const [capdev] = await db.select({ aipCode: capdevs.aipCode }).from(capdevs).where(eq(capdevs.id, request.capdevId)).limit(1);
+  if (!capdev) throw new Error('The request CapDev project was not found.');
+
+  let participantFeedbackFormId = request.participantFeedbackFormId;
+  let participantFeedbackFormUrl = request.participantFeedbackFormUrl;
+  let supervisorEvaluationFormId = request.supervisorEvaluationFormId;
+  let supervisorEvaluationFormUrl = request.supervisorEvaluationFormUrl;
+
+  if (!participantFeedbackFormId || !participantFeedbackFormUrl) {
+    const form = await createRequestEvaluationForm({ kind: 'participant', requestId: request.id, aipCode: capdev.aipCode });
+    participantFeedbackFormId = form.formId;
+    participantFeedbackFormUrl = form.responderUrl;
+    await db.update(requests).set({ participantFeedbackFormId, participantFeedbackFormUrl }).where(eq(requests.id, request.id));
+  }
+
+  if (!supervisorEvaluationFormId || !supervisorEvaluationFormUrl) {
+    const form = await createRequestEvaluationForm({ kind: 'supervisor', requestId: request.id, aipCode: capdev.aipCode });
+    supervisorEvaluationFormId = form.formId;
+    supervisorEvaluationFormUrl = form.responderUrl;
+    await db.update(requests).set({ supervisorEvaluationFormId, supervisorEvaluationFormUrl }).where(eq(requests.id, request.id));
+  }
+
+  return {
+    participantFeedbackFormId,
+    participantFeedbackFormUrl,
+    supervisorEvaluationFormId,
+    supervisorEvaluationFormUrl,
+  };
+}
+
+export async function getOrCreateRequestEvaluationForms(requestId: number) {
+  try {
+    const access = await getCurrentAccess();
+    const request = access ? await getAccessibleRequest(access, requestId) : null;
+    if (!request) return { success: false as const, error: unauthorized.error };
+    if (request.status !== 'completed') return { success: false as const, error: 'Evaluation forms are available after completion.' };
+    const forms = await ensureRequestEvaluationForms(request);
+    return { success: true as const, forms };
+  } catch (error) {
+    console.error('Failed to prepare request evaluation forms:', error);
+    return { success: false as const, error: error instanceof Error ? error.message : 'Unable to generate evaluation forms.' };
+  }
+}
+
+export async function getRequestEvaluationSummary(
+  requestId: number,
+  kind: 'participant' | 'supervisor',
+): Promise<{ success: true; summary: EvaluationSummary } | { success: false; error: string }> {
+  try {
+    const access = await getCurrentAccess();
+    const request = access ? await getAccessibleRequest(access, requestId) : null;
+    if (!request) return { success: false, error: unauthorized.error };
+    if (request.status !== 'completed') return { success: false, error: 'Evaluation summaries are available after completion.' };
+    const forms = await ensureRequestEvaluationForms(request);
+    const formId = kind === 'participant' ? forms.participantFeedbackFormId : forms.supervisorEvaluationFormId;
+    if (!formId) return { success: false, error: 'The evaluation form is unavailable.' };
+    return { success: true, summary: await getEvaluationSummary(formId) };
+  } catch (error) {
+    console.error('Failed to generate request evaluation summary:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to generate the evaluation summary.' };
+  }
+}
+
 export async function updateRequestStatus(requestId: number, status: 'completed' | 'denied') {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return unauthorized;
     const req = await getAccessibleRequest(access, requestId);
     if (!req) return unauthorized;
+
+    const forms = status === 'completed' ? await ensureRequestEvaluationForms(req) : null;
 
     await db
       .update(requests)
@@ -1253,10 +1324,10 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
       type: status,
     });
 
-    return { success: true };
+    return { success: true, forms };
   } catch (error) {
     console.error('Failed to update request status:', error);
-    return { success: false, error: 'Database update failed' };
+    return { success: false, error: error instanceof Error ? error.message : 'Database update failed' };
   }
 }
 
