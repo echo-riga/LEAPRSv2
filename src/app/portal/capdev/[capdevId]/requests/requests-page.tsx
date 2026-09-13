@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Add as AddIcon,
   AttachFile as AttachFileIcon,
@@ -136,6 +136,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const [budgetValidationMessage, setBudgetValidationMessage] = useState('');
   const [role, setRole] = useState<AppRole>('employee');
   const [showScrollArrow, setShowScrollArrow] = useState(true);
+  const [notificationFocus, setNotificationFocus] = useState<{ targetId: string; nonce: number } | null>(null);
   const capdevSectionRef = React.useRef<HTMLDivElement>(null);
   const activityDesignRef = React.useRef<HTMLDivElement>(null);
 
@@ -145,6 +146,39 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   };
 
   useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
+
+  useEffect(() => {
+    const focusTarget = (targetId: string) => {
+      if (targetId === 'capdev-summary') setNotificationFocus({ targetId, nonce: Date.now() });
+    };
+    const focusFromHash = () => {
+      const targetId = decodeURIComponent(window.location.hash.slice(1));
+      if (targetId) focusTarget(targetId);
+    };
+    const handleNotificationFocus = (event: Event) => {
+      const detail = (event as CustomEvent<{ targetId?: string }>).detail;
+      if (detail?.targetId) focusTarget(detail.targetId);
+    };
+
+    window.addEventListener('hashchange', focusFromHash);
+    window.addEventListener('leaprs:notification-focus', handleNotificationFocus);
+    focusFromHash();
+    return () => {
+      window.removeEventListener('hashchange', focusFromHash);
+      window.removeEventListener('leaprs:notification-focus', handleNotificationFocus);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!notificationFocus || loading) return;
+    const target = document.getElementById(notificationFocus.targetId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timeoutId = window.setTimeout(() => {
+      setNotificationFocus((current) => current?.nonce === notificationFocus.nonce ? null : current);
+    }, 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [loading, notificationFocus]);
 
   const loadData = useCallback(async () => {
     const [projectData, requestData, fieldData, capdevFieldData] = await Promise.all([
@@ -438,7 +472,21 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px)' }}>
       <Container maxWidth={false} sx={{ p: 0, width: '100%', flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-          <Box>
+          <Box
+            id="capdev-summary"
+            sx={{
+              scrollMarginTop: 96,
+              animation: notificationFocus?.targetId === 'capdev-summary'
+                ? 'capdevNotificationFocus 900ms ease-in-out'
+                : 'none',
+              '@keyframes capdevNotificationFocus': {
+                '0%': { transform: 'scale(1)' },
+                '30%': { transform: 'scale(0.975)' },
+                '65%': { transform: 'scale(1.035)' },
+                '100%': { transform: 'scale(1)' },
+              },
+            }}
+          >
             <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>
               Requests
             </Typography>

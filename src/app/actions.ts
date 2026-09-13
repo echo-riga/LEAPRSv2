@@ -330,7 +330,7 @@ export async function completeSelfRegistration(input: { role: string; department
       await createNotification({
         title: 'Role approval requested',
         message: `${session.user.name || session.user.email || 'A user'} requested Employee (All Department Requests) access.`,
-        link: `/portal/users?approval=${approval.id}`,
+        link: `/portal/users?approval=${approval.id}#role-approval-${approval.id}`,
         type: 'role_approval',
       });
       return { success: true, pendingApproval: true as const };
@@ -390,6 +390,7 @@ export async function decideRoleApproval(approvalId: number, decision: 'accepted
     await db.update(roleApprovalRequests).set({ status: decision, decidedById: access.userId, decidedAt: new Date(), updatedAt: new Date() }).where(eq(roleApprovalRequests.id, approvalId));
     await db.delete(notifications).where(inArray(notifications.link, [
       `/portal/users?approval=${approvalId}`,
+      `/portal/users?approval=${approvalId}#role-approval-${approvalId}`,
       `/admin/users?approval=${approvalId}`,
     ]));
     await writeAuditLog(access, {
@@ -766,7 +767,7 @@ export async function createCapdev(data: CapdevInput) {
       capdevId: created.id,
       title: `New CapDev Project: ${created.aipCode}`,
       message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-      link: `/portal/capdev/${created.id}/requests`,
+      link: `/portal/capdev/${created.id}/requests#capdev-summary`,
       type: 'capdev_created',
     });
     return { success: true, capdev: created };
@@ -1189,7 +1190,7 @@ export async function createRequest(data: RequestInput) {
       requestId: created.id,
       title: `New Requisition: ${created.setting || 'CapDev Request'}`,
       message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-      link: `/portal/capdev/${created.capdevId}/requests/${created.id}/status`,
+      link: `/portal/capdev/${created.capdevId}/requests/${created.id}/status#request-status-summary`,
       type: 'new_request',
     });
     return { success: true, request: created };
@@ -1509,7 +1510,7 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
       requestId,
       title: `Request #${requestId} ${status === 'completed' ? 'Completed' : 'Denied'}`,
       message: `Request #${requestId} was resolved as ${status}.`,
-      link: `/portal/capdev/${req.capdevId}/requests/${requestId}/status`,
+      link: `/portal/capdev/${req.capdevId}/requests/${requestId}/status#request-status-resolution`,
       type: status,
     });
 
@@ -1547,7 +1548,7 @@ export async function stopRequestProgress(data: StopRequestInput) {
       requestId: data.requestId,
       title: `Request #${data.requestId} Stopped`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'} stopped progress: ${data.reason.trim().slice(0, 90)}`,
-      link: `/portal/capdev/${request.capdevId}/requests/${data.requestId}/status`,
+      link: `/portal/capdev/${request.capdevId}/requests/${data.requestId}/status#request-status-update-${stopper.id}`,
       type: 'status_update',
     });
     return { success: true };
@@ -1574,7 +1575,7 @@ export async function resumeRequestProgress(requestId: number) {
       requestId,
       title: `Request #${requestId} Resumed`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'} resumed progress.`,
-      link: `/portal/capdev/${request.capdevId}/requests/${requestId}/status`,
+      link: `/portal/capdev/${request.capdevId}/requests/${requestId}/status#request-status-update-${request.activeStopperId}`,
       type: 'status_update',
     });
     return { success: true };
@@ -1693,7 +1694,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
         ? `Request #${data.requestId} Update: [${data.statusMark.toUpperCase()}]`
         : `Status Update on Request #${data.requestId}`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'}: ${data.statusUpdate.slice(0, 90)}`,
-      link: `/portal/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status`,
+      link: `/portal/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status#request-status-update-${isStopperResponse ? data.stopperId : createdUpdate.id}`,
       type: 'status_update',
     });
 

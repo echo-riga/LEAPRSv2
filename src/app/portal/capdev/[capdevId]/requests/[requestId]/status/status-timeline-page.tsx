@@ -167,14 +167,40 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [timelineFocus, setTimelineFocus] = useState<TimelineFocusRequest | null>(null);
 
   useEffect(() => {
+    const focusTarget = (targetId: string) => {
+      if (
+        targetId !== 'request-status-summary' &&
+        targetId !== 'request-status-resolution' &&
+        !targetId.startsWith('request-status-update-')
+      ) return;
+      setTimelineFocus({ targetId, nonce: Date.now() });
+    };
+
     const handleTimelineFocus = (event: Event) => {
       const detail = (event as CustomEvent<{ requestId?: number; targetId?: string }>).detail;
       if (detail?.requestId !== requestId || !detail.targetId) return;
-      setTimelineFocus({ targetId: detail.targetId, nonce: Date.now() });
+      focusTarget(detail.targetId);
+    };
+
+    const handleNotificationFocus = (event: Event) => {
+      const detail = (event as CustomEvent<{ targetId?: string }>).detail;
+      if (detail?.targetId) focusTarget(detail.targetId);
+    };
+
+    const focusFromHash = () => {
+      const targetId = decodeURIComponent(window.location.hash.slice(1));
+      if (targetId) focusTarget(targetId);
     };
 
     window.addEventListener('leaprs:request-timeline-focus', handleTimelineFocus);
-    return () => window.removeEventListener('leaprs:request-timeline-focus', handleTimelineFocus);
+    window.addEventListener('leaprs:notification-focus', handleNotificationFocus);
+    window.addEventListener('hashchange', focusFromHash);
+    focusFromHash();
+    return () => {
+      window.removeEventListener('leaprs:request-timeline-focus', handleTimelineFocus);
+      window.removeEventListener('leaprs:notification-focus', handleNotificationFocus);
+      window.removeEventListener('hashchange', focusFromHash);
+    };
   }, [requestId]);
 
   useEffect(() => {
@@ -423,9 +449,24 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px)' }}>
       <Container maxWidth={false} sx={{ p: 0, width: '100%', flexGrow: 1 }}>
         <Stack
+          id="request-status-summary"
           direction={{ xs: 'column', sm: 'row' }}
           spacing={2}
-          sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between', mb: 3 }}
+          sx={{
+            alignItems: { sm: 'center' },
+            justifyContent: 'space-between',
+            mb: 3,
+            scrollMarginTop: 96,
+            animation: timelineFocus?.targetId === 'request-status-summary'
+              ? 'timelineSummaryFocus 900ms ease-in-out'
+              : 'none',
+            '@keyframes timelineSummaryFocus': {
+              '0%': { transform: 'scale(1)' },
+              '30%': { transform: 'scale(0.985)' },
+              '65%': { transform: 'scale(1.015)' },
+              '100%': { transform: 'scale(1)' },
+            },
+          }}
         >
           <Box>
             <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>

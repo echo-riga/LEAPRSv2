@@ -70,6 +70,7 @@ export default function UsersManagementPage() {
   const [pendingApprovals, setPendingApprovals] = useState<PendingRoleApproval[]>([]);
   const [approvalActionId, setApprovalActionId] = useState<number | null>(null);
   const [pendingApprovalsOpen, setPendingApprovalsOpen] = useState(false);
+  const [approvalFocus, setApprovalFocus] = useState<{ id: number; nonce: number } | null>(null);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -168,6 +169,42 @@ export default function UsersManagementPage() {
   useEffect(() => {
     if (searchParams.has('approval')) setPendingApprovalsOpen(true);
   }, [searchParams]);
+
+  useEffect(() => {
+    const focusApproval = (targetId: string) => {
+      const match = /^role-approval-(\d+)$/.exec(targetId);
+      if (!match) return;
+      setPendingApprovalsOpen(true);
+      setApprovalFocus({ id: Number(match[1]), nonce: Date.now() });
+    };
+    const focusFromHash = () => {
+      const targetId = decodeURIComponent(window.location.hash.slice(1));
+      if (targetId) focusApproval(targetId);
+    };
+    const handleNotificationFocus = (event: Event) => {
+      const detail = (event as CustomEvent<{ targetId?: string }>).detail;
+      if (detail?.targetId) focusApproval(detail.targetId);
+    };
+
+    window.addEventListener('hashchange', focusFromHash);
+    window.addEventListener('leaprs:notification-focus', handleNotificationFocus);
+    focusFromHash();
+    return () => {
+      window.removeEventListener('hashchange', focusFromHash);
+      window.removeEventListener('leaprs:notification-focus', handleNotificationFocus);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!approvalFocus || !pendingApprovalsOpen || loading) return;
+    const target = document.getElementById(`role-approval-${approvalFocus.id}`);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timeoutId = window.setTimeout(() => {
+      setApprovalFocus((current) => current?.nonce === approvalFocus.nonce ? null : current);
+    }, 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [approvalFocus, loading, pendingApprovalsOpen, pendingApprovals]);
 
   // Open dialog for adding a new user
   const handleOpenAddDialog = () => {
@@ -646,8 +683,30 @@ export default function UsersManagementPage() {
             <Stack spacing={1.5}>
               {pendingApprovals.map((approval) => {
                 const isHighlighted = Number(searchParams.get('approval')) === approval.id;
+                const isFocused = approvalFocus?.id === approval.id;
                 return (
-                  <Stack key={approval.id} direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ p: 2, border: '1px solid', borderColor: isHighlighted ? 'primary.main' : 'divider', borderRadius: 2, alignItems: { sm: 'center' }, bgcolor: isHighlighted ? 'rgba(46, 125, 50, 0.04)' : '#fafcfa' }}>
+                  <Stack
+                    key={approval.id}
+                    id={`role-approval-${approval.id}`}
+                    direction={{ xs: 'column', sm: 'row' }}
+                    spacing={2}
+                    sx={{
+                      p: 2,
+                      border: '1px solid',
+                      borderColor: isHighlighted ? 'primary.main' : 'divider',
+                      borderRadius: 2,
+                      alignItems: { sm: 'center' },
+                      bgcolor: isHighlighted ? 'rgba(46, 125, 50, 0.04)' : '#fafcfa',
+                      scrollMarginBlock: 24,
+                      animation: isFocused ? 'approvalNotificationFocus 900ms ease-in-out' : 'none',
+                      '@keyframes approvalNotificationFocus': {
+                        '0%': { transform: 'scale(1)' },
+                        '30%': { transform: 'scale(0.975)' },
+                        '65%': { transform: 'scale(1.025)' },
+                        '100%': { transform: 'scale(1)' },
+                      },
+                    }}
+                  >
                     <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                       <Typography variant="body1" sx={{ fontWeight: 700 }}>{approval.name}</Typography>
                       <Typography variant="body2" color="text.secondary">{approval.email}</Typography>

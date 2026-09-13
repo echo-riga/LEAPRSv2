@@ -78,6 +78,19 @@ function getIconBgColor(type: string) {
   }
 }
 
+function getNotificationDestination(item: NotificationItem) {
+  if (item.link.includes('#')) return item.link;
+  if (item.type === 'role_approval') {
+    const approvalId = new URL(item.link, window.location.origin).searchParams.get('approval');
+    return approvalId ? `${item.link}#role-approval-${approvalId}` : item.link;
+  }
+  if (item.type === 'completed' || item.type === 'denied') return `${item.link}#request-status-resolution`;
+  if (item.type === 'new_request') return `${item.link}#request-status-summary`;
+  if (item.type === 'capdev_created') return `${item.link}#capdev-summary`;
+  if (item.type === 'status_update') return `${item.link}#request-status-summary`;
+  return item.link;
+}
+
 export default function NotificationsMenu() {
   const router = useRouter();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
@@ -128,7 +141,16 @@ export default function NotificationsMenu() {
     handleClose();
     // 3. Navigate to action link
     if (item.link) {
-      router.push(item.link);
+      const destination = getNotificationDestination(item);
+      router.push(destination);
+
+      const hashIndex = destination.indexOf('#');
+      if (hashIndex >= 0) {
+        const targetId = decodeURIComponent(destination.slice(hashIndex + 1));
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('leaprs:notification-focus', { detail: { targetId } }));
+        }, 0);
+      }
     }
   };
 
