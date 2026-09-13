@@ -752,7 +752,10 @@ export async function createCapdev(data: CapdevInput) {
     }
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
-    const [created] = await db.insert(capdevs).values({ ...data, updatedById: access.userId, initialBudget: data.budget }).returning();
+    const aipCode = data.aipCode.trim();
+    const [existing] = await db.select({ id: capdevs.id }).from(capdevs).where(eq(capdevs.aipCode, aipCode)).limit(1);
+    if (existing) return { success: false, error: `A CapDev project with AIP Code ${aipCode} already exists.` };
+    const [created] = await db.insert(capdevs).values({ ...data, aipCode, updatedById: access.userId, initialBudget: data.budget }).returning();
     await writeAuditLog(access, { action: 'created', entityType: 'capdev', entityId: created.id, entityLabel: created.aipCode, details: { department: created.department, initialBudget: created.initialBudget } });
     void createNotification({
       actorId: access.userId,
@@ -765,6 +768,9 @@ export async function createCapdev(data: CapdevInput) {
     return { success: true, capdev: created };
   } catch (error) {
     console.error('Failed to create CapDev project:', error);
+    if (error instanceof Error && error.message.includes('capdevs_aip_code_unique')) {
+      return { success: false, error: `A CapDev project with AIP Code ${data.aipCode.trim()} already exists.` };
+    }
     return { success: false, error: 'Database insert failed' };
   }
 }

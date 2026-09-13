@@ -60,6 +60,7 @@ export default function PortalPage() {
   const [budgetHistory, setBudgetHistory] = useState<BudgetHistoryEntry[]>([]);
   const [role, setRole] = useState<AppRole>('employee');
   const filtersInitialized = useRef(false);
+  const saveProjectInFlight = useRef(false);
 
   useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
 
@@ -121,7 +122,7 @@ export default function PortalPage() {
   const areRequiredFieldsComplete = requiredDefinitions.every(hasDynamicValue);
 
   const saveProject = async () => {
-    if (!session.data || !form.aipCode || !form.budget || !form.department) return;
+    if (saveProjectInFlight.current || !session.data || !form.aipCode || !form.budget || !form.department) return;
     const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;
     if (!aipCodePattern.test(form.aipCode.trim())) {
       setError('AIP Code must follow the format: 0000-000-0-0-00-000-000');
@@ -129,23 +130,39 @@ export default function PortalPage() {
     }
     const missingRequiredFields = requiredDefinitions.filter((field) => !hasDynamicValue(field));
     if (missingRequiredFields.length > 0) { setError(`Complete the required field${missingRequiredFields.length === 1 ? '' : 's'}: ${missingRequiredFields.map((field) => field.name).join(', ')}.`); return; }
+    saveProjectInFlight.current = true;
     setSaving(true);
     setError('');
-    const additionalInfo = { ...form.additionalInfo };
-    for (const [fieldName, files] of Object.entries(pendingFiles)) {
-      if (files.length === 0) continue;
-      const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
-      const uploadData = new FormData();
-      files.forEach((file) => uploadData.append('files', file));
-      const uploaded = await uploadFilesToGoogleDrive(uploadData);
-      if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
-      const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
-      additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
+    try {
+      const additionalInfo = { ...form.additionalInfo };
+      for (const [fieldName, files] of Object.entries(pendingFiles)) {
+        if (files.length === 0) continue;
+        const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
+        const uploadData = new FormData();
+        files.forEach((file) => uploadData.append('files', file));
+        const uploaded = await uploadFilesToGoogleDrive(uploadData);
+        if (!uploaded.success) {
+          setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`);
+          return;
+        }
+        const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
+        additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
+      }
+      const payload = { ...form, additionalInfo, aipCode: form.aipCode.trim(), department: form.department.trim(), updatedById: session.data.user.id };
+      const result = editing ? await updateCapdev(editing.id, payload) : await createCapdev(payload);
+      if (result.success) {
+        setEditorOpen(false);
+        await loadData();
+      } else {
+        setError(result.error || 'Unable to save this CapDev project.');
+      }
+    } catch (error) {
+      console.error('Failed to save CapDev project:', error);
+      setError('Unable to save this CapDev project. Please try again.');
+    } finally {
+      saveProjectInFlight.current = false;
+      setSaving(false);
     }
-    const payload = { ...form, additionalInfo, aipCode: form.aipCode.trim(), department: form.department.trim(), updatedById: session.data.user.id };
-    const result = editing ? await updateCapdev(editing.id, payload) : await createCapdev(payload);
-    if (result.success) { setEditorOpen(false); await loadData(); } else { setError(result.error || 'Unable to save this CapDev project.'); }
-    setSaving(false);
   };
 
   const renderDynamicField = (field: DynamicField) => {
