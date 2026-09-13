@@ -14,6 +14,7 @@ import { hashPassword } from 'better-auth/crypto';
 import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { headers } from 'next/headers';
 import { getDynamicFieldValue } from '@/lib/dynamic-fields';
 
 
@@ -1336,7 +1337,7 @@ async function uploadFileToGoogleDrive(file: File, accessToken: string): Promise
 
 type GoogleDriveUploadFile = { name: string; mimeType: string; size: number };
 
-async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, accessToken: string) {
+async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, accessToken: string, origin: string) {
   const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink', {
     method: 'POST',
     headers: {
@@ -1344,6 +1345,7 @@ async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, acces
       'Content-Type': 'application/json; charset=UTF-8',
       'X-Upload-Content-Type': file.mimeType || 'application/octet-stream',
       'X-Upload-Content-Length': String(file.size),
+      Origin: origin,
     },
     body: JSON.stringify({
       name: file.name,
@@ -1368,8 +1370,14 @@ export async function createGoogleDriveUploadSessions(files: GoogleDriveUploadFi
     if (files.some((file) => !file.name.trim() || !Number.isFinite(file.size) || file.size <= 0)) return { success: false, error: 'One or more selected files are invalid.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
     if (files.reduce((total, file) => total + file.size, 0) > MAX_STATUS_ATTACHMENT_BYTES) return { success: false, error: 'Attachments must total 20 MB or less.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
 
+    const requestHeaders = await headers();
+    const origin = requestHeaders.get('origin');
+    const requestHost = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host');
+    if (!origin || !requestHost || new URL(origin).host !== requestHost) {
+      return { success: false, error: 'The upload origin could not be verified.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+    }
     const accessToken = await getGoogleDriveAccessToken();
-    const sessions = await Promise.all(files.map((file) => createGoogleDriveUploadSession(file, accessToken)));
+    const sessions = await Promise.all(files.map((file) => createGoogleDriveUploadSession(file, accessToken, origin)));
     return { success: true, sessions };
   } catch (error) {
     console.error('Failed to create Google Drive upload sessions:', error);
