@@ -14,7 +14,6 @@ import {
   WarningAmber as WarningIcon,
 } from '@mui/icons-material';
 import {
-  Alert,
   Autocomplete,
   Box,
   Button,
@@ -58,6 +57,7 @@ import {
   type StatusAttachment,
 } from '@/app/actions';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
+import ActionErrorDialog from '@/components/ActionErrorDialog';
 
 type RequestRecord = {
   id: number;
@@ -590,7 +590,6 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
             setShowScrollArrow(e.currentTarget.scrollTop < 120);
           }}
         >
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
           {/* Section: CapDev Information */}
           {capdev && (
@@ -767,6 +766,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           )}
         </DialogActions>
       </Dialog>
+
+      <ActionErrorDialog open={Boolean(error)} title="Unable to Save Request" message={error} onClose={() => setError('')} />
 
       {/* Dedicated Budget Validation Dialog */}
       <Dialog

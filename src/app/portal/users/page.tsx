@@ -45,6 +45,7 @@ import { createDirectoryUser, decideRoleApproval, deleteDirectoryUser, getCurren
 import DateField from '@/components/DateField';
 import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
+import { getFriendlyPasswordError, getPasswordValidationError, PASSWORD_REQUIREMENTS } from '@/lib/password-validation';
 
 interface UserEntity {
   id: string;
@@ -96,6 +97,7 @@ export default function UsersManagementPage() {
   const [formName, setFormName] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
+  const [formPasswordError, setFormPasswordError] = useState('');
   const [formRole, setFormRole] = useState('employee');
   const [formDepartment, setFormDepartment] = useState('');
   const [formDepartmentIsOther, setFormDepartmentIsOther] = useState(false);
@@ -173,6 +175,7 @@ export default function UsersManagementPage() {
     setFormName('');
     setFormEmail('');
     setFormPassword('');
+    setFormPasswordError('');
     setFormRole('employee');
     setFormDepartment('');
     setFormDepartmentIsOther(false);
@@ -185,6 +188,7 @@ export default function UsersManagementPage() {
     setFormName(user.name);
     setFormEmail(user.email);
     setFormPassword(''); // Clear password field, indicating "keep current"
+    setFormPasswordError('');
     setFormRole(user.role);
     setFormDepartment(user.department);
     setFormDepartmentIsOther(false);
@@ -216,8 +220,18 @@ export default function UsersManagementPage() {
     } else {
       // ADD OPERATION
       if (!formPassword) return;
+      const passwordError = getPasswordValidationError(formPassword);
+      if (passwordError) {
+        setFormPasswordError(passwordError);
+        return;
+      }
       const created = await createDirectoryUser({ name: formName, email: formEmail, password: formPassword, role: formRole, department: formDepartment || 'Unassigned' });
-      if (!created.success || !created.user) { console.error('Error creating user:', created.error); return; }
+      if (!created.success || !created.user) {
+        const message = getFriendlyPasswordError(created.error, formPassword);
+        if (message.toLowerCase().includes('password')) setFormPasswordError(message);
+        console.error('Error creating user:', created.error);
+        return;
+      }
       setUsersList((current) => [{ id: created.user.id, name: created.user.name || formName, email: created.user.email, role: formRole, password: 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢', createdAt: created.user.createdAt, department: formDepartment || 'Unassigned' }, ...current]);
       if (formDepartment.trim()) setDepartmentOptions((current) => Array.from(new Set([...current, formDepartment.trim()])).sort((a, b) => a.localeCompare(b)));
       setDialogOpen(false);
@@ -578,7 +592,12 @@ export default function UsersManagementPage() {
               type="text"
               fullWidth
               value={formPassword}
-              onChange={(e) => setFormPassword(e.target.value)}
+              onChange={(e) => {
+                setFormPassword(e.target.value);
+                setFormPasswordError('');
+              }}
+              error={Boolean(formPasswordError)}
+              helperText={formPasswordError || PASSWORD_REQUIREMENTS}
               slotProps={{
                 input: {
                   startAdornment: (

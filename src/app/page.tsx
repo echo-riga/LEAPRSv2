@@ -37,6 +37,7 @@ import { authClient } from '@/lib/auth/client';
 import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
 import { useRouter } from 'next/navigation';
+import { getFriendlyPasswordError, getPasswordValidationError, PASSWORD_REQUIREMENTS } from '@/lib/password-validation';
 
 const SELF_REGISTRATION_ROLE_OPTIONS = ROLE_OPTIONS.filter(({ value }) => value === 'employee' || value === 'employee-department' || value === 'viewer' || value === 'viewer-full');
 
@@ -225,6 +226,12 @@ export default function Home() {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    const passwordError = getPasswordValidationError(signUpPassword);
+    if (passwordError) {
+      setAuthError(passwordError);
+      setAuthSuccess(null);
+      return;
+    }
     setAuthLoading(true);
     setIsRegistering(true);
     setAuthError(null);
@@ -237,7 +244,7 @@ export default function Home() {
         password: signUpPassword,
       });
       if (result?.error) {
-        setAuthError(result.error.message || 'Unable to create the account.');
+        setAuthError(getFriendlyPasswordError(result.error.message, signUpPassword));
         setIsRegistering(false);
         return;
       }
@@ -316,6 +323,12 @@ export default function Home() {
 
   const handleVerifyAndReset = async (e: React.FormEvent) => {
     e.preventDefault();
+    const passwordError = getPasswordValidationError(forgotNewPassword);
+    if (passwordError) {
+      setForgotError(passwordError);
+      setForgotSuccess(null);
+      return;
+    }
     if (forgotNewPassword !== forgotConfirmPassword) {
       setForgotError('Passwords do not match.');
       return;
@@ -529,7 +542,7 @@ export default function Home() {
                 <Stack spacing={2.5}>
                   <TextField label="Full Name" required fullWidth value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><PersonIcon color="action" /></InputAdornment> } }} />
                   <TextField label="Email Address" type="email" required fullWidth value={signUpEmail} onChange={(e) => setSignUpEmail(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><EmailIcon color="action" /></InputAdornment> } }} />
-                  <TextField label="Password" type="password" required fullWidth value={signUpPassword} onChange={(e) => setSignUpPassword(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><LockIcon color="action" /></InputAdornment> } }} />
+                  <TextField label="Password" type="password" required fullWidth value={signUpPassword} onChange={(e) => setSignUpPassword(e.target.value)} disabled={authLoading} helperText={PASSWORD_REQUIREMENTS} slotProps={{ input: { startAdornment: <InputAdornment position="start"><LockIcon color="action" /></InputAdornment> } }} />
                   <TextField select label="Role" required fullWidth value={signUpRole} onChange={(e) => setSignUpRole(e.target.value as 'employee' | 'employee-department' | 'viewer' | 'viewer-full')} disabled={authLoading} slotProps={{ select: { renderValue: (value) => roleLabel(String(value)) } }}>
                     {SELF_REGISTRATION_ROLE_OPTIONS.map((option) => (
                       <MenuItem key={option.value} value={option.value} sx={{ py: 1.25, whiteSpace: 'normal' }}>
@@ -753,6 +766,7 @@ export default function Home() {
                       value={forgotNewPassword}
                       onChange={(e) => setForgotNewPassword(e.target.value)}
                       disabled={forgotLoading}
+                      helperText={PASSWORD_REQUIREMENTS}
                       slotProps={{
                         input: {
                           startAdornment: (

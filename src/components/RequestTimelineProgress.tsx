@@ -14,6 +14,11 @@ import { getRequestById, getRequestStatusUpdates } from '@/app/actions';
 
 type ProgressStep = 'completed' | 'denied' | 'pending' | 'stopper' | 'resumed' | 'final-completed' | 'final-denied';
 
+type ProgressNodeData = {
+  step: ProgressStep;
+  targetId: string;
+};
+
 type TimelineUpdate = {
   id: number;
   statusMark: string | null;
@@ -31,12 +36,41 @@ function stepAppearance(step: ProgressStep) {
   return { color: '#8a938a', icon: <PendingIcon sx={{ fontSize: 20 }} />, label: 'Pending update' };
 }
 
-function ProgressNode({ step, isLast }: { step: ProgressStep; isLast: boolean }) {
+function ProgressNode({ step, targetId, requestId, isLast }: ProgressNodeData & { requestId: number; isLast: boolean }) {
   const { color, icon, label } = stepAppearance(step);
+
+  const focusTimelineCard = () => {
+    window.dispatchEvent(new CustomEvent('leaprs:request-timeline-focus', {
+      detail: { requestId, targetId },
+    }));
+  };
+
   return (
     <React.Fragment>
       <Tooltip title={label}>
-        <Box aria-label={label} sx={{ width: 28, height: 28, flexShrink: 0, borderRadius: '50%', bgcolor: color, color: '#fff', display: 'grid', placeItems: 'center', boxShadow: step.startsWith('final-') ? `0 0 0 3px #fafcfa, 0 0 0 5px ${color}` : 'none' }}>
+        <Box
+          component="button"
+          type="button"
+          aria-label={`${label}. Go to timeline item.`}
+          onClick={focusTimelineCard}
+          sx={{
+            width: 32,
+            height: 32,
+            p: 0,
+            border: 0,
+            flexShrink: 0,
+            borderRadius: '50%',
+            bgcolor: color,
+            color: '#fff',
+            display: 'grid',
+            placeItems: 'center',
+            cursor: 'pointer',
+            boxShadow: step.startsWith('final-') ? `0 0 0 3px #fafcfa, 0 0 0 5px ${color}` : 'none',
+            transition: 'transform 160ms ease, filter 160ms ease',
+            '&:hover': { transform: 'scale(1.08)', filter: 'brightness(0.92)' },
+            '&:focus-visible': { outline: '3px solid #fafcfa', outlineOffset: 2 },
+          }}
+        >
           {icon}
         </Box>
       </Tooltip>
@@ -46,7 +80,7 @@ function ProgressNode({ step, isLast }: { step: ProgressStep; isLast: boolean })
 }
 
 export default function RequestTimelineProgress({ requestId }: { requestId: number }) {
-  const [steps, setSteps] = useState<ProgressStep[]>([]);
+  const [steps, setSteps] = useState<ProgressNodeData[]>([]);
 
   const loadProgress = useCallback(async () => {
     const [request, updates] = await Promise.all([getRequestById(requestId), getRequestStatusUpdates(requestId)]);
@@ -59,14 +93,15 @@ export default function RequestTimelineProgress({ requestId }: { requestId: numb
         .filter((update) => update.isResume && update.stopperId !== null)
         .map((update) => update.stopperId)
     );
-    const updateSteps = timelineEvents.map<ProgressStep>((update) => {
-      if (update.isStopper) return resumedStopperIds.has(update.id) ? 'resumed' : 'stopper';
-      if (update.statusMark === 'completed' || update.statusMark === 'accepted') return 'completed';
-      if (update.statusMark === 'denied') return 'denied';
-      return 'pending';
+    const updateSteps = timelineEvents.map<ProgressNodeData>((update) => {
+      let step: ProgressStep = 'pending';
+      if (update.isStopper) step = resumedStopperIds.has(update.id) ? 'resumed' : 'stopper';
+      else if (update.statusMark === 'completed' || update.statusMark === 'accepted') step = 'completed';
+      else if (update.statusMark === 'denied') step = 'denied';
+      return { step, targetId: `request-status-update-${update.id}` };
     });
     const finalStep: ProgressStep | null = request.status === 'completed' ? 'final-completed' : request.status === 'denied' ? 'final-denied' : null;
-    setSteps(finalStep ? [...updateSteps, finalStep] : updateSteps);
+    setSteps(finalStep ? [...updateSteps, { step: finalStep, targetId: 'request-status-resolution' }] : updateSteps);
   }, [requestId]);
 
   useEffect(() => {
@@ -82,7 +117,14 @@ export default function RequestTimelineProgress({ requestId }: { requestId: numb
   return (
     <Box aria-label="Request timeline progress" sx={{ maxWidth: '42vw', overflowX: 'auto', overflowY: 'visible', py: '5px', scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}>
       <Box sx={{ display: 'flex', alignItems: 'center', width: 'max-content', px: '5px' }}>
-        {steps.map((step, index) => <ProgressNode key={`${step}-${index}`} step={step} isLast={index === steps.length - 1} />)}
+        {steps.map((item, index) => (
+          <ProgressNode
+            key={item.targetId}
+            {...item}
+            requestId={requestId}
+            isLast={index === steps.length - 1}
+          />
+        ))}
       </Box>
     </Box>
   );

@@ -57,6 +57,7 @@ import {
   type StatusAttachment,
 } from '@/app/actions';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
+import ActionErrorDialog from '@/components/ActionErrorDialog';
 import type { EvaluationSummary } from '@/lib/google-forms';
 
 type RequestSummary = {
@@ -95,6 +96,11 @@ type StatusForm = {
   statusMark: 'pending' | 'denied' | 'completed' | 'accepted' | null;
   subtractsRequestedAmount: boolean;
   addStopper: boolean;
+};
+
+type TimelineFocusRequest = {
+  targetId: string;
+  nonce: number;
 };
 
 const EMPTY_FORM: StatusForm = { statusUpdate: '', remarks: '', files: [], statusMark: 'pending', subtractsRequestedAmount: false, addStopper: false };
@@ -158,6 +164,31 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [role, setRole] = useState<AppRole>('employee');
   const [stopperResponse, setStopperResponse] = useState({ text: '', files: [] as File[] });
   const [respondingToStopper, setRespondingToStopper] = useState(false);
+  const [timelineFocus, setTimelineFocus] = useState<TimelineFocusRequest | null>(null);
+
+  useEffect(() => {
+    const handleTimelineFocus = (event: Event) => {
+      const detail = (event as CustomEvent<{ requestId?: number; targetId?: string }>).detail;
+      if (detail?.requestId !== requestId || !detail.targetId) return;
+      setTimelineFocus({ targetId: detail.targetId, nonce: Date.now() });
+    };
+
+    window.addEventListener('leaprs:request-timeline-focus', handleTimelineFocus);
+    return () => window.removeEventListener('leaprs:request-timeline-focus', handleTimelineFocus);
+  }, [requestId]);
+
+  useEffect(() => {
+    if (!timelineFocus || loading) return;
+    const target = document.getElementById(timelineFocus.targetId);
+    if (!target) return;
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timeoutId = window.setTimeout(() => {
+      setTimelineFocus((current) => current?.nonce === timelineFocus.nonce ? null : current);
+    }, 1400);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [loading, timelineFocus]);
 
   useEffect(() => {
     if (session.data) {
@@ -452,10 +483,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             return (
               <Box
                 key={update.id}
+                id={`request-status-update-${update.id}`}
                 sx={{
                   gridColumn: { md: column },
                   gridRow: { md: row + 1 },
                   position: 'relative',
+                  scrollMarginTop: 96,
                 }}
               >
                 <Card
@@ -468,6 +501,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     flexDirection: 'column',
                     transition: 'all 0.2s',
                     borderColor: isStopper ? 'error.main' : undefined,
+                    animation: timelineFocus?.targetId === `request-status-update-${update.id}`
+                      ? 'timelineCardFocus 900ms ease-in-out'
+                      : 'none',
+                    '@keyframes timelineCardFocus': {
+                      '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
+                      '30%': { transform: 'scale(0.975)', boxShadow: '0 0 0 3px rgba(46, 125, 50, 0.22)' },
+                      '65%': { transform: 'scale(1.025)', boxShadow: '0 8px 24px rgba(46, 125, 50, 0.2)' },
+                      '100%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
+                    },
                     '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: isStopper ? 'error.dark' : 'primary.main' },
                   }}
                 >
@@ -593,6 +635,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
             return (
               <Box
+                id={isConcluded ? 'request-status-resolution' : undefined}
                 sx={{
                   gridColumn: { md: column },
                   gridRow: { md: row + 1 },
@@ -603,6 +646,16 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   pl: isFromLeft ? { md: 7, xs: 0 } : 0,
                   pr: isFromRight ? { md: 7, xs: 0 } : 0,
                   pt: isFromRowEnd ? { md: 6, xs: 0 } : 0,
+                  scrollMarginTop: 96,
+                  animation: timelineFocus?.targetId === 'request-status-resolution'
+                    ? 'timelineResolutionFocus 900ms ease-in-out'
+                    : 'none',
+                  '@keyframes timelineResolutionFocus': {
+                    '0%': { transform: 'scale(1)' },
+                    '30%': { transform: 'scale(0.975)' },
+                    '65%': { transform: 'scale(1.04)' },
+                    '100%': { transform: 'scale(1)' },
+                  },
                 }}
               >
                 {!isConcluded ? (
@@ -818,7 +871,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         <DialogTitle sx={{ fontWeight: 800 }}>Add Status Update</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5} sx={{ pt: 0.5 }}>
-            {error && <Alert severity="error">{error}</Alert>}
             <TextField
               required
               autoFocus
@@ -969,7 +1021,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5} sx={{ py: 1 }}>
-            {error && <Alert severity="error">{error}</Alert>}
 
             <TextField
               label="Deducted Amount"
@@ -1230,6 +1281,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         onClose={() => setSummaryModalOpen(false)}
         onRefresh={() => void loadEvaluationSummary(summaryKind)}
       />
+      <ActionErrorDialog open={Boolean(error)} title="Unable to Complete Action" message={error} onClose={() => setError('')} />
     </Box>
   );
 }

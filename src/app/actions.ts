@@ -11,6 +11,7 @@ import {
   type EvaluationSummary,
 } from '@/lib/google-forms';
 import { hashPassword } from 'better-auth/crypto';
+import { getPasswordValidationError } from '@/lib/password-validation';
 import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -480,6 +481,8 @@ export async function createUser(userId: string, role: string, department = 'Una
 export async function createDirectoryUser(input: { name: string; email: string; password: string; role: string; department: string }) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin' || !VALID_ROLES.includes(input.role as AppRole)) return unauthorized;
+  const passwordError = getPasswordValidationError(input.password);
+  if (passwordError) return { success: false, error: passwordError };
   try {
     const { data, error } = await auth.admin.createUser({ email: input.email, password: input.password, name: input.name });
     if (error || !data?.user) return { success: false, error: error?.message || 'Unable to create the Neon Auth user.' };
@@ -1927,9 +1930,8 @@ export async function verifyAndResetPassword(rawEmail: string, rawCode: string, 
       return { success: false, error: 'Please fill in all required fields.' };
     }
 
-    if (newPassword.length < 6) {
-      return { success: false, error: 'Password must be at least 6 characters long.' };
-    }
+    const passwordError = getPasswordValidationError(newPassword);
+    if (passwordError) return { success: false, error: passwordError };
 
     // Check code in database
     const [resetRecord] = await db
