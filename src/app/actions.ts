@@ -1334,6 +1334,49 @@ async function uploadFileToGoogleDrive(file: File, accessToken: string): Promise
   };
 }
 
+type GoogleDriveUploadFile = { name: string; mimeType: string; size: number };
+
+async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, accessToken: string) {
+  const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': file.mimeType || 'application/octet-stream',
+      'X-Upload-Content-Length': String(file.size),
+    },
+    body: JSON.stringify({
+      name: file.name,
+      mimeType: file.mimeType || 'application/octet-stream',
+      parents: [process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID],
+    }),
+  });
+  const uploadUrl = response.headers.get('location');
+  if (!response.ok || !uploadUrl) {
+    console.error('Google Drive upload session failed:', response.status, await response.text());
+    throw new Error(`Google Drive could not prepare an upload for “${file.name}”.`);
+  }
+  return { uploadUrl, name: file.name, mimeType: file.mimeType || 'application/octet-stream' };
+}
+
+export async function createGoogleDriveUploadSessions(files: GoogleDriveUploadFile[]) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !canManageRequests(access)) return { ...unauthorized, sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+    if (files.length === 0) return { success: true, sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+    if (files.length > MAX_STATUS_ATTACHMENTS) return { success: false, error: `You can attach up to ${MAX_STATUS_ATTACHMENTS} files at once.`, sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+    if (files.some((file) => !file.name.trim() || !Number.isFinite(file.size) || file.size <= 0)) return { success: false, error: 'One or more selected files are invalid.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+    if (files.reduce((total, file) => total + file.size, 0) > MAX_STATUS_ATTACHMENT_BYTES) return { success: false, error: 'Attachments must total 20 MB or less.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+
+    const accessToken = await getGoogleDriveAccessToken();
+    const sessions = await Promise.all(files.map((file) => createGoogleDriveUploadSession(file, accessToken)));
+    return { success: true, sessions };
+  } catch (error) {
+    console.error('Failed to create Google Drive upload sessions:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to prepare file uploads.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+  }
+}
+
 export async function uploadFilesToGoogleDrive(formData: FormData) {
   try {
     const access = await getCurrentAccess();

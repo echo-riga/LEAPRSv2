@@ -53,10 +53,10 @@ import {
   resumeRequestProgress,
   stopRequestProgress,
   updateRequestStatus,
-  uploadFilesToGoogleDrive,
   type AppRole,
   type StatusAttachment,
 } from '@/app/actions';
+import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import type { EvaluationSummary } from '@/lib/google-forms';
 
 type RequestSummary = {
@@ -260,9 +260,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const submitStopperResponse = async (stopperId: number) => {
     if (!session.data || !stopperResponse.text.trim()) return;
     setRespondingToStopper(true);
-    const uploadData = new FormData();
-    stopperResponse.files.forEach((file) => uploadData.append('files', file));
-    const uploaded = await uploadFilesToGoogleDrive(uploadData);
+    const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperResponse.files);
     if (!uploaded.success) { setError(uploaded.error || 'Unable to upload the selected files.'); setRespondingToStopper(false); return; }
     const result = await createRequestStatusUpdate({ requestId, userId: session.data.user.id, statusUpdate: stopperResponse.text.trim(), files: uploaded.files, isStopperResponse: true, stopperId });
     if (result.success) { setStopperResponse({ text: '', files: [] }); await loadData(); }
@@ -290,9 +288,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const executeStopper = async () => {
     if (!session.data || !form.statusUpdate.trim()) return;
     setSaving(true);
-    const uploadData = new FormData();
-    form.files.forEach((file) => uploadData.append('files', file));
-    const uploaded = await uploadFilesToGoogleDrive(uploadData);
+    const uploaded = await uploadFilesDirectlyToGoogleDrive(form.files);
     if (!uploaded.success) { setError(uploaded.error || 'Unable to upload the selected files.'); setSaving(false); return; }
     const result = await stopRequestProgress({ requestId, reason: form.statusUpdate.trim(), files: uploaded.files });
     if (result.success) { setDialogOpen(false); await loadData(); }
@@ -312,9 +308,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     if (!session.data || !form.statusUpdate.trim()) return;
     setSaving(true);
     setError('');
-    const uploadData = new FormData();
-    form.files.forEach((file) => uploadData.append('files', file));
-    const uploaded = await uploadFilesToGoogleDrive(uploadData);
+    const uploaded = await uploadFilesDirectlyToGoogleDrive(form.files);
     if (!uploaded.success) {
       setError(uploaded.error || 'Unable to upload the selected files.');
       setSaving(false);

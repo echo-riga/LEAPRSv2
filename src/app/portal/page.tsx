@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation';
 import { Add as AddIcon, AttachFile as AttachFileIcon, ChevronRight as ChevronRightIcon, DeleteOutlined as DeleteIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
 import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Chip, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, FormControlLabel, Grid, IconButton, InputAdornment, MenuItem, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import { authClient } from '@/lib/auth/client';
-import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, uploadFilesToGoogleDrive, type AppRole, type StatusAttachment } from '@/app/actions';
+import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
 import DateField from '@/components/DateField';
 import DynamicTableField from '@/components/DynamicTableField';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
+import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 
 type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; section: string; width: string; placeholder: string | null };
 type Capdev = { id: number; aipCode: string; description: string; initialBudget: string; budget: string; department: string; updatedById: string; createdAt: Date | string; additionalInfo: Record<string, unknown> };
@@ -138,9 +139,7 @@ export default function PortalPage() {
       for (const [fieldName, files] of Object.entries(pendingFiles)) {
         if (files.length === 0) continue;
         const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
-        const uploadData = new FormData();
-        files.forEach((file) => uploadData.append('files', file));
-        const uploaded = await uploadFilesToGoogleDrive(uploadData);
+        const uploaded = await uploadFilesDirectlyToGoogleDrive(files);
         if (!uploaded.success) {
           setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`);
           return;

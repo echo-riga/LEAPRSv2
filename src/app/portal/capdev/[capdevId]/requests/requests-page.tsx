@@ -54,10 +54,10 @@ import {
   getRequestStatusUpdates,
   getRequestsByCapdev,
   updateRequest,
-  uploadFilesToGoogleDrive,
   type AppRole,
   type StatusAttachment,
 } from '@/app/actions';
+import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 
 type RequestRecord = {
   id: number;
@@ -286,9 +286,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     for (const [fieldName, files] of Object.entries(pendingFiles)) {
       if (files.length === 0) continue;
       const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
-      const uploadData = new FormData();
-      files.forEach((file) => uploadData.append('files', file));
-      const uploaded = await uploadFilesToGoogleDrive(uploadData);
+      const uploaded = await uploadFilesDirectlyToGoogleDrive(files);
       if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
       const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
       additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];

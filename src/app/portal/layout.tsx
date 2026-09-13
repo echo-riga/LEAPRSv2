@@ -8,6 +8,7 @@ import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess, type AppRole } from '@/app/actions';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import NotificationsMenu from '@/components/NotificationsMenu';
+import PortalChatbot from '@/components/PortalChatbot';
 import RequestTimelineProgress from '@/components/RequestTimelineProgress';
 
 const PORTAL_ROUTES = ['/portal', '/portal/analytics', '/portal/reports', '/portal/audit-logs', '/portal/settings', '/portal/users', '/portal/settings/capdev', '/portal/settings/request'];
@@ -110,6 +111,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
           </Stack>
           <Stack direction="row" spacing={0.75} sx={{ gridColumn: { xs: 2, md: 3 }, gridRow: 1, justifySelf: 'end', flexShrink: 0, alignItems: 'center' }}>
             {!isDashboard && <Tooltip title="Back"><IconButton color="primary" onClick={() => router.push(backHref)} aria-label="Back"><ArrowBackIcon /></IconButton></Tooltip>}
+            <PortalChatbot />
             <NotificationsMenu />
             {role && role !== 'employee' && role !== 'employee-department' && !isSettingsPage && <Tooltip title="Settings"><IconButton color="primary" onClick={() => router.push(settingsHref)} aria-label="Settings"><SettingsIcon /></IconButton></Tooltip>}
             <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}><IconButton color="primary" onClick={handleFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>{isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}</IconButton></Tooltip>
