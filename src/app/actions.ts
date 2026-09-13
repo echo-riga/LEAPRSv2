@@ -1278,7 +1278,7 @@ export type StatusAttachment = {
 };
 
 const MAX_STATUS_ATTACHMENTS = 10;
-const MAX_STATUS_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_STATUS_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 
 async function getGoogleDriveAccessToken() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -1368,7 +1368,7 @@ export async function createGoogleDriveUploadSessions(files: GoogleDriveUploadFi
     if (files.length === 0) return { success: true, sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
     if (files.length > MAX_STATUS_ATTACHMENTS) return { success: false, error: `You can attach up to ${MAX_STATUS_ATTACHMENTS} files at once.`, sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
     if (files.some((file) => !file.name.trim() || !Number.isFinite(file.size) || file.size <= 0)) return { success: false, error: 'One or more selected files are invalid.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
-    if (files.reduce((total, file) => total + file.size, 0) > MAX_STATUS_ATTACHMENT_BYTES) return { success: false, error: 'Attachments must total 20 MB or less.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+    if (files.reduce((total, file) => total + file.size, 0) > MAX_STATUS_ATTACHMENT_BYTES) return { success: false, error: 'Attachments must total 100 MB or less.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
 
     const requestHeaders = await headers();
     const origin = requestHeaders.get('origin');
@@ -1392,7 +1392,7 @@ export async function uploadFilesToGoogleDrive(formData: FormData) {
 
     const files = formData.getAll('files').filter((value): value is File => value instanceof File && value.size > 0);
     if (files.length > MAX_STATUS_ATTACHMENTS) return { success: false, error: `You can attach up to ${MAX_STATUS_ATTACHMENTS} files at once.`, files: [] as StatusAttachment[] };
-    if (files.reduce((total, file) => total + file.size, 0) > MAX_STATUS_ATTACHMENT_BYTES) return { success: false, error: 'Attachments must total 20 MB or less.', files: [] as StatusAttachment[] };
+    if (files.reduce((total, file) => total + file.size, 0) > MAX_STATUS_ATTACHMENT_BYTES) return { success: false, error: 'Attachments must total 100 MB or less.', files: [] as StatusAttachment[] };
     if (files.length === 0) return { success: true, files: [] as StatusAttachment[] };
 
     const accessToken = await getGoogleDriveAccessToken();
