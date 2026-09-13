@@ -35,11 +35,13 @@ import {
   KeyboardArrowDown as ArrowDownIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
-import { getCurrentUserAccess } from '@/app/actions';
 import { FormConfigSkeleton } from '@/components/Skeletons';
 import DateField from '@/components/DateField';
 import DynamicTableField from '@/components/DynamicTableField';
+import DepartmentCombobox from '@/components/DepartmentCombobox';
 import {
+  getCurrentUserAccess,
+  getDepartmentOptions,
   getCapdevFieldDefinitions,
   saveCapdevFieldDefinition,
   deleteCapdevFieldDefinition,
@@ -119,6 +121,8 @@ export default function CapdevConfigPage() {
     budget: '',
     department: '',
   });
+  const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
+  const [previewDepartmentIsOther, setPreviewDepartmentIsOther] = useState(false);
 
   const handleFixedPreviewChange = (key: string, value: string) => {
     setFixedPreviewData((prev) => ({ ...prev, [key]: value }));
@@ -138,7 +142,7 @@ export default function CapdevConfigPage() {
   useEffect(() => {
     const loadFields = async () => {
       try {
-        const data = await getCapdevFieldDefinitions();
+        const [data, departments] = await Promise.all([getCapdevFieldDefinitions(), getDepartmentOptions()]);
         const mapped = data.map((f) => ({
           ...f,
           key: `field-${f.id}`,
@@ -146,6 +150,7 @@ export default function CapdevConfigPage() {
           placeholder: f.placeholder || '',
         }));
         setFields(mapped);
+        setDepartmentOptions(departments);
       } catch (error) {
         console.error('Failed to load fields:', error);
       } finally {
@@ -1041,13 +1046,14 @@ export default function CapdevConfigPage() {
                               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
                                 Department <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
                               </Typography>
-                              <TextField
-                                fullWidth
-                                size="small"
-                                placeholder="e.g. Engineering"
+                              <DepartmentCombobox
+                                options={departmentOptions}
                                 value={fixedPreviewData.department}
-                                onChange={(e) => handleFixedPreviewChange('department', e.target.value)}
-                                sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
+                                onChange={(value) => handleFixedPreviewChange('department', value)}
+                                otherSelected={previewDepartmentIsOther}
+                                onOtherSelectedChange={setPreviewDepartmentIsOther}
+                                required
+                                size="small"
                               />
                             </Stack>
                           </Grid>

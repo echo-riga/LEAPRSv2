@@ -115,7 +115,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
     : role === 'viewer-full'
     ? 'Viewer (All)'
     : role === 'employee-department'
-    ? 'Employee (Department)'
+    ? 'Employee (All Department Requests)'
     : `${role.charAt(0).toUpperCase()}${role.slice(1)}`;
 
   return (

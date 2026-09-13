@@ -11,8 +11,8 @@ export const ROLE_OPTIONS = [
   },
   {
     value: 'employee-department',
-    label: 'Employee (Department Requests)',
-    description: 'Manages department requests and stoppers; self-registration requires admin approval.',
+    label: 'Employee (All Department Requests)',
+    description: 'Manages requests and stoppers across all departments; self-registration requires admin approval.',
   },
   {
     value: 'viewer',

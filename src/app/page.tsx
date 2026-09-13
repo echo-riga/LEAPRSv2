@@ -9,7 +9,6 @@ import {
   Stack,
   TextField,
   Alert,
-  Autocomplete,
   CircularProgress,
   Divider,
   Paper,
@@ -36,6 +35,7 @@ import {
 import { checkDrizzleConnection, completeSelfRegistration, DbStatus, getDepartmentOptions, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword } from './actions';
 import { authClient } from '@/lib/auth/client';
 import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
+import DepartmentCombobox from '@/components/DepartmentCombobox';
 import { useRouter } from 'next/navigation';
 
 const SELF_REGISTRATION_ROLE_OPTIONS = ROLE_OPTIONS.filter(({ value }) => value === 'employee' || value === 'employee-department' || value === 'viewer' || value === 'viewer-full');
@@ -62,6 +62,7 @@ export default function Home() {
   const [signUpPassword, setSignUpPassword] = useState('');
   const [signUpRole, setSignUpRole] = useState<'employee' | 'employee-department' | 'viewer' | 'viewer-full'>('employee');
   const [signUpDepartment, setSignUpDepartment] = useState('');
+  const [signUpDepartmentIsOther, setSignUpDepartmentIsOther] = useState(false);
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -153,12 +154,12 @@ export default function Home() {
         try {
           const resolvedRole = await getOrCreateUserRole(session.data.user.id);
           if (resolvedRole === 'pending-approval') {
-            if (isMounted) setAuthSuccess('Your Employee (Department Requests) access is awaiting admin approval.');
+            if (isMounted) setAuthSuccess('Your Employee (All Department Requests) access is awaiting admin approval.');
             await authClient.signOut();
             return;
           }
           if (resolvedRole === 'rejected') {
-            if (isMounted) setAuthError('Your Employee (Department Requests) access request was rejected.');
+            if (isMounted) setAuthError('Your Employee (All Department Requests) access request was rejected.');
             await authClient.signOut();
             return;
           }
@@ -238,11 +239,12 @@ export default function Home() {
       }
 
       if ('pendingApproval' in profile && profile.pendingApproval) {
-        setAuthSuccess('Registration submitted. An admin must approve Employee (Department Requests) access before you can sign in.');
+        setAuthSuccess('Registration submitted. An admin must approve Employee (All Department Requests) access before you can sign in.');
         setFullName('');
         setSignUpEmail('');
         setSignUpPassword('');
         setSignUpDepartment('');
+        setSignUpDepartmentIsOther(false);
         setIsSignUpMode(false);
         setIsRegistering(false);
         await authClient.signOut();
@@ -254,6 +256,7 @@ export default function Home() {
       setSignUpEmail('');
       setSignUpPassword('');
       setSignUpDepartment('');
+      setSignUpDepartmentIsOther(false);
       router.replace('/admin');
     } catch (err: any) {
       setAuthError(err.message || 'An unexpected server error occurred.');
@@ -328,12 +331,14 @@ export default function Home() {
     setAuthError(null);
     setAuthSuccess(null);
     setIsForgotPasswordMode(false);
+    setSignUpDepartmentIsOther(false);
     setIsSignUpMode(true);
   };
 
   const handleBackToSignIn = () => {
     setIsForgotPasswordMode(false);
     setIsSignUpMode(false);
+    setSignUpDepartmentIsOther(false);
     setForgotStep(1);
     setForgotError(null);
     setForgotSuccess(null);
@@ -508,7 +513,7 @@ export default function Home() {
                       </MenuItem>
                     ))}
                   </TextField>
-                  <Autocomplete freeSolo options={departmentOptions} value={signUpDepartment} inputValue={signUpDepartment} onChange={(_, value) => setSignUpDepartment(typeof value === 'string' ? value : '')} onInputChange={(_, value) => setSignUpDepartment(value)} disabled={authLoading} renderInput={(params) => <TextField {...params} label="Department" required fullWidth />} />
+                  <DepartmentCombobox options={departmentOptions} value={signUpDepartment} onChange={setSignUpDepartment} otherSelected={signUpDepartmentIsOther} onOtherSelectedChange={setSignUpDepartmentIsOther} required disabled={authLoading} />
                   <Button type="submit" variant="contained" color="primary" fullWidth size="large" disabled={authLoading || !fullName.trim() || !signUpDepartment.trim()} sx={{ py: 1.7, fontSize: '1.05rem', boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)' }}>
                     {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Create Account'}
                   </Button>

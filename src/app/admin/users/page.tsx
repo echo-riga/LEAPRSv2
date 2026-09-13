@@ -26,7 +26,6 @@ import {
   TextField,
   MenuItem,
   InputAdornment,
-  Autocomplete,
 } from '@mui/material';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import {
@@ -45,6 +44,7 @@ import { authClient } from '@/lib/auth/client';
 import { createDirectoryUser, decideRoleApproval, deleteDirectoryUser, getCurrentUserAccess, getDepartmentOptions, getPendingRoleApprovals, getUsersDirectory, updateDirectoryUser, createUser, type PendingRoleApproval } from '@/app/actions';
 import DateField from '@/components/DateField';
 import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
+import DepartmentCombobox from '@/components/DepartmentCombobox';
 
 interface UserEntity {
   id: string;
@@ -98,6 +98,7 @@ export default function UsersManagementPage() {
   const [formPassword, setFormPassword] = useState('');
   const [formRole, setFormRole] = useState('employee');
   const [formDepartment, setFormDepartment] = useState('');
+  const [formDepartmentIsOther, setFormDepartmentIsOther] = useState(false);
 
   // Redirect if not logged in
   useEffect(() => {
@@ -174,6 +175,7 @@ export default function UsersManagementPage() {
     setFormPassword('');
     setFormRole('employee');
     setFormDepartment('');
+    setFormDepartmentIsOther(false);
     setDialogOpen(true);
   };
 
@@ -185,6 +187,7 @@ export default function UsersManagementPage() {
     setFormPassword(''); // Clear password field, indicating "keep current"
     setFormRole(user.role);
     setFormDepartment(user.department);
+    setFormDepartmentIsOther(false);
     setDialogOpen(true);
   };
 
@@ -605,7 +608,7 @@ export default function UsersManagementPage() {
                 </MenuItem>
               ))}
             </TextField>
-            <Autocomplete freeSolo options={departmentOptions} value={formDepartment} inputValue={formDepartment} onChange={(_, value) => setFormDepartment(typeof value === 'string' ? value : '')} onInputChange={(_, value) => setFormDepartment(value)} renderInput={(params) => <TextField {...params} label="Department" fullWidth />} />
+            <DepartmentCombobox options={departmentOptions} value={formDepartment} onChange={setFormDepartment} otherSelected={formDepartmentIsOther} onOtherSelectedChange={setFormDepartmentIsOther} />
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
@@ -618,7 +621,7 @@ export default function UsersManagementPage() {
         </DialogActions>
       </Dialog>
       <Dialog open={pendingApprovalsOpen} onClose={() => setPendingApprovalsOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800 }}>Employee (Department Requests) Approvals</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 800 }}>Employee (All Department Requests) Approvals</DialogTitle>
         <DialogContent dividers>
           {pendingApprovals.length > 0 ? (
             <Stack spacing={1.5}>

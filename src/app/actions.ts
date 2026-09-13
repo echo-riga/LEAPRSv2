@@ -124,7 +124,7 @@ export async function getAuditLogs(input: { search?: string; action?: string; en
 }
 
 function canAccessCapdev(access: UserAccess, capdev: { department: string }) {
-  return access.role === 'admin' || access.role === 'viewer-full' || access.role === 'employee' || capdev.department === access.department;
+  return access.role === 'admin' || access.role === 'viewer-full' || access.role === 'employee' || access.role === 'employee-department' || capdev.department === access.department;
 }
 
 function canManageRequests(access: UserAccess) {
@@ -144,7 +144,7 @@ async function getAccessibleRequest(access: UserAccess, requestId: number) {
   const [record] = await db.select({ request: getTableColumns(requests), capdevDepartment: capdevs.department }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(eq(requests.id, requestId)).limit(1);
   if (!record) return null;
   if (access.role === 'employee') return record.request.userId === access.userId ? record.request : null;
-  if (access.role === 'employee-department') return record.capdevDepartment === access.department ? record.request : null;
+  if (access.role === 'employee-department') return record.request;
   if (access.role === 'viewer') return record.capdevDepartment === access.department ? record.request : null;
   return record.request;
 }
@@ -278,7 +278,7 @@ export async function completeSelfRegistration(input: { role: string; department
       }).returning({ id: roleApprovalRequests.id });
       await createNotification({
         title: 'Role approval requested',
-        message: `${session.user.name || session.user.email || 'A user'} requested Employee (Department Requests) access for ${department}.`,
+        message: `${session.user.name || session.user.email || 'A user'} requested Employee (All Department Requests) access.`,
         link: `/admin/users?approval=${approval.id}`,
         type: 'role_approval',
       });
@@ -1626,10 +1626,7 @@ function notificationAudienceCondition(access: UserAccess): SQL {
       eq(requests.userId, access.userId),
     )!;
   } else if (access.role === 'employee-department') {
-    isInvolved = and(
-      inArray(notifications.type, REQUEST_NOTIFICATION_TYPES),
-      eq(capdevs.department, access.department),
-    )!;
+    isInvolved = inArray(notifications.type, REQUEST_NOTIFICATION_TYPES);
   } else if (access.role === 'viewer') {
     isInvolved = and(
       inArray(notifications.type, ALL_NOTIFICATION_TYPES),

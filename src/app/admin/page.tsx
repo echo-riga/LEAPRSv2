@@ -9,6 +9,7 @@ import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevBudgetHistory, getC
 import DateField from '@/components/DateField';
 import DynamicTableField from '@/components/DynamicTableField';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
+import DepartmentCombobox from '@/components/DepartmentCombobox';
 
 type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; section: string; width: string; placeholder: string | null };
 type Capdev = { id: number; aipCode: string; description: string; initialBudget: string; budget: string; department: string; updatedById: string; createdAt: Date | string; additionalInfo: Record<string, unknown> };
@@ -39,6 +40,7 @@ export default function AdminPage() {
   const session = authClient.useSession();
   const [projects, setProjects] = useState<Capdev[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
+  const [departmentIsOther, setDepartmentIsOther] = useState(false);
   const [definitions, setDefinitions] = useState<DynamicField[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -95,8 +97,8 @@ export default function AdminPage() {
   const setValue = (updates: Partial<CapdevForm>) => setForm((current) => ({ ...current, ...updates }));
   const setDynamicValue = (name: string, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [name]: value } }));
 
-  const openCreate = () => { setError(''); setPendingFiles({}); setBudgetHistory([]); setEditing(null); setForm(EMPTY_FORM); setEditorOpen(true); };
-  const openEdit = async (project: Capdev) => { setError(''); setPendingFiles({}); setEditing(project); setForm({ ...project, additionalInfo: { ...project.additionalInfo } }); setBudgetHistory(await getCapdevBudgetHistory(project.id)); setEditorOpen(true); };
+  const openCreate = () => { setError(''); setPendingFiles({}); setBudgetHistory([]); setEditing(null); setForm(EMPTY_FORM); setDepartmentIsOther(false); setEditorOpen(true); };
+  const openEdit = async (project: Capdev) => { setError(''); setPendingFiles({}); setEditing(project); setForm({ ...project, additionalInfo: { ...project.additionalInfo } }); setDepartmentIsOther(false); setBudgetHistory(await getCapdevBudgetHistory(project.id)); setEditorOpen(true); };
   const addSelectedFiles = (fieldName: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
     setPendingFiles((current) => ({ ...current, [fieldName]: [...(current[fieldName] || []), ...selectedFiles].filter((file, index, files) => files.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index) }));
@@ -320,7 +322,7 @@ export default function AdminPage() {
           <Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>Required Information</Typography>
           <Grid container spacing={2.5} sx={{ pt: 0.5 }}>
             <Grid size={{ xs: 12, sm: 6 }}><TextField required fullWidth label="AIP Code" placeholder="0000-000-0-0-00-000-000" value={form.aipCode} onChange={(event) => setValue({ aipCode: formatAipCode(event.target.value) })} /></Grid>
-            <Grid size={{ xs: 12, sm: 6 }}><Autocomplete freeSolo options={departmentOptions} value={form.department} inputValue={form.department} onChange={(_, value) => setValue({ department: typeof value === 'string' ? value : '' })} onInputChange={(_, value) => setValue({ department: value })} renderInput={(params) => <TextField {...params} required fullWidth label="Department" />} /></Grid>
+            <Grid size={{ xs: 12, sm: 6 }}><DepartmentCombobox options={departmentOptions} value={form.department} onChange={(department) => setValue({ department })} otherSelected={departmentIsOther} onOtherSelectedChange={setDepartmentIsOther} required /></Grid>
             {editing ? <><Grid size={{ xs: 12, sm: 6 }}><Typography variant="body2" color="text.secondary">Initial Balance</Typography><Typography sx={{ fontWeight: 700 }}>{formatCurrency(form.initialBudget)}</Typography></Grid><Grid size={{ xs: 12, sm: 6 }}><Typography variant="body2" color="text.secondary">Remaining Balance</Typography><Typography sx={{ fontWeight: 700, color: Number(form.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(form.budget)}</Typography></Grid></> : <Grid size={12}><TextField required fullWidth label="Initial Balance" type="number" value={form.budget} onChange={(event) => setValue({ budget: event.target.value, initialBudget: event.target.value })} /></Grid>}
             {requiredDefinitions.map(renderDynamicField)}
           </Grid>

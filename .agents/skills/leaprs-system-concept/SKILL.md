@@ -103,7 +103,7 @@ All files are uploaded to Google Drive.
 
 * **Admin** manages users, configuration, CapDev projects, and requests.
 * **Employee** can view CapDev projects and create, update, and delete only their own requests.
-* **Employee (Department Requests)** is a department assistant role. It can view and manage requests belonging to CapDev projects in its department, including other employees' requests, post timeline updates, and control stoppers. Users may request this role during self-registration, but the LEAPRS account and role remain pending until an Admin accepts the request.
+* **Employee (All Department Requests)** is a request-management role with access across all departments. It can view every CapDev project; view and manage all employees' requests; post timeline updates; and control stoppers across the system. Users may request this role during self-registration, but the LEAPRS account and role remain pending until an Admin accepts the request.
 * **Viewer** has read-only access to CapDev projects and requests in its department.
 * **Viewer (All Departments)** has read-only access across departments.
 
@@ -113,7 +113,7 @@ Notifications are event records, but they are visible only while their associate
 
 * **Admin** receives new-request and request-status activity across all departments.
 * **Employee** receives status activity posted by someone else on requests they own. They do not receive general CapDev or unrelated request activity.
-* **Employee (Department Requests)** receives new-request and request-status activity in their department.
+* **Employee (All Department Requests)** receives new-request and request-status activity across all departments.
 * **Viewer** receives CapDev, request, and request-status activity in their department.
 * **Viewer (All Departments)** receives CapDev, request, and request-status activity across all departments.
 * Deleting an associated request or CapDev removes its notifications from every audience. Audit logs remain independent and persist.
@@ -121,20 +121,20 @@ Notifications are event records, but they are visible only while their associate
 ### B. Self-Registration
 
 * The login page supports Neon Auth email registration with full name, email, password, role, and department.
-* Self-registration offers **Employee**, **Employee (Department Requests)**, **Viewer**, and **Viewer (All Departments)**. Admin remains assignable only through Users Management.
+* Self-registration offers **Employee**, **Employee (All Department Requests)**, **Viewer**, and **Viewer (All Departments)**. Admin remains assignable only through Users Management.
 * Employee, Viewer, and Viewer (All Departments) accounts receive their selected application role and department immediately after Neon Auth creates the authentication record.
-* Employee (Department Requests) registrations create a pending role approval request instead of an application user profile. Admins receive a notification linking to Users Management, where they can accept or reject it. Acceptance creates the application user profile with the requested role and department; rejection removes the pending authentication account.
+* Employee (All Department Requests) registrations create a pending role approval request instead of an application user profile. Admins receive a notification linking to Users Management, where they can accept or reject it. Acceptance creates the application user profile with the requested role and department; rejection removes the pending authentication account.
 
 ### C. Shared Department Values
 
 * Department is a fixed important field, not a configurable dynamic field.
-* Department inputs in CapDev CRUD, signup, and Users Management are free-text comboboxes. Users can select a previously used department or type a new one.
+* Department inputs in CapDev CRUD, signup, Users Management, and the CapDev form preview use a single combobox populated with previously saved departments. The final option is **Not listed (please specify)**; selecting it makes the same combobox editable for entering a new department.
 * The shared suggestion list is read from saved user profiles and CapDev projects. Saving a new department value makes it available as a future suggestion; departments intentionally have create/read behavior only, with no separate update or delete screen.
 
 ## 5. Stopper and Resume Workflow
 
-* An **Admin** or **Employee (Department Requests)** can add a stopper at any time by supplying a reason and optional attachments. A request may be stopped again after it has been resumed.
+* An **Admin** or **Employee (All Department Requests)** can add a stopper at any time by supplying a reason and optional attachments. A request may be stopped again after it has been resumed.
 * A stopper is retained as a timeline card with a **Stopped** badge, a pin visual, its reason, and its attachments. It remains in the history after resumption and shows that it was resumed.
 * While a request is stopped, normal Employees cannot add ordinary status updates. Instead, the active stopper card provides them a text and attachment response area so they can submit what the stopper reason asks for.
-* While stopped, Admin and Employee (Department Requests) see **Resume Progress** in place of adding a status update. Resuming re-enables normal Employee status updates.
-* Server authorization enforces these rules: regular Employees can submit only a response to the active stopper on their own request; only Admin and Employee (Department Requests) can stop or resume progress.
+* While stopped, Admin and Employee (All Department Requests) see **Resume Progress** in place of adding a status update. Resuming re-enables normal Employee status updates.
+* Server authorization enforces these rules: regular Employees can submit only a response to the active stopper on their own request; only Admin and Employee (All Department Requests) can stop or resume progress.
