@@ -90,16 +90,12 @@ export default function CapdevConfigPage() {
   const [backups, setBackups] = useState<Record<string, Field>>({});
   const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
   const tempCounter = useRef(0);
-  const savedSignalPending = useRef(false);
-
-  useEffect(() => {
-    const status = editingKeys.size > 0 ? 'editing' : savedSignalPending.current ? 'saved' : 'idle';
-    savedSignalPending.current = false;
-    window.dispatchEvent(new CustomEvent<'idle' | 'editing' | 'saved'>('leaprs:config-editing', { detail: status }));
-  }, [editingKeys]);
+  const [isSavingConfiguration, setIsSavingConfiguration] = useState(false);
+  const [configurationSaved, setConfigurationSaved] = useState(false);
+  const configurationSaveTimeout = useRef<number | null>(null);
 
   useEffect(() => () => {
-    window.dispatchEvent(new CustomEvent<'idle'>('leaprs:config-editing', { detail: 'idle' }));
+    if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
   }, []);
 
   // Add-section state
@@ -181,6 +177,8 @@ export default function CapdevConfigPage() {
   if (!session.data) return null;
 
   const currentUserId = session.data.user.id;
+  const draftFields = fields.filter((field) => field.isTemp || editingKeys.has(field.key));
+  const hasInvalidDraft = draftFields.some((field) => !field.name.trim());
 
   // ---- Inline add / edit / cancel / save / delete -------------------------------------------
 
@@ -244,39 +242,10 @@ export default function CapdevConfigPage() {
     clearEditingState(f.key);
   };
 
-  const handleSaveField = async (originalIndex: number) => {
-    const f = fields[originalIndex];
-    if (!f.name.trim()) return;
-    setSavingId(f.id ?? f.key);
-    try {
-      const payload = {
-        id: f.isTemp ? undefined : f.id,
-        name: f.name,
-        type: f.type,
-        options: f.options,
-        isRequired: f.isRequired,
-        section: f.isRequired ? 'required' : f.section,
-        width: f.width,
-        placeholder: f.placeholder || '',
-        sortOrder: f.sortOrder,
-        updatedById: currentUserId,
-      };
-
-      const result = await saveCapdevFieldDefinition(payload);
-      if (result.success && result.id) {
-        setFields((prev) =>
-          prev.map((field, idx) =>
-            idx === originalIndex ? { ...field, id: result.id, key: `field-${result.id}`, isTemp: false } : field
-          )
-        );
-        savedSignalPending.current = true;
-        clearEditingState(f.key);
-      }
-    } catch (error) {
-      console.error('Save failed:', error);
-    } finally {
-      setSavingId(null);
-    }
+  const handleConfirmAddField = (originalIndex: number) => {
+    const field = fields[originalIndex];
+    if (!field.isTemp || !field.name.trim()) return;
+    clearEditingState(field.key);
   };
 
   const handleDeleteFieldDirect = async (originalIndex: number) => {
@@ -346,6 +315,46 @@ export default function CapdevConfigPage() {
 
     const idOrder = sorted.map((f) => f.id).filter((id): id is number => typeof id === 'number');
     await updateCapdevFieldsOrder(idOrder, currentUserId);
+  };
+
+  const handleSaveConfiguration = async () => {
+    if (draftFields.length === 0 || hasInvalidDraft) return;
+    setIsSavingConfiguration(true);
+    setConfigurationSaved(false);
+    try {
+      const savedFields = await Promise.all(draftFields.map(async (field) => {
+        const result = await saveCapdevFieldDefinition({
+          id: field.isTemp ? undefined : field.id,
+          name: field.name,
+          type: field.type,
+          options: field.options,
+          isRequired: field.isRequired,
+          section: field.isRequired ? 'required' : field.section,
+          width: field.width,
+          placeholder: field.placeholder || '',
+          sortOrder: field.sortOrder,
+          updatedById: currentUserId,
+        });
+        return { key: field.key, result };
+      }));
+      if (savedFields.every(({ result }) => result.success && result.id)) {
+        const idsByKey = new Map(savedFields.map(({ key, result }) => [key, result.id!]));
+        setFields((current) => current.map((field) => {
+          const id = idsByKey.get(field.key);
+          return id ? { ...field, id, key: `field-${id}`, isTemp: false } : field;
+        }));
+        setEditingKeys(new Set());
+        setBackups({});
+        setOptionDrafts({});
+        setConfigurationSaved(true);
+        if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
+        configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
+      }
+    } catch (error) {
+      console.error('Configuration save failed:', error);
+    } finally {
+      setIsSavingConfiguration(false);
+    }
   };
 
   const handleDragStart = (e: React.DragEvent, key: string) => {
@@ -925,15 +934,16 @@ export default function CapdevConfigPage() {
           <Button variant="outlined" onClick={() => handleCancelEdit(originalIndex)} disabled={isSaving}>
             Cancel
           </Button>
-          <Button
-            variant="contained"
-            color="primary"
-            startIcon={isSaving ? <CircularProgress size={16} color="inherit" /> : <SaveIcon />}
-            onClick={() => handleSaveField(originalIndex)}
-            disabled={isSaving || !f.name.trim()}
-          >
-            Save Field
-          </Button>
+          {f.isTemp && (
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => handleConfirmAddField(originalIndex)}
+              disabled={isSaving || !f.name.trim()}
+            >
+              Add Field
+            </Button>
+          )}
         </Stack>
       </Box>
     );
@@ -948,15 +958,7 @@ export default function CapdevConfigPage() {
     >
       {/* Main Single Live Preview Container */}
       <Container maxWidth="md" sx={{ p: 0, width: '100%', mb: 4 }}>
-        <Typography
-          variant="h4"
-          sx={{
-            fontWeight: '800',
-            color: 'text.primary',
-            letterSpacing: '-1px',
-            mb: 0.5,
-          }}
-        >
+        <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px', mb: 0.5 }}>
           CapDev Form Layout
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
@@ -1341,6 +1343,16 @@ export default function CapdevConfigPage() {
           </CardContent>
         </Card>
       </Container>
+      <Button
+        variant="contained"
+        size="large"
+        startIcon={isSavingConfiguration ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
+        onClick={() => void handleSaveConfiguration()}
+        disabled={isSavingConfiguration || draftFields.length === 0 || hasInvalidDraft}
+        sx={{ position: 'fixed', right: { xs: 16, md: 24 }, bottom: { xs: 16, md: 24 }, zIndex: (theme) => theme.zIndex.appBar - 1 }}
+      >
+        {isSavingConfiguration ? 'Saving...' : configurationSaved ? 'Saved' : 'Save Configuration'}
+      </Button>
     </Box>
   );
 }

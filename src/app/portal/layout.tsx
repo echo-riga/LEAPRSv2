@@ -1,9 +1,9 @@
 'use client';
 
-import React, { Suspense, useEffect, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { AppBar, Box, Chip, CircularProgress, IconButton, Stack, Toolbar, Tooltip, Typography } from '@mui/material';
-import { ArrowBack as ArrowBackIcon, CheckCircleOutlined as CheckIcon, ExitToApp as ExitToAppIcon, Fullscreen as FullscreenIcon, FullscreenExit as FullscreenExitIcon, Settings as SettingsIcon } from '@mui/icons-material';
+import { AppBar, Box, Chip, IconButton, Stack, Toolbar, Tooltip, Typography } from '@mui/material';
+import { ArrowBack as ArrowBackIcon, ExitToApp as ExitToAppIcon, Fullscreen as FullscreenIcon, FullscreenExit as FullscreenExitIcon, Settings as SettingsIcon } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess, type AppRole } from '@/app/actions';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
@@ -11,8 +11,6 @@ import NotificationsMenu from '@/components/NotificationsMenu';
 import RequestTimelineProgress from '@/components/RequestTimelineProgress';
 
 const PORTAL_ROUTES = ['/portal', '/portal/analytics', '/portal/reports', '/portal/audit-logs', '/portal/settings', '/portal/users', '/portal/settings/capdev', '/portal/settings/request'];
-type ConfigHeaderStatus = 'idle' | 'editing' | 'saved';
-
 function getGreeting() {
   const hour = new Date().getHours();
   if (hour < 12) return 'Good morning';
@@ -27,8 +25,6 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
   const session = authClient.useSession();
   const [greeting, setGreeting] = useState(getGreeting);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [configHeaderStatus, setConfigHeaderStatus] = useState<ConfigHeaderStatus>('idle');
-  const configStatusTimeout = useRef<number | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
 
   useEffect(() => {
@@ -61,20 +57,6 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
     document.addEventListener('fullscreenchange', syncFullscreenState);
     syncFullscreenState();
     return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
-  }, []);
-
-  useEffect(() => {
-    const handleConfigEditing = (event: Event) => {
-      const status = (event as CustomEvent<ConfigHeaderStatus>).detail;
-      if (configStatusTimeout.current) window.clearTimeout(configStatusTimeout.current);
-      setConfigHeaderStatus(status);
-      if (status === 'saved') configStatusTimeout.current = window.setTimeout(() => setConfigHeaderStatus('idle'), 2_000);
-    };
-    window.addEventListener('leaprs:config-editing', handleConfigEditing);
-    return () => {
-      window.removeEventListener('leaprs:config-editing', handleConfigEditing);
-      if (configStatusTimeout.current) window.clearTimeout(configStatusTimeout.current);
-    };
   }, []);
 
   const handleFullscreen = async () => {
@@ -134,7 +116,6 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
             <Tooltip title="Sign out"><IconButton color="error" onClick={handleSignOut} aria-label="Sign out"><ExitToAppIcon /></IconButton></Tooltip>
           </Stack>
           {statusRouteMatch && <Box sx={{ display: { xs: 'none', md: 'block' }, gridColumn: 2, gridRow: 1, minWidth: 0 }}><RequestTimelineProgress requestId={Number(statusRouteMatch[2])} /></Box>}
-          {configHeaderStatus !== 'idle' && <Tooltip title={configHeaderStatus === 'saved' ? 'Configuration saved' : 'Configuration in progress'}><Box sx={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', display: 'grid', placeItems: 'center' }}>{configHeaderStatus === 'saved' ? <CheckIcon sx={{ color: 'success.main', fontSize: 26, animation: 'leaprs-config-check-in 300ms ease-out', '@keyframes leaprs-config-check-in': { '0%': { transform: 'scale(0)', opacity: 0 }, '70%': { transform: 'scale(1.2)', opacity: 1 }, '100%': { transform: 'scale(1)', opacity: 1 } } }} /> : <CircularProgress size={22} color="primary" />}</Box></Tooltip>}
         </Toolbar>
       </AppBar>
       <Box component="main" sx={{ minHeight: '100vh', boxSizing: 'border-box', px: { xs: 2, md: 3 }, pb: { xs: 2, md: 3 }, pt: { xs: '80px', md: '96px' } }}>{children}</Box>

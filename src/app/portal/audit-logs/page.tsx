@@ -16,6 +16,7 @@ import {
 } from '@mui/icons-material';
 import { getAuditLogs, type AuditLogItem } from '@/app/actions';
 import { AuditLogsSkeleton } from '@/components/Skeletons';
+import { roleLabel } from '@/lib/role-options';
 
 const PAGE_SIZE = 12;
 
@@ -75,7 +76,7 @@ function activityMetadata(log: AuditLogItem) {
   const formattedAmount = formatCurrency(amount);
   if (formattedAmount) metadata.push({ label: details.deductedAmount ? `${formattedAmount} deducted` : formattedAmount, color: 'success' });
   if (typeof details.department === 'string') metadata.push({ label: details.department });
-  if (typeof details.role === 'string') metadata.push({ label: details.role.replace(/-/g, ' ') });
+  if (typeof details.role === 'string') metadata.push({ label: roleLabel(details.role) });
   if (typeof details.reason === 'string') metadata.push({ label: `Reason: ${details.reason}` });
   return metadata;
 }
