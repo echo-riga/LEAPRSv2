@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Container,
   Box,
@@ -39,10 +39,12 @@ import {
   Person as PersonIcon,
   FilterList as FilterIcon,
   VisibilityOutlined as VisibilityIcon,
+  ManageAccountsOutlined as PendingApprovalIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
-import { createDirectoryUser, deleteDirectoryUser, getCurrentUserAccess, getDepartmentOptions, getUsersDirectory, updateDirectoryUser, createUser } from '@/app/actions';
+import { createDirectoryUser, decideRoleApproval, deleteDirectoryUser, getCurrentUserAccess, getDepartmentOptions, getPendingRoleApprovals, getUsersDirectory, updateDirectoryUser, createUser, type PendingRoleApproval } from '@/app/actions';
 import DateField from '@/components/DateField';
+import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
 
 interface UserEntity {
   id: string;
@@ -55,15 +57,18 @@ interface UserEntity {
   department: string;
 }
 
-const ALL_ROLES = ['admin', 'employee', 'employee-department', 'viewer', 'viewer-full'];
-const roleLabel = (role: string) => role === 'viewer-full' ? 'Viewer (All Departments)' : role === 'employee-department' ? 'Employee (Department Requests)' : role.charAt(0).toUpperCase() + role.slice(1);
+const ALL_ROLES = ROLE_OPTIONS.map(({ value }) => value);
 
 export default function UsersManagementPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const session = authClient.useSession();
   const [loading, setLoading] = useState(true);
   const [usersList, setUsersList] = useState<UserEntity[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingRoleApproval[]>([]);
+  const [approvalActionId, setApprovalActionId] = useState<number | null>(null);
+  const [pendingApprovalsOpen, setPendingApprovalsOpen] = useState(false);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -107,12 +112,12 @@ export default function UsersManagementPage() {
   }, [router, session.data]);
 
   // Load users from DB
-  const loadUsers = async () => {
+  const loadUsers = async (showLoading = true) => {
     if (!session.data) return;
 
-    setLoading(true);
+    if (showLoading) setLoading(true);
     try {
-      const [directoryUsers, departments] = await Promise.all([getUsersDirectory(), getDepartmentOptions()]);
+      const [directoryUsers, departments, approvalResult] = await Promise.all([getUsersDirectory(), getDepartmentOptions(), getPendingRoleApprovals()]);
       
       const formattedDbUsers = directoryUsers.map(u => ({
         id: u.id,
@@ -127,14 +132,28 @@ export default function UsersManagementPage() {
 
       setUsersList(formattedDbUsers);
       setDepartmentOptions(departments);
+      if (approvalResult.success) setPendingApprovals(approvalResult.approvals);
       const initialDepartments = Array.from(new Set(formattedDbUsers.map((user) => user.department))).sort();
       setDepartmentFilter(initialDepartments);
       setDraftDepartmentFilter(initialDepartments);
     } catch (err) {
       console.error('Error loading users:', err);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
+  };
+
+  const handleApprovalDecision = async (approvalId: number, decision: 'accepted' | 'rejected') => {
+    setApprovalActionId(approvalId);
+    const result = await decideRoleApproval(approvalId, decision);
+    if (result.success) {
+      setPendingApprovals((current) => current.filter((approval) => approval.id !== approvalId));
+      if (pendingApprovals.length === 1) setPendingApprovalsOpen(false);
+      if (decision === 'accepted') await loadUsers(false);
+    } else {
+      console.error('Failed to decide role approval:', result.error);
+    }
+    setApprovalActionId(null);
   };
 
   useEffect(() => {
@@ -142,6 +161,10 @@ export default function UsersManagementPage() {
       loadUsers();
     }
   }, [session.data]);
+
+  useEffect(() => {
+    if (searchParams.has('approval')) setPendingApprovalsOpen(true);
+  }, [searchParams]);
 
   // Open dialog for adding a new user
   const handleOpenAddDialog = () => {
@@ -294,7 +317,7 @@ export default function UsersManagementPage() {
             Users Management
           </Typography>
 
-          <Stack direction="row" spacing={2} sx={{ width: { xs: '100%', sm: 'auto' }, alignItems: 'center' }}>
+          <Stack direction="row" spacing={2} sx={{ width: { xs: '100%', sm: 'auto' }, alignItems: 'center', flexWrap: 'wrap' }}>
             {/* Search Input */}
             <TextField
               placeholder="Search user..."
@@ -316,6 +339,11 @@ export default function UsersManagementPage() {
                 '& .MuiOutlinedInput-root': { borderRadius: 2 },
               }}
             />
+
+            <Button variant="outlined" color="primary" startIcon={<PendingApprovalIcon />} onClick={() => setPendingApprovalsOpen(true)} sx={{ height: 40, whiteSpace: 'nowrap' }}>
+              Pending Department Employees
+              <Chip label={pendingApprovals.length} size="small" color={pendingApprovals.length > 0 ? 'warning' : 'default'} sx={{ ml: 1, height: 22, fontWeight: 700 }} />
+            </Button>
 
             <Button size="small" sx={{ height: 40 }} variant="outlined" startIcon={<FilterIcon />} onClick={() => { setDraftRoleFilter([...roleFilter]); setDraftDepartmentFilter([...departmentFilter]); setDraftDateFrom(dateFrom); setDraftDateTo(dateTo); setDraftSortOrder(sortOrder); setFiltersOpen(true); }}>Filter</Button>
           </Stack>
@@ -566,12 +594,16 @@ export default function UsersManagementPage() {
               fullWidth
               value={formRole}
               onChange={(e) => setFormRole(e.target.value)}
+              slotProps={{ select: { renderValue: (value) => roleLabel(String(value)) } }}
             >
-              <MenuItem value="employee">Employee</MenuItem>
-              <MenuItem value="employee-department">Employee (Department Requests)</MenuItem>
-              <MenuItem value="admin">Admin</MenuItem>
-              <MenuItem value="viewer">Viewer</MenuItem>
-              <MenuItem value="viewer-full">Viewer (All Departments)</MenuItem>
+              {ROLE_OPTIONS.map((option) => (
+                <MenuItem key={option.value} value={option.value} sx={{ py: 1.25, whiteSpace: 'normal' }}>
+                  <Box>
+                    <Typography variant="body1">{option.label}</Typography>
+                    <Typography variant="caption" color="text.secondary">{option.description}</Typography>
+                  </Box>
+                </MenuItem>
+              ))}
             </TextField>
             <Autocomplete freeSolo options={departmentOptions} value={formDepartment} inputValue={formDepartment} onChange={(_, value) => setFormDepartment(typeof value === 'string' ? value : '')} onInputChange={(_, value) => setFormDepartment(value)} renderInput={(params) => <TextField {...params} label="Department" fullWidth />} />
           </Stack>
@@ -583,6 +615,36 @@ export default function UsersManagementPage() {
           <Button onClick={handleSaveUser} variant="contained" color="primary" sx={{ fontWeight: '700' }}>
             Save User
           </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={pendingApprovalsOpen} onClose={() => setPendingApprovalsOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Employee (Department Requests) Approvals</DialogTitle>
+        <DialogContent dividers>
+          {pendingApprovals.length > 0 ? (
+            <Stack spacing={1.5}>
+              {pendingApprovals.map((approval) => {
+                const isHighlighted = Number(searchParams.get('approval')) === approval.id;
+                return (
+                  <Stack key={approval.id} direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ p: 2, border: '1px solid', borderColor: isHighlighted ? 'primary.main' : 'divider', borderRadius: 2, alignItems: { sm: 'center' }, bgcolor: isHighlighted ? 'rgba(46, 125, 50, 0.04)' : '#fafcfa' }}>
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Typography variant="body1" sx={{ fontWeight: 700 }}>{approval.name}</Typography>
+                      <Typography variant="body2" color="text.secondary">{approval.email}</Typography>
+                      <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 600 }}>{approval.department}</Typography>
+                    </Box>
+                    <Stack direction="row" spacing={1}>
+                      <Button color="error" variant="outlined" onClick={() => void handleApprovalDecision(approval.id, 'rejected')} disabled={approvalActionId !== null}>Reject</Button>
+                      <Button color="primary" variant="contained" onClick={() => void handleApprovalDecision(approval.id, 'accepted')} disabled={approvalActionId !== null}>Accept</Button>
+                    </Stack>
+                  </Stack>
+                );
+              })}
+            </Stack>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>No pending approval requests.</Typography>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button onClick={() => setPendingApprovalsOpen(false)} color="inherit" sx={{ fontWeight: 700 }}>Close</Button>
         </DialogActions>
       </Dialog>
       <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} maxWidth="sm" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Filter Users</DialogTitle><DialogContent dividers><Stack spacing={2}><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Roles</Typography>{ALL_ROLES.map((role) => <FormControlLabel key={role} control={<Checkbox checked={draftRoleFilter.includes(role)} onChange={() => setDraftRoleFilter((current) => current.includes(role) ? current.filter((item) => item !== role) : [...current, role])} />} label={roleLabel(role)} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{Array.from(new Set(usersList.map((user) => user.department))).sort().map((department) => <FormControlLabel key={department} control={<Checkbox checked={draftDepartmentFilter.includes(department)} onChange={() => setDraftDepartmentFilter((current) => current.includes(department) ? current.filter((item) => item !== department) : [...current, department])} />} label={department} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Grid container spacing={2}><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftDateFrom} onChange={setDraftDateFrom} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftDateTo} onChange={setDraftDateTo} /></Grid></Grid><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const today = new Date().toISOString().slice(0, 10); setDraftDateFrom(today); setDraftDateTo(today); }}>Today</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This month</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-01-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This year</Button></Stack><TextField select fullWidth label="Sort" value={draftSortOrder} onChange={(event) => setDraftSortOrder(event.target.value as 'newest' | 'oldest')}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => { setDraftRoleFilter([...ALL_ROLES]); setDraftDepartmentFilter(Array.from(new Set(usersList.map((user) => user.department))).sort()); setDraftDateFrom(''); setDraftDateTo(''); setDraftSortOrder('newest'); }}>Reset</Button><Button variant="contained" onClick={() => { setRoleFilter([...draftRoleFilter]); setDepartmentFilter([...draftDepartmentFilter]); setDateFrom(draftDateFrom); setDateTo(draftDateTo); setSortOrder(draftSortOrder); setCurrentPage(1); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>

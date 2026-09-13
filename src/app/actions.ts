@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/db';
-import { connections, users, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads, auditLogs } from '@/db/schema';
+import { connections, users, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads, auditLogs } from '@/db/schema';
 import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail } from '@/lib/email';
@@ -30,14 +30,14 @@ export type AppRole = 'admin' | 'employee' | 'employee-department' | 'viewer' | 
 export type UserAccess = { userId: string; role: AppRole; department: string };
 
 const VALID_ROLES: AppRole[] = ['admin', 'employee', 'employee-department', 'viewer', 'viewer-full'];
-const SELF_REGISTRATION_ROLES = ['employee', 'viewer', 'viewer-full'] as const;
+const SELF_REGISTRATION_ROLES = ['employee', 'employee-department', 'viewer', 'viewer-full'] as const;
 const unauthorized = { success: false as const, error: 'You do not have permission to perform this action.' };
 
 async function getCurrentAccess(): Promise<UserAccess | null> {
   const { data: session } = await auth.getSession();
   if (!session?.user) return null;
   const [storedUser] = await db.select({ role: users.role, department: users.department }).from(users).where(eq(users.id, session.user.id)).limit(1);
-  if (!storedUser) return { userId: session.user.id, role: 'employee', department: 'Unassigned' };
+  if (!storedUser) return null;
   return {
     userId: session.user.id,
     role: VALID_ROLES.includes(storedUser.role as AppRole) ? storedUser.role as AppRole : 'employee',
@@ -200,10 +200,10 @@ export async function checkDrizzleConnection(): Promise<DbStatus> {
   }
 }
 
-export async function getOrCreateUserRole(userId: string, email: string): Promise<string> {
+export async function getOrCreateUserRole(userId: string): Promise<AppRole | 'pending-approval' | 'rejected'> {
   try {
-    const access = await getCurrentAccess();
-    if (!access || access.userId !== userId) return 'employee';
+    const { data: session } = await auth.getSession();
+    if (!session?.user || session.user.id !== userId) return 'pending-approval';
     const existing = await db
       .select({ role: users.role })
       .from(users)
@@ -211,8 +211,17 @@ export async function getOrCreateUserRole(userId: string, email: string): Promis
       .limit(1);
 
     if (existing.length > 0) {
-      return existing[0].role;
+      return VALID_ROLES.includes(existing[0].role as AppRole) ? existing[0].role as AppRole : 'employee';
     }
+
+    const [approval] = await db
+      .select({ status: roleApprovalRequests.status })
+      .from(roleApprovalRequests)
+      .where(eq(roleApprovalRequests.userId, userId))
+      .limit(1);
+    if (approval?.status === 'pending') return 'pending-approval';
+    if (approval?.status === 'rejected') return 'rejected';
+    if (approval?.status === 'accepted') return 'employee-department';
 
     const role = 'employee';
 
@@ -224,7 +233,7 @@ export async function getOrCreateUserRole(userId: string, email: string): Promis
     return role;
   } catch (error) {
     console.error('Error fetching or creating user role:', error);
-    return 'employee';
+    return 'pending-approval';
   }
 }
 
@@ -245,20 +254,41 @@ export async function getDepartmentOptions() {
 }
 
 export async function completeSelfRegistration(input: { role: string; department: string }) {
-  const access = await getCurrentAccess();
+  const { data: session } = await auth.getSession();
   const role = input.role as (typeof SELF_REGISTRATION_ROLES)[number];
   const department = input.department.trim();
-  if (!access) return unauthorized;
+  if (!session?.user) return unauthorized;
   if (!SELF_REGISTRATION_ROLES.includes(role) || !department || department.length > 255) {
     return { success: false, error: 'Provide a valid role and department.' };
   }
 
   try {
-    const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.id, access.userId)).limit(1);
+    const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.id, session.user.id)).limit(1);
     if (existing) return { success: false, error: 'This account has already been registered.' };
+    const [existingApproval] = await db.select({ id: roleApprovalRequests.id }).from(roleApprovalRequests).where(eq(roleApprovalRequests.userId, session.user.id)).limit(1);
+    if (existingApproval) return { success: false, error: 'A role request already exists for this account.' };
+
+    if (role === 'employee-department') {
+      const [approval] = await db.insert(roleApprovalRequests).values({
+        userId: session.user.id,
+        name: session.user.name || session.user.email || 'Unnamed user',
+        email: session.user.email || '',
+        department,
+        requestedRole: role,
+      }).returning({ id: roleApprovalRequests.id });
+      await createNotification({
+        title: 'Role approval requested',
+        message: `${session.user.name || session.user.email || 'A user'} requested Employee (Department Requests) access for ${department}.`,
+        link: `/admin/users?approval=${approval.id}`,
+        type: 'role_approval',
+      });
+      return { success: true, pendingApproval: true as const };
+    }
+
+    const access: UserAccess = { userId: session.user.id, role, department };
     await db.insert(users).values({ id: access.userId, role, department });
     await writeAuditLog(access, { action: 'created', entityType: 'user', entityId: access.userId, entityLabel: access.userId, details: { role, department, source: 'self_registration' } });
-    return { success: true };
+    return { success: true, pendingApproval: false as const };
   } catch (error) {
     console.error('Failed to complete self-registration:', error);
     return { success: false, error: 'Unable to complete registration.' };
@@ -278,18 +308,64 @@ export async function getAllUsers() {
 
 export type DirectoryUser = { id: string; name: string | null; email: string; createdAt: Date; role: string; department: string };
 
+export type PendingRoleApproval = typeof roleApprovalRequests.$inferSelect;
+
+export async function getPendingRoleApprovals() {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return { success: false as const, approvals: [] as PendingRoleApproval[], error: unauthorized.error };
+  try {
+    const approvals = await db.select().from(roleApprovalRequests).where(eq(roleApprovalRequests.status, 'pending')).orderBy(desc(roleApprovalRequests.createdAt));
+    return { success: true as const, approvals };
+  } catch (error) {
+    console.error('Failed to get pending role approvals:', error);
+    return { success: false as const, approvals: [] as PendingRoleApproval[], error: 'Unable to load role approval requests.' };
+  }
+}
+
+export async function decideRoleApproval(approvalId: number, decision: 'accepted' | 'rejected') {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return unauthorized;
+  try {
+    const [approval] = await db.select().from(roleApprovalRequests).where(and(eq(roleApprovalRequests.id, approvalId), eq(roleApprovalRequests.status, 'pending'))).limit(1);
+    if (!approval) return { success: false, error: 'This approval request is no longer pending.' };
+
+    if (decision === 'accepted') {
+      await db.insert(users).values({ id: approval.userId, role: 'employee-department', department: approval.department });
+    } else {
+      const { error } = await auth.admin.removeUser({ userId: approval.userId });
+      if (error) return { success: false, error: error.message || 'Unable to reject and remove the applicant account.' };
+    }
+
+    await db.update(roleApprovalRequests).set({ status: decision, decidedById: access.userId, decidedAt: new Date(), updatedAt: new Date() }).where(eq(roleApprovalRequests.id, approvalId));
+    await db.delete(notifications).where(eq(notifications.link, `/admin/users?approval=${approvalId}`));
+    await writeAuditLog(access, {
+      action: decision === 'accepted' ? 'created' : 'deleted',
+      entityType: 'user',
+      entityId: approval.userId,
+      entityLabel: approval.name || approval.email,
+      details: { email: approval.email, role: approval.requestedRole, department: approval.department, source: 'role_approval', decision },
+    });
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to decide role approval:', error);
+    return { success: false, error: 'Unable to save the approval decision.' };
+  }
+}
+
 export async function getUsersDirectory(): Promise<DirectoryUser[]> {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin') return [];
 
   try {
-    const [{ data: authUsers, error: authError }, appUsers] = await Promise.all([
+    const [{ data: authUsers, error: authError }, appUsers, pendingApprovals] = await Promise.all([
       auth.admin.listUsers({ query: { limit: 100 } }),
       db.select().from(users),
+      db.select({ userId: roleApprovalRequests.userId }).from(roleApprovalRequests).where(eq(roleApprovalRequests.status, 'pending')),
     ]);
     if (authError || !authUsers) throw new Error(authError?.message || 'Neon Auth did not return users.');
     const appUsersById = new Map(appUsers.map((user) => [user.id, user]));
-    return authUsers.users.map((user) => ({
+    const pendingUserIds = new Set(pendingApprovals.map((approval) => approval.userId));
+    return authUsers.users.filter((user) => !pendingUserIds.has(user.id)).map((user) => ({
       id: user.id,
       name: user.name || null,
       email: user.email,
@@ -1563,7 +1639,10 @@ function notificationAudienceCondition(access: UserAccess): SQL {
     isInvolved = inArray(notifications.type, ALL_NOTIFICATION_TYPES);
   }
 
-  return and(hasLiveRecord, isAnotherUsersAction, isInvolved)!;
+  const standardVisibility = and(hasLiveRecord, isAnotherUsersAction, isInvolved)!;
+  return access.role === 'admin'
+    ? or(eq(notifications.type, 'role_approval'), standardVisibility)!
+    : standardVisibility;
 }
 
 export async function getNotifications(): Promise<{ success: boolean; notifications: NotificationItem[]; unreadCount: number }> {

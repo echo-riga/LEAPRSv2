@@ -35,8 +35,10 @@ import {
 } from '@mui/icons-material';
 import { checkDrizzleConnection, completeSelfRegistration, DbStatus, getDepartmentOptions, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword } from './actions';
 import { authClient } from '@/lib/auth/client';
+import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
 import { useRouter } from 'next/navigation';
 
+const SELF_REGISTRATION_ROLE_OPTIONS = ROLE_OPTIONS.filter(({ value }) => value === 'employee' || value === 'employee-department' || value === 'viewer' || value === 'viewer-full');
 
 export default function Home() {
   const router = useRouter();
@@ -58,7 +60,7 @@ export default function Home() {
   const [fullName, setFullName] = useState('');
   const [signUpEmail, setSignUpEmail] = useState('');
   const [signUpPassword, setSignUpPassword] = useState('');
-  const [signUpRole, setSignUpRole] = useState<'employee' | 'viewer' | 'viewer-full'>('employee');
+  const [signUpRole, setSignUpRole] = useState<'employee' | 'employee-department' | 'viewer' | 'viewer-full'>('employee');
   const [signUpDepartment, setSignUpDepartment] = useState('');
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -149,10 +151,17 @@ export default function Home() {
         if (isRegistering) return;
         setCheckingRole(true);
         try {
-          await getOrCreateUserRole(
-            session.data.user.id,
-            session.data.user.email
-          );
+          const resolvedRole = await getOrCreateUserRole(session.data.user.id);
+          if (resolvedRole === 'pending-approval') {
+            if (isMounted) setAuthSuccess('Your Employee (Department Requests) access is awaiting admin approval.');
+            await authClient.signOut();
+            return;
+          }
+          if (resolvedRole === 'rejected') {
+            if (isMounted) setAuthError('Your Employee (Department Requests) access request was rejected.');
+            await authClient.signOut();
+            return;
+          }
           if (isMounted) {
             router.replace('/admin');
           }
@@ -225,6 +234,18 @@ export default function Home() {
         await authClient.signOut();
         setAuthError(profile.error || 'Unable to complete registration.');
         setIsRegistering(false);
+        return;
+      }
+
+      if ('pendingApproval' in profile && profile.pendingApproval) {
+        setAuthSuccess('Registration submitted. An admin must approve Employee (Department Requests) access before you can sign in.');
+        setFullName('');
+        setSignUpEmail('');
+        setSignUpPassword('');
+        setSignUpDepartment('');
+        setIsSignUpMode(false);
+        setIsRegistering(false);
+        await authClient.signOut();
         return;
       }
 
@@ -477,10 +498,15 @@ export default function Home() {
                   <TextField label="Full Name" required fullWidth value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><PersonIcon color="action" /></InputAdornment> } }} />
                   <TextField label="Email Address" type="email" required fullWidth value={signUpEmail} onChange={(e) => setSignUpEmail(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><EmailIcon color="action" /></InputAdornment> } }} />
                   <TextField label="Password" type="password" required fullWidth value={signUpPassword} onChange={(e) => setSignUpPassword(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><LockIcon color="action" /></InputAdornment> } }} />
-                  <TextField select label="Role" required fullWidth value={signUpRole} onChange={(e) => setSignUpRole(e.target.value as 'employee' | 'viewer' | 'viewer-full')} disabled={authLoading}>
-                    <MenuItem value="employee">Employee</MenuItem>
-                    <MenuItem value="viewer">Viewer</MenuItem>
-                    <MenuItem value="viewer-full">Viewer (All Departments)</MenuItem>
+                  <TextField select label="Role" required fullWidth value={signUpRole} onChange={(e) => setSignUpRole(e.target.value as 'employee' | 'employee-department' | 'viewer' | 'viewer-full')} disabled={authLoading} slotProps={{ select: { renderValue: (value) => roleLabel(String(value)) } }}>
+                    {SELF_REGISTRATION_ROLE_OPTIONS.map((option) => (
+                      <MenuItem key={option.value} value={option.value} sx={{ py: 1.25, whiteSpace: 'normal' }}>
+                        <Box>
+                          <Typography variant="body1">{option.label}</Typography>
+                          <Typography variant="caption" color="text.secondary">{option.description}</Typography>
+                        </Box>
+                      </MenuItem>
+                    ))}
                   </TextField>
                   <Autocomplete freeSolo options={departmentOptions} value={signUpDepartment} inputValue={signUpDepartment} onChange={(_, value) => setSignUpDepartment(typeof value === 'string' ? value : '')} onInputChange={(_, value) => setSignUpDepartment(value)} disabled={authLoading} renderInput={(params) => <TextField {...params} label="Department" required fullWidth />} />
                   <Button type="submit" variant="contained" color="primary" fullWidth size="large" disabled={authLoading || !fullName.trim() || !signUpDepartment.trim()} sx={{ py: 1.7, fontSize: '1.05rem', boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)' }}>

@@ -42,10 +42,15 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!session.data) return;
-    void getCurrentUserAccess().then((access) => {
-      if (access.success) setRole(access.role);
+    void getCurrentUserAccess().then(async (access) => {
+      if (access.success) {
+        setRole(access.role);
+        return;
+      }
+      await authClient.signOut();
+      router.replace('/');
     });
-  }, [session.data]);
+  }, [router, session.data]);
 
   useEffect(() => {
     ADMIN_ROUTES.forEach((route) => router.prefetch(route));

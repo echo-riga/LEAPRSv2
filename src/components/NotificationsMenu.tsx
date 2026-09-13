@@ -23,6 +23,7 @@ import {
   UpdateOutlined as UpdateIcon,
   DoneAll as DoneAllIcon,
   NotificationsNoneOutlined as EmptyBellIcon,
+  ManageAccountsOutlined as RoleApprovalIcon,
 } from '@mui/icons-material';
 import {
   getNotifications,
@@ -53,6 +54,8 @@ function getNotificationIcon(type: string) {
       return <RequestIcon sx={{ fontSize: 18, color: '#1565c0' }} />;
     case 'capdev_created':
       return <CapdevIcon sx={{ fontSize: 18, color: '#00796b' }} />;
+    case 'role_approval':
+      return <RoleApprovalIcon sx={{ fontSize: 18, color: '#ed6c02' }} />;
     default:
       return <UpdateIcon sx={{ fontSize: 18, color: '#2e7d32' }} />;
   }
@@ -68,6 +71,8 @@ function getIconBgColor(type: string) {
       return 'rgba(21, 101, 192, 0.12)';
     case 'capdev_created':
       return 'rgba(0, 121, 107, 0.12)';
+    case 'role_approval':
+      return 'rgba(237, 108, 2, 0.12)';
     default:
       return 'rgba(46, 125, 50, 0.12)';
   }

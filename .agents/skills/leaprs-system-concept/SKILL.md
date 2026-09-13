@@ -103,7 +103,7 @@ All files are uploaded to Google Drive.
 
 * **Admin** manages users, configuration, CapDev projects, and requests.
 * **Employee** can view CapDev projects and create, update, and delete only their own requests.
-* **Employee (Department Requests)** is an admin-assigned department assistant role. It can view and manage requests belonging to CapDev projects in its department, including other employees' requests, and can post timeline updates.
+* **Employee (Department Requests)** is a department assistant role. It can view and manage requests belonging to CapDev projects in its department, including other employees' requests, post timeline updates, and control stoppers. Users may request this role during self-registration, but the LEAPRS account and role remain pending until an Admin accepts the request.
 * **Viewer** has read-only access to CapDev projects and requests in its department.
 * **Viewer (All Departments)** has read-only access across departments.
 
@@ -121,8 +121,9 @@ Notifications are event records, but they are visible only while their associate
 ### B. Self-Registration
 
 * The login page supports Neon Auth email registration with full name, email, password, role, and department.
-* Self-registration offers only **Employee**, **Viewer**, and **Viewer (All Departments)**. Admin and Employee (Department Requests) are assigned only through Users Management.
-* A newly registered account receives its selected application role and department immediately after Neon Auth creates the account.
+* Self-registration offers **Employee**, **Employee (Department Requests)**, **Viewer**, and **Viewer (All Departments)**. Admin remains assignable only through Users Management.
+* Employee, Viewer, and Viewer (All Departments) accounts receive their selected application role and department immediately after Neon Auth creates the authentication record.
+* Employee (Department Requests) registrations create a pending role approval request instead of an application user profile. Admins receive a notification linking to Users Management, where they can accept or reject it. Acceptance creates the application user profile with the requested role and department; rejection removes the pending authentication account.
 
 ### C. Shared Department Values
 

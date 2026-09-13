@@ -26,6 +26,23 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const roleApprovalRequests = pgTable('role_approval_requests', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull(),
+  department: varchar('department', { length: 255 }).notNull(),
+  requestedRole: varchar('requested_role', { length: 50 }).notNull(),
+  status: varchar('status', { length: 50 }).default('pending').notNull(),
+  decidedById: text('decided_by_id').references(() => users.id),
+  decidedAt: timestamp('decided_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('unique_role_approval_user_idx').on(table.userId),
+  index('role_approval_status_idx').on(table.status),
+]);
+
 // Capdev dynamic fields definitions configuration
 export const capdevFieldDefinitions = pgTable('capdev_field_definitions', {
   id: serial('id').primaryKey(),
