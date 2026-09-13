@@ -9,7 +9,7 @@ def fill_requisition(page):
     page.wait_for_load_state("networkidle")
 
     # 2. Go to the CapDev requests page for this project
-    page.goto("http://localhost:3000/admin/capdev/10/requests")
+    page.goto("http://localhost:3000/portal/capdev/10/requests")
 
     # 3. Click "Add Request" to open the form dialog
     page.get_by_role("button", name="Add Request").click()

@@ -5,6 +5,7 @@ import { Assessment as ReportIcon, CheckBox as SelectAllIcon, Download as Downlo
 import { Box, Button, Card, CardActionArea, CardContent, Checkbox, CircularProgress, Divider, FormControlLabel, Grid, Stack, TextField, Typography } from '@mui/material';
 import { generateMonitoringSheet, getMonitoringReportData } from '@/app/actions';
 import DateField from '@/components/DateField';
+import { getDynamicFieldValue } from '@/lib/dynamic-fields';
 
 type ReportData = Awaited<ReturnType<typeof getMonitoringReportData>>;
 type SelectedField = { id: string | number; name: string; source: 'capdev' | 'request'; key?: string };
@@ -37,8 +38,10 @@ function displayValue(value: unknown) {
   return String(value);
 }
 
-function fieldValue(additionalInfo: Record<string, unknown>, field: Pick<SelectedField, 'name'>) {
-  return displayValue(additionalInfo[field.name]);
+function fieldValue(additionalInfo: Record<string, unknown>, field: Pick<SelectedField, 'id' | 'name'>) {
+  return displayValue(typeof field.id === 'number'
+    ? getDynamicFieldValue(additionalInfo, { id: field.id, name: field.name })
+    : additionalInfo[field.name]);
 }
 
 export default function ReportsPage() {

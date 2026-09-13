@@ -10,6 +10,7 @@ import DateField from '@/components/DateField';
 import DynamicTableField from '@/components/DynamicTableField';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
+import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 
 type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; section: string; width: string; placeholder: string | null };
 type Capdev = { id: number; aipCode: string; description: string; initialBudget: string; budget: string; department: string; updatedById: string; createdAt: Date | string; additionalInfo: Record<string, unknown> };
@@ -35,7 +36,7 @@ const formatAipCode = (value: string) => {
   return groups.join('-');
 };
 
-export default function AdminPage() {
+export default function PortalPage() {
   const router = useRouter();
   const session = authClient.useSession();
   const [projects, setProjects] = useState<Capdev[]>([]);
@@ -95,7 +96,7 @@ export default function AdminPage() {
   const configuredSections = Array.from(new Set(additionalDefinitions.map((field) => field.section || 'Additional Information')));
   const resetPage = () => setPage(1);
   const setValue = (updates: Partial<CapdevForm>) => setForm((current) => ({ ...current, ...updates }));
-  const setDynamicValue = (name: string, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [name]: value } }));
+  const setDynamicValue = (field: DynamicField, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [dynamicFieldStorageKey(field)]: value } }));
 
   const openCreate = () => { setError(''); setPendingFiles({}); setBudgetHistory([]); setEditing(null); setForm(EMPTY_FORM); setDepartmentIsOther(false); setEditorOpen(true); };
   const openEdit = async (project: Capdev) => { setError(''); setPendingFiles({}); setEditing(project); setForm({ ...project, additionalInfo: { ...project.additionalInfo } }); setDepartmentIsOther(false); setBudgetHistory(await getCapdevBudgetHistory(project.id)); setEditorOpen(true); };
@@ -106,15 +107,15 @@ export default function AdminPage() {
   };
   const removeSelectedFile = (fieldName: string, file: File) => setPendingFiles((current) => ({ ...current, [fieldName]: (current[fieldName] || []).filter((candidate) => candidate !== file) }));
   const hasDynamicValue = (field: DynamicField) => {
-    if (field.type === 'file') return getAttachments(form.additionalInfo[field.name]).length > 0 || (pendingFiles[field.name] || []).length > 0;
+    const storageKey = dynamicFieldStorageKey(field);
+    const value = getDynamicFieldValue(form.additionalInfo, field);
+    if (field.type === 'file') return getAttachments(value).length > 0 || (pendingFiles[storageKey] || []).length > 0;
     if (field.type === 'table') {
-      const val = form.additionalInfo[field.name];
-      if (Array.isArray(val) && val.length > 0) {
-        return val.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
+      if (Array.isArray(value) && value.length > 0) {
+        return value.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
       }
       return false;
     }
-    const value = form.additionalInfo[field.name];
     return value !== undefined && value !== null && String(value).trim().length > 0;
   };
   const areRequiredFieldsComplete = requiredDefinitions.every(hasDynamicValue);
@@ -133,11 +134,13 @@ export default function AdminPage() {
     const additionalInfo = { ...form.additionalInfo };
     for (const [fieldName, files] of Object.entries(pendingFiles)) {
       if (files.length === 0) continue;
+      const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
       const uploadData = new FormData();
       files.forEach((file) => uploadData.append('files', file));
       const uploaded = await uploadFilesToGoogleDrive(uploadData);
-      if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${fieldName}.`); setSaving(false); return; }
-      additionalInfo[fieldName] = [...(Array.isArray(additionalInfo[fieldName]) ? additionalInfo[fieldName] : []), ...uploaded.files];
+      if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
+      const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
+      additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
     }
     const payload = { ...form, additionalInfo, aipCode: form.aipCode.trim(), department: form.department.trim(), updatedById: session.data.user.id };
     const result = editing ? await updateCapdev(editing.id, payload) : await createCapdev(payload);
@@ -147,28 +150,30 @@ export default function AdminPage() {
 
   const renderDynamicField = (field: DynamicField) => {
     const isRequired = field.isRequired || field.section === 'required';
+    const storageKey = dynamicFieldStorageKey(field);
+    const fieldValue = getDynamicFieldValue(form.additionalInfo, field);
     return (
       <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
         {((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
           <Autocomplete
             freeSolo
             options={field.options}
-            value={String(form.additionalInfo[field.name] || '')}
-            inputValue={String(form.additionalInfo[field.name] || '')}
+            value={String(fieldValue || '')}
+            inputValue={String(fieldValue || '')}
             onChange={(_, value, reason) => {
               if (reason === 'selectOption' && typeof value === 'string') {
-                const current = String(form.additionalInfo[field.name] || '').trim();
+                const current = String(fieldValue || '').trim();
                 const concatenated = current ? `${current} ${value.trim()}` : value.trim();
-                setDynamicValue(field.name, concatenated);
+                setDynamicValue(field, concatenated);
               } else if (reason === 'clear') {
-                setDynamicValue(field.name, '');
+                setDynamicValue(field, '');
               } else if (typeof value === 'string') {
-                setDynamicValue(field.name, value);
+                setDynamicValue(field, value);
               }
             }}
             onInputChange={(_, value, reason) => {
               if (reason === 'input') {
-                setDynamicValue(field.name, value);
+                setDynamicValue(field, value);
               }
             }}
             renderInput={(params) => (
@@ -189,33 +194,33 @@ export default function AdminPage() {
             minRows={1}
             label={field.name}
             placeholder={field.placeholder || ''}
-            value={String(form.additionalInfo[field.name] || '')}
-            onChange={(event) => setDynamicValue(field.name, event.target.value)}
+            value={String(fieldValue || '')}
+            onChange={(event) => setDynamicValue(field, event.target.value)}
           />
         ) : field.type === 'table' ? (
           <DynamicTableField
             label={field.name}
             required={isRequired}
-            value={form.additionalInfo[field.name]}
+            value={fieldValue}
             template={field.options?.[0]}
             showDimensionControls={false}
-            onChange={(val) => setDynamicValue(field.name, val)}
+            onChange={(val) => setDynamicValue(field, val)}
           />
         ) : field.type === 'date' ? (
           <DateField
             label={field.name}
             required={isRequired}
-            value={String(form.additionalInfo[field.name] || '')}
-            onChange={(value) => setDynamicValue(field.name, value)}
+            value={String(fieldValue || '')}
+            onChange={(value) => setDynamicValue(field, value)}
           />
         ) : field.type === 'file' ? (
           <Stack spacing={1}>
             <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
               {field.name}
               {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
-              <input hidden type="file" multiple onChange={(event) => addSelectedFiles(field.name, event)} />
+              <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
             </Button>
-            {getAttachments(form.additionalInfo[field.name]).map((file) => (
+            {getAttachments(fieldValue).map((file) => (
               <Button
                 key={file.id}
                 component="a"
@@ -229,14 +234,14 @@ export default function AdminPage() {
                 {file.name}
               </Button>
             ))}
-            {(pendingFiles[field.name] || []).length > 0 && (
+            {(pendingFiles[storageKey] || []).length > 0 && (
               <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                {pendingFiles[field.name].map((file) => (
+                {pendingFiles[storageKey].map((file) => (
                   <Chip
                     key={`${file.name}-${file.lastModified}-${file.size}`}
                     label={file.name}
                     size="small"
-                    onDelete={() => removeSelectedFile(field.name, file)}
+                    onDelete={() => removeSelectedFile(storageKey, file)}
                   />
                 ))}
               </Stack>
@@ -248,9 +253,9 @@ export default function AdminPage() {
             fullWidth
             label={field.name}
             type={field.type === 'number' ? 'number' : 'text'}
-            value={String(form.additionalInfo[field.name] || '')}
+            value={String(fieldValue || '')}
             placeholder={field.placeholder || ''}
-            onChange={(event) => setDynamicValue(field.name, event.target.value)}
+            onChange={(event) => setDynamicValue(field, event.target.value)}
           />
         )}
       </Grid>
@@ -290,7 +295,7 @@ export default function AdminPage() {
                 <Stack spacing={1.5} sx={{ my: 1 }}><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Initial Balance</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(project.initialBudget)}</Typography></Stack><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Remaining Balance</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: Number(project.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(project.budget)}</Typography></Stack></Stack>
                 <Divider sx={{ my: 2 }} />
                 <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                  <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/admin/capdev/${project.id}/requests`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
+                  <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/portal/capdev/${project.id}/requests`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
                     View Requests
                   </Button>
                   <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>

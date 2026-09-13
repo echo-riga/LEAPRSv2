@@ -32,7 +32,7 @@ import {
   ArrowBack as ArrowBackIcon,
   Key as KeyIcon,
 } from '@mui/icons-material';
-import { checkDrizzleConnection, completeSelfRegistration, DbStatus, getDepartmentOptions, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword } from './actions';
+import { checkDrizzleConnection, completeSelfRegistration, DbStatus, getDepartmentOptions, getMaintenanceMode, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword } from './actions';
 import { authClient } from '@/lib/auth/client';
 import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
@@ -55,6 +55,7 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [isSignUpMode, setIsSignUpMode] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [fullName, setFullName] = useState('');
@@ -143,6 +144,7 @@ export default function Home() {
 
   useEffect(() => {
     void getDepartmentOptions().then(setDepartmentOptions);
+    void getMaintenanceMode().then((result) => setMaintenanceMode(result.enabled));
   }, []);
 
   useEffect(() => {
@@ -163,8 +165,18 @@ export default function Home() {
             await authClient.signOut();
             return;
           }
+          const maintenance = await getMaintenanceMode();
+          if (maintenance.enabled && resolvedRole !== 'admin') {
+            if (isMounted) {
+              setMaintenanceMode(true);
+              setAuthError(null);
+              setAuthSuccess(null);
+            }
+            await authClient.signOut();
+            return;
+          }
           if (isMounted) {
-            router.replace('/admin');
+            router.replace('/portal');
           }
         } catch (error) {
           console.error('Failed to get/create user role:', error);
@@ -251,13 +263,28 @@ export default function Home() {
         return;
       }
 
+      const maintenance = await getMaintenanceMode();
+      if (maintenance.enabled) {
+        await authClient.signOut();
+        setMaintenanceMode(true);
+        setAuthSuccess('Account created. You can sign in after maintenance mode is turned off.');
+        setFullName('');
+        setSignUpEmail('');
+        setSignUpPassword('');
+        setSignUpDepartment('');
+        setSignUpDepartmentIsOther(false);
+        setIsSignUpMode(false);
+        setIsRegistering(false);
+        return;
+      }
+
       setAuthSuccess('Account created. Loading Portal...');
       setFullName('');
       setSignUpEmail('');
       setSignUpPassword('');
       setSignUpDepartment('');
       setSignUpDepartmentIsOther(false);
-      router.replace('/admin');
+      router.replace('/portal');
     } catch (err: any) {
       setAuthError(err.message || 'An unexpected server error occurred.');
       setIsRegistering(false);
@@ -525,6 +552,11 @@ export default function Home() {
             </>
           ) : !isForgotPasswordMode ? (
             <>
+              {maintenanceMode && (
+                <Alert severity="warning" sx={{ mb: 3, borderRadius: 2 }}>
+                  Maintenance mode is active. Only administrators can sign in.
+                </Alert>
+              )}
               {authError && (
                 <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
                   {authError}

@@ -10,7 +10,7 @@ import { ResourceGridSkeleton } from '@/components/Skeletons';
 import NotificationsMenu from '@/components/NotificationsMenu';
 import RequestTimelineProgress from '@/components/RequestTimelineProgress';
 
-const ADMIN_ROUTES = ['/admin', '/admin/analytics', '/admin/reports', '/admin/audit-logs', '/admin/settings', '/admin/users', '/admin/settings/capdev', '/admin/settings/request'];
+const PORTAL_ROUTES = ['/portal', '/portal/analytics', '/portal/reports', '/portal/audit-logs', '/portal/settings', '/portal/users', '/portal/settings/capdev', '/portal/settings/request'];
 type ConfigHeaderStatus = 'idle' | 'editing' | 'saved';
 
 function getGreeting() {
@@ -20,7 +20,7 @@ function getGreeting() {
   return 'Good evening';
 }
 
-function AdminLayoutContent({ children }: { children: React.ReactNode }) {
+function PortalLayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -53,7 +53,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   }, [router, session.data]);
 
   useEffect(() => {
-    ADMIN_ROUTES.forEach((route) => router.prefetch(route));
+    PORTAL_ROUTES.forEach((route) => router.prefetch(route));
   }, [router]);
 
   useEffect(() => {
@@ -96,20 +96,20 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   }
   if (!session.data) return null;
 
-  const userName = session.data.user.name || session.data.user.email || 'Admin';
-  const statusRouteMatch = pathname.match(/^\/admin\/capdev\/(\d+)\/requests\/(\d+)\/status$/);
+  const userName = session.data.user.name || session.data.user.email || 'User';
+  const statusRouteMatch = pathname.match(/^\/portal\/capdev\/(\d+)\/requests\/(\d+)\/status$/);
   const settingsReturnPath = searchParams.get('from');
-  const isSettingsPage = pathname.startsWith('/admin/settings');
-  const safeSettingsReturnPath = settingsReturnPath?.startsWith('/admin') && !settingsReturnPath.startsWith('//') ? settingsReturnPath : null;
+  const isSettingsPage = pathname.startsWith('/portal/settings');
+  const safeSettingsReturnPath = settingsReturnPath?.startsWith('/portal') && !settingsReturnPath.startsWith('//') ? settingsReturnPath : null;
   const backHref = isSettingsPage && safeSettingsReturnPath
     ? safeSettingsReturnPath
     : statusRouteMatch
-      ? `/admin/capdev/${statusRouteMatch[1]}/requests`
-      : pathname === '/admin/users' || pathname === '/admin/analytics' || pathname === '/admin/reports' || pathname === '/admin/audit-logs' || pathname === '/admin/settings/capdev' || pathname === '/admin/settings/request'
-        ? '/admin/settings'
-        : '/admin';
-  const settingsHref = `/admin/settings?from=${encodeURIComponent(pathname)}`;
-  const isDashboard = pathname === '/admin';
+      ? `/portal/capdev/${statusRouteMatch[1]}/requests`
+      : pathname === '/portal/users' || pathname === '/portal/analytics' || pathname === '/portal/reports' || pathname === '/portal/audit-logs' || pathname === '/portal/settings/capdev' || pathname === '/portal/settings/request'
+        ? '/portal/settings'
+        : '/portal';
+  const settingsHref = `/portal/settings?from=${encodeURIComponent(pathname)}`;
+  const isDashboard = pathname === '/portal';
   const roleLabel = !role
     ? '...'
     : role === 'viewer-full'
@@ -142,10 +142,10 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function PortalLayout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<Box sx={{ minHeight: '100vh', bgcolor: '#fafcfa', p: 3, pt: 12 }}><ResourceGridSkeleton /></Box>}>
-      <AdminLayoutContent>{children}</AdminLayoutContent>
+      <PortalLayoutContent>{children}</PortalLayoutContent>
     </Suspense>
   );
 }

@@ -109,7 +109,7 @@ export default function UsersManagementPage() {
 
   useEffect(() => {
     if (!session.data) return;
-    void getCurrentUserAccess().then((access) => { if (access.success && access.role !== 'admin') router.replace('/admin'); });
+    void getCurrentUserAccess().then((access) => { if (access.success && access.role !== 'admin') router.replace('/portal'); });
   }, [router, session.data]);
 
   // Load users from DB

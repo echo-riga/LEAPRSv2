@@ -26,6 +26,13 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const systemSettings = pgTable('system_settings', {
+  key: varchar('key', { length: 100 }).primaryKey(),
+  enabled: boolean('enabled').default(false).notNull(),
+  updatedById: text('updated_by_id').references(() => users.id, { onDelete: 'set null' }),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export const roleApprovalRequests = pgTable('role_approval_requests', {
   id: serial('id').primaryKey(),
   userId: text('user_id').notNull(),

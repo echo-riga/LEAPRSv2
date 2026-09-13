@@ -27,19 +27,31 @@ import {
   Analytics as AnalyticsIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
-import { getCurrentUserAccess, getDynamicFieldCounts, type AppRole } from '@/app/actions';
+import { getCurrentUserAccess, getDynamicFieldCounts, getMaintenanceMode, setMaintenanceMode as saveMaintenanceMode, type AppRole } from '@/app/actions';
 
 export default function SettingsPage() {
   const router = useRouter();
   const session = authClient.useSession();
   const [maintenanceMode, setMaintenanceMode] = useState(false);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const [maintenanceError, setMaintenanceError] = useState('');
   const [counts, setCounts] = useState({ capdevFieldsCount: 0, requestFieldsCount: 0 });
   const [role, setRole] = useState<AppRole | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
 
   useEffect(() => {
     getDynamicFieldCounts().then(setCounts);
+    getMaintenanceMode().then((result) => setMaintenanceMode(result.enabled));
   }, []);
+
+  const handleMaintenanceChange = async (enabled: boolean) => {
+    setMaintenanceSaving(true);
+    setMaintenanceError('');
+    const result = await saveMaintenanceMode(enabled);
+    if (result.success) setMaintenanceMode(result.enabled);
+    else setMaintenanceError(result.error || 'Unable to update maintenance mode.');
+    setMaintenanceSaving(false);
+  };
 
   useEffect(() => {
     if (session.data) {
@@ -80,8 +92,8 @@ export default function SettingsPage() {
       ),
       footer: (
         <Stack direction="row" spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
-          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/admin/users')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Manage Users</Button>
-          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/admin/audit-logs')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>View Audit Logs</Button>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/users')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Manage Users</Button>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/audit-logs')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>View Audit Logs</Button>
         </Stack>
       ),
     },
@@ -96,7 +108,7 @@ export default function SettingsPage() {
         </Stack>
       ),
       actionText: 'Export Reports',
-      route: '/admin/reports',
+      route: '/portal/reports',
     },
     {
       title: 'Analytics',
@@ -108,20 +120,21 @@ export default function SettingsPage() {
         </Stack>
       ),
       actionText: 'Configure Analytics',
-      route: '/admin/analytics',
+      route: '/portal/analytics',
     },
     {
       title: 'Maintenance Mode',
       icon: <MaintenanceIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'Restrict access during system maintenance.',
+      description: 'Temporarily restrict portal access to administrators only.',
       control: (
         <Box sx={{ mt: 1.5 }}>
           <FormControlLabel
             control={
               <Switch
                 checked={maintenanceMode}
-                onChange={(e) => setMaintenanceMode(e.target.checked)}
+                onChange={(event) => void handleMaintenanceChange(event.target.checked)}
                 color="primary"
+                disabled={maintenanceSaving}
               />
             }
             label={
@@ -132,13 +145,13 @@ export default function SettingsPage() {
                   color: maintenanceMode ? 'error.main' : 'text.secondary',
                 }}
               >
-                {maintenanceMode ? 'Active (Offline)' : 'Inactive (Online)'}
+                {maintenanceMode ? 'Active (Admins only)' : 'Inactive (All roles online)'}
               </Typography>
             }
           />
+          {maintenanceError && <Typography variant="caption" color="error">{maintenanceError}</Typography>}
         </Box>
       ),
-      actionText: 'Configure Schedules',
     },
     {
       title: 'CapDev Configuration',
@@ -150,7 +163,7 @@ export default function SettingsPage() {
         </Stack>
       ),
       actionText: 'Configure Fields',
-      route: '/admin/settings/capdev',
+      route: '/portal/settings/capdev',
     },
     {
       title: 'Request Configuration',
@@ -162,7 +175,7 @@ export default function SettingsPage() {
         </Stack>
       ),
       actionText: 'Configure Fields',
-      route: '/admin/settings/request',
+      route: '/portal/settings/request',
     },
   ].filter((item) => role === 'admin' || item.title === 'Reports' || item.title === 'Analytics');
 
@@ -244,28 +257,34 @@ export default function SettingsPage() {
                     </Box>
                   </Stack>
 
-                  <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ flexGrow: item.title === 'Maintenance Mode' ? 0 : 1 }}
+                  >
                     {item.description}
                   </Typography>
 
                   {item.control}
 
-                  <Divider sx={{ my: 2 }} />
-                  {item.footer || <Button
-                    variant="text"
-                    color="primary"
-                    endIcon={<ChevronRightIcon />}
-                    onClick={() => item.route && router.push(item.route)}
-                    sx={{
-                      alignSelf: 'flex-start',
-                      p: 0,
-                      minWidth: 0,
-                      fontWeight: '700',
-                      '&:hover': { bgcolor: 'transparent', color: 'primary.dark' },
-                    }}
-                  >
-                    {item.actionText}
-                  </Button>}
+                  {(item.footer || item.actionText) && <>
+                    <Divider sx={{ my: 2 }} />
+                    {item.footer || <Button
+                      variant="text"
+                      color="primary"
+                      endIcon={<ChevronRightIcon />}
+                      onClick={() => item.route && router.push(item.route)}
+                      sx={{
+                        alignSelf: 'flex-start',
+                        p: 0,
+                        minWidth: 0,
+                        fontWeight: '700',
+                        '&:hover': { bgcolor: 'transparent', color: 'primary.dark' },
+                      }}
+                    >
+                      {item.actionText}
+                    </Button>}
+                  </>}
                 </CardContent>
               </Card>
             </Grid>

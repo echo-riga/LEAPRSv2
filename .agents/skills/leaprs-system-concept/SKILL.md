@@ -99,6 +99,8 @@ All files are uploaded to Google Drive.
 
 ## 4. Access, Registration, and Departments
 
+The shared authenticated workspace uses the role-neutral `/portal` route. Access to pages and actions within the portal is determined by the signed-in user's role; the route name does not imply Admin access.
+
 ### A. Roles
 
 * **Admin** manages users, configuration, CapDev projects, and requests.
@@ -130,6 +132,17 @@ Notifications are event records, but they are visible only while their associate
 * Department is a fixed important field, not a configurable dynamic field.
 * Department inputs in CapDev CRUD, signup, Users Management, and the CapDev form preview use a single combobox populated with previously saved departments. The final option is **Not listed (please specify)**; selecting it makes the same combobox editable for entering a new department.
 * The shared suggestion list is read from saved user profiles and CapDev projects. Saving a new department value makes it available as a future suggestion; departments intentionally have create/read behavior only, with no separate update or delete screen.
+
+### D. Maintenance Mode
+
+* Maintenance mode is a persistent system setting that only an **Admin** can change from Portal Settings.
+* While maintenance mode is active, Admins retain access so they can operate the system and turn maintenance mode off. Every other role is denied sign-in and shown a clear maintenance notice.
+* Existing non-Admin sessions also lose portal and server-action access while maintenance mode is active; maintenance mode is not limited to new login attempts.
+
+### E. Dynamic Field Storage Identity
+
+* Dynamic form values are stored by the field definition's stable database ID, never by its editable display label. Fields with identical labels must remain independent in previews, CRUD forms, saved records, reports, and exports.
+* Readers retain a legacy label-key fallback for records saved before stable field keys were introduced. Because an old label-keyed record cannot distinguish two same-label fields, both may initially show the legacy value until the fields are saved independently with stable keys.
 
 ## 5. Stopper and Resume Workflow
 

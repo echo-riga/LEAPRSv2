@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/db';
-import { connections, users, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads, auditLogs } from '@/db/schema';
+import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads, auditLogs } from '@/db/schema';
 import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail } from '@/lib/email';
@@ -14,6 +14,7 @@ import { hashPassword } from 'better-auth/crypto';
 import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { getDynamicFieldValue } from '@/lib/dynamic-fields';
 
 
 
@@ -32,15 +33,27 @@ export type UserAccess = { userId: string; role: AppRole; department: string };
 const VALID_ROLES: AppRole[] = ['admin', 'employee', 'employee-department', 'viewer', 'viewer-full'];
 const SELF_REGISTRATION_ROLES = ['employee', 'employee-department', 'viewer', 'viewer-full'] as const;
 const unauthorized = { success: false as const, error: 'You do not have permission to perform this action.' };
+const MAINTENANCE_MODE_KEY = 'maintenance_mode';
+
+async function readMaintenanceMode() {
+  const [setting] = await db
+    .select({ enabled: systemSettings.enabled })
+    .from(systemSettings)
+    .where(eq(systemSettings.key, MAINTENANCE_MODE_KEY))
+    .limit(1);
+  return setting?.enabled ?? false;
+}
 
 async function getCurrentAccess(): Promise<UserAccess | null> {
   const { data: session } = await auth.getSession();
   if (!session?.user) return null;
   const [storedUser] = await db.select({ role: users.role, department: users.department }).from(users).where(eq(users.id, session.user.id)).limit(1);
   if (!storedUser) return null;
+  const role = VALID_ROLES.includes(storedUser.role as AppRole) ? storedUser.role as AppRole : 'employee';
+  if (role !== 'admin' && await readMaintenanceMode()) return null;
   return {
     userId: session.user.id,
-    role: VALID_ROLES.includes(storedUser.role as AppRole) ? storedUser.role as AppRole : 'employee',
+    role,
     department: storedUser.department,
   };
 }
@@ -56,7 +69,7 @@ async function getActorSnapshot(access: UserAccess) {
 
 async function writeAuditLog(access: UserAccess, entry: {
   action: 'created' | 'updated' | 'deleted' | 'status_changed' | 'stopped' | 'resumed';
-  entityType: 'capdev' | 'request' | 'status_update' | 'user' | 'capdev_field' | 'request_field';
+  entityType: 'capdev' | 'request' | 'status_update' | 'user' | 'capdev_field' | 'request_field' | 'system_setting';
   entityId?: string | number | null;
   entityLabel: string;
   details?: Record<string, unknown>;
@@ -152,6 +165,42 @@ async function getAccessibleRequest(access: UserAccess, requestId: number) {
 export async function getCurrentUserAccess() {
   const access = await getCurrentAccess();
   return access ? { success: true as const, ...access } : { success: false as const, error: 'You must be signed in.' };
+}
+
+export async function getMaintenanceMode() {
+  try {
+    return { success: true as const, enabled: await readMaintenanceMode() };
+  } catch (error) {
+    console.error('Failed to read maintenance mode:', error);
+    return { success: false as const, enabled: false, error: 'Unable to read maintenance mode.' };
+  }
+}
+
+export async function setMaintenanceMode(enabled: boolean) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin' || typeof enabled !== 'boolean') return unauthorized;
+  try {
+    await db.insert(systemSettings).values({
+      key: MAINTENANCE_MODE_KEY,
+      enabled,
+      updatedById: access.userId,
+      updatedAt: new Date(),
+    }).onConflictDoUpdate({
+      target: systemSettings.key,
+      set: { enabled, updatedById: access.userId, updatedAt: new Date() },
+    });
+    await writeAuditLog(access, {
+      action: 'status_changed',
+      entityType: 'system_setting',
+      entityId: MAINTENANCE_MODE_KEY,
+      entityLabel: 'Maintenance Mode',
+      details: { enabled },
+    });
+    return { success: true as const, enabled };
+  } catch (error) {
+    console.error('Failed to update maintenance mode:', error);
+    return { success: false as const, error: 'Unable to update maintenance mode.' };
+  }
 }
 
 export async function checkDrizzleConnection(): Promise<DbStatus> {
@@ -279,7 +328,7 @@ export async function completeSelfRegistration(input: { role: string; department
       await createNotification({
         title: 'Role approval requested',
         message: `${session.user.name || session.user.email || 'A user'} requested Employee (All Department Requests) access.`,
-        link: `/admin/users?approval=${approval.id}`,
+        link: `/portal/users?approval=${approval.id}`,
         type: 'role_approval',
       });
       return { success: true, pendingApproval: true as const };
@@ -337,7 +386,10 @@ export async function decideRoleApproval(approvalId: number, decision: 'accepted
     }
 
     await db.update(roleApprovalRequests).set({ status: decision, decidedById: access.userId, decidedAt: new Date(), updatedAt: new Date() }).where(eq(roleApprovalRequests.id, approvalId));
-    await db.delete(notifications).where(eq(notifications.link, `/admin/users?approval=${approvalId}`));
+    await db.delete(notifications).where(inArray(notifications.link, [
+      `/portal/users?approval=${approvalId}`,
+      `/admin/users?approval=${approvalId}`,
+    ]));
     await writeAuditLog(access, {
       action: decision === 'accepted' ? 'created' : 'deleted',
       entityType: 'user',
@@ -485,14 +537,14 @@ export type CapdevInput = {
 
 async function getMissingRequiredCapdevFields(additionalInfo: Record<string, unknown>) {
   const fields = await db
-    .select({ name: capdevFieldDefinitions.name, type: capdevFieldDefinitions.type, isRequired: capdevFieldDefinitions.isRequired, section: capdevFieldDefinitions.section })
+    .select({ id: capdevFieldDefinitions.id, name: capdevFieldDefinitions.name, type: capdevFieldDefinitions.type, isRequired: capdevFieldDefinitions.isRequired, section: capdevFieldDefinitions.section })
     .from(capdevFieldDefinitions)
     .where(eq(capdevFieldDefinitions.isActive, true));
 
   return fields
     .filter((field) => field.isRequired || field.section === 'required')
     .filter((field) => {
-      const value = additionalInfo[field.name];
+      const value = getDynamicFieldValue(additionalInfo, field);
       if (field.type === 'file') return !Array.isArray(value) || value.length === 0;
       if (field.type === 'table') {
         if (!Array.isArray(value) || value.length === 0) return true;
@@ -559,7 +611,7 @@ export async function getMonitoringReportData() {
   }
 }
 
-type MonitoringField = { name: string; source: 'capdev' | 'request'; key?: string };
+type MonitoringField = { id?: number; name: string; source: 'capdev' | 'request'; key?: string };
 
 function monitoringCellValue(value: unknown) {
   if (value === null || value === undefined || value === '') return '';
@@ -588,9 +640,9 @@ export async function generateMonitoringSheet(input: { capdevIds: number[]; capd
     const selectedRequests = allRequests.filter((request) => selectedCapdevsById.has(request.capdevId));
     const fields: MonitoringField[] = [
       ...input.capdevFixedFields.map((key) => ({ name: key, source: 'capdev' as const, key })),
-      ...capdevFields.filter((field) => input.capdevFieldIds.includes(field.id)).map((field) => ({ name: field.name, source: 'capdev' as const })),
+      ...capdevFields.filter((field) => input.capdevFieldIds.includes(field.id)).map((field) => ({ id: field.id, name: field.name, source: 'capdev' as const })),
       ...input.requestFixedFields.map((key) => ({ name: key, source: 'request' as const, key })),
-      ...requestFields.filter((field) => input.requestFieldIds.includes(field.id)).map((field) => ({ name: field.name, source: 'request' as const })),
+      ...requestFields.filter((field) => input.requestFieldIds.includes(field.id)).map((field) => ({ id: field.id, name: field.name, source: 'request' as const })),
     ];
     const capacityColumns = Math.max(1, fields.length);
     const originalCapacityColumns = 8;
@@ -672,7 +724,8 @@ export async function generateMonitoringSheet(input: { capdevIds: number[]; capd
         cell.style = { ...dataStyle };
         const field = fields[offset];
         const record = field?.source === 'capdev' ? capdev : request;
-        cell.value = field ? monitoringCellValue(field.key ? record?.[field.key as keyof typeof record] : field.source === 'capdev' ? capdevInfo[field.name] : requestInfo[field.name]) : '';
+        const additionalInfo = field?.source === 'capdev' ? capdevInfo : requestInfo;
+        cell.value = field ? monitoringCellValue(field.key ? record?.[field.key as keyof typeof record] : getDynamicFieldValue(additionalInfo, { id: field.id!, name: field.name })) : '';
       }
       for (let column = 2 + capacityColumns; column < cursor; column += 1) {
         const cell = sheet.getCell(row, column);
@@ -706,7 +759,7 @@ export async function createCapdev(data: CapdevInput) {
       capdevId: created.id,
       title: `New CapDev Project: ${created.aipCode}`,
       message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-      link: `/admin/capdev/${created.id}/requests`,
+      link: `/portal/capdev/${created.id}/requests`,
       type: 'capdev_created',
     });
     return { success: true, capdev: created };
@@ -1126,7 +1179,7 @@ export async function createRequest(data: RequestInput) {
       requestId: created.id,
       title: `New Requisition: ${created.setting || 'CapDev Request'}`,
       message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-      link: `/admin/capdev/${created.capdevId}/requests/${created.id}/status`,
+      link: `/portal/capdev/${created.capdevId}/requests/${created.id}/status`,
       type: 'new_request',
     });
     return { success: true, request: created };
@@ -1396,7 +1449,7 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
       requestId,
       title: `Request #${requestId} ${status === 'completed' ? 'Completed' : 'Denied'}`,
       message: `Request #${requestId} was resolved as ${status}.`,
-      link: `/admin/capdev/${req.capdevId}/requests/${requestId}/status`,
+      link: `/portal/capdev/${req.capdevId}/requests/${requestId}/status`,
       type: status,
     });
 
@@ -1434,7 +1487,7 @@ export async function stopRequestProgress(data: StopRequestInput) {
       requestId: data.requestId,
       title: `Request #${data.requestId} Stopped`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'} stopped progress: ${data.reason.trim().slice(0, 90)}`,
-      link: `/admin/capdev/${request.capdevId}/requests/${data.requestId}/status`,
+      link: `/portal/capdev/${request.capdevId}/requests/${data.requestId}/status`,
       type: 'status_update',
     });
     return { success: true };
@@ -1461,7 +1514,7 @@ export async function resumeRequestProgress(requestId: number) {
       requestId,
       title: `Request #${requestId} Resumed`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'} resumed progress.`,
-      link: `/admin/capdev/${request.capdevId}/requests/${requestId}/status`,
+      link: `/portal/capdev/${request.capdevId}/requests/${requestId}/status`,
       type: 'status_update',
     });
     return { success: true };
@@ -1580,7 +1633,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
         ? `Request #${data.requestId} Update: [${data.statusMark.toUpperCase()}]`
         : `Status Update on Request #${data.requestId}`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'}: ${data.statusUpdate.slice(0, 90)}`,
-      link: `/admin/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status`,
+      link: `/portal/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status`,
       type: 'status_update',
     });
 

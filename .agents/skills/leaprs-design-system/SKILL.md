@@ -69,7 +69,7 @@ To prevent users from being bombarded with different layouts, all main operation
 ### The Grid Layout Concept
 - **Top Header**: A clean, single-colored header bar showing the system title, current time, active coordinator email, and a red Sign Out button.
 - **Kiosk Full-Screen Layout**: Zero empty margins or huge blank white spaces. Expand content to fill the screen space, showing big content instead of large empty gaps. Avoid standard narrow wrappers; use fluid full-width or high-percentage width layout containers.
-- **Page Alignment Consistency**: Admin page titles and their primary content must share the same left edge as sibling admin pages. Reuse the established admin page content container and its gutters; do not omit it for a page title unless a deliberately narrower, centered reading layout is explicitly required.
+- **Page Alignment Consistency**: Portal page titles and their primary content must share the same left edge as sibling portal pages. Reuse the established portal page content container and its gutters; do not omit it for a page title unless a deliberately narrower, centered reading layout is explicitly required.
 - **Layout Content**: Distinct, independent, eye-friendly soft-white panels (Cards/Papers, using `#fafcfa`) arranged in a grid or stack. For resource listings (e.g. Users), the page layout must always render as a 2-row, 3-column box grid (maximum 6 items per page) on desktop, using pagination to prevent vertical scrolling. Cards must display only core properties (e.g. name, email, role, password) without fluff (such as account status), with actions aligned at the bottom.
 - **Summary Cards vs. Edit Views**: Resource cards/boxes are concise summaries and display fixed, core fields only. Do not render configurable/dynamic fields, uploaded attachments, or long custom values inside those cards. The create/edit dialog is the detailed view: it must display every fixed field and every active configured field, including attachment links for already uploaded files.
 
@@ -77,7 +77,7 @@ To prevent users from being bombarded with different layouts, all main operation
 
 Use these as the default patterns when extending existing LEAPRS screens:
 
-- **Admin page shell**: Existing admin header/navigation remains unchanged. Page titles share the established left edge and use `h4`, heavy weight, and compact spacing above the main content.
+- **Portal page shell**: Existing portal header/navigation remains unchanged. Page titles share the established left edge and use `h4`, heavy weight, and compact spacing above the main content.
 - **Settings page**: A desktop three-column grid of equal outlined boxes. Each box uses the same icon tile, title, concise description, optional metadata/control area, divider, and green text-action footer with a chevron. When a settings box has more than one action, render them as matching text actions in the same footer row.
 - **Resource listing pages**: Six summary boxes per desktop page in a 2-row × 3-column grid, with pagination instead of vertical overflow. Keep each box concise; align actions at the bottom.
 - **Create actions**: Operational listing pages use the existing fixed, extended green FAB at bottom-right. Do not replace it with a different creation control unless requested.

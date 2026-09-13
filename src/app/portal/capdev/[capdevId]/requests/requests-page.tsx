@@ -43,6 +43,7 @@ import { authClient } from '@/lib/auth/client';
 import DateField from '@/components/DateField';
 import DynamicTableField from '@/components/DynamicTableField';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
+import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import {
   createRequest,
   deleteRequest,
@@ -233,7 +234,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     return section;
   };
   const setValue = (updates: Partial<RequestForm>) => setForm((current) => ({ ...current, ...updates }));
-  const setDynamicValue = (name: string, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [name]: value } }));
+  const setDynamicValue = (field: DynamicField, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [dynamicFieldStorageKey(field)]: value } }));
   const resetPage = () => setPage(1);
 
   const openCreate = () => { setError(''); setPendingFiles({}); setEditing(null); setForm(EMPTY_FORM); setShowScrollArrow(true); setEditorOpen(true); };
@@ -245,15 +246,15 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   };
   const removeSelectedFile = (fieldName: string, file: File) => setPendingFiles((current) => ({ ...current, [fieldName]: (current[fieldName] || []).filter((candidate) => candidate !== file) }));
   const hasDynamicValue = (field: DynamicField) => {
-    if (field.type === 'file') return getAttachments(form.additionalInfo[field.name]).length > 0 || (pendingFiles[field.name] || []).length > 0;
+    const storageKey = dynamicFieldStorageKey(field);
+    const value = getDynamicFieldValue(form.additionalInfo, field);
+    if (field.type === 'file') return getAttachments(value).length > 0 || (pendingFiles[storageKey] || []).length > 0;
     if (field.type === 'table') {
-      const val = form.additionalInfo[field.name];
-      if (Array.isArray(val) && val.length > 0) {
-        return val.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
+      if (Array.isArray(value) && value.length > 0) {
+        return value.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
       }
       return false;
     }
-    const value = form.additionalInfo[field.name];
     return value !== undefined && value !== null && String(value).trim().length > 0;
   };
   const areRequiredFieldsComplete = requiredDefinitions.every(hasDynamicValue);
@@ -284,11 +285,13 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     const additionalInfo = { ...form.additionalInfo };
     for (const [fieldName, files] of Object.entries(pendingFiles)) {
       if (files.length === 0) continue;
+      const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
       const uploadData = new FormData();
       files.forEach((file) => uploadData.append('files', file));
       const uploaded = await uploadFilesToGoogleDrive(uploadData);
-      if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${fieldName}.`); setSaving(false); return; }
-      additionalInfo[fieldName] = [...(Array.isArray(additionalInfo[fieldName]) ? additionalInfo[fieldName] : []), ...uploaded.files];
+      if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
+      const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
+      additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
     }
     const data = { ...form, additionalInfo, capdevId, userId: editing?.userId || session.data.user.id, updatedById: session.data.user.id };
     const result = editing ? await updateRequest(editing.id, data) : await createRequest(data);
@@ -314,28 +317,30 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     setSaving(false);
   };
 
-  const renderDynamicField = (field: DynamicField) => (
-    <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
+  const renderDynamicField = (field: DynamicField) => {
+    const storageKey = dynamicFieldStorageKey(field);
+    const fieldValue = getDynamicFieldValue(form.additionalInfo, field);
+    return <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
       {((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
         <Autocomplete
           freeSolo
           options={field.options}
-          value={String(form.additionalInfo[field.name] || '')}
-          inputValue={String(form.additionalInfo[field.name] || '')}
+          value={String(fieldValue || '')}
+          inputValue={String(fieldValue || '')}
           onChange={(_, value, reason) => {
             if (reason === 'selectOption' && typeof value === 'string') {
-              const current = String(form.additionalInfo[field.name] || '').trim();
+              const current = String(fieldValue || '').trim();
               const concatenated = current ? `${current} ${value.trim()}` : value.trim();
-              setDynamicValue(field.name, concatenated);
+              setDynamicValue(field, concatenated);
             } else if (reason === 'clear') {
-              setDynamicValue(field.name, '');
+              setDynamicValue(field, '');
             } else if (typeof value === 'string') {
-              setDynamicValue(field.name, value);
+              setDynamicValue(field, value);
             }
           }}
           onInputChange={(_, value, reason) => {
             if (reason === 'input') {
-              setDynamicValue(field.name, value);
+              setDynamicValue(field, value);
             }
           }}
           renderInput={(params) => (
@@ -356,33 +361,33 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           minRows={1}
           label={field.name}
           placeholder={field.placeholder || ''}
-          value={String(form.additionalInfo[field.name] || '')}
-          onChange={(event) => setDynamicValue(field.name, event.target.value)}
+          value={String(fieldValue || '')}
+          onChange={(event) => setDynamicValue(field, event.target.value)}
         />
       ) : field.type === 'table' ? (
         <DynamicTableField
           label={field.name}
           required={field.isRequired}
-          value={form.additionalInfo[field.name]}
+          value={fieldValue}
           template={field.options?.[0]}
           showDimensionControls={false}
-          onChange={(val) => setDynamicValue(field.name, val)}
+          onChange={(val) => setDynamicValue(field, val)}
         />
       ) : field.type === 'date' ? (
         <DateField
           label={field.name}
           required={field.isRequired}
-          value={String(form.additionalInfo[field.name] || '')}
-          onChange={(value) => setDynamicValue(field.name, value)}
+          value={String(fieldValue || '')}
+          onChange={(value) => setDynamicValue(field, value)}
         />
       ) : field.type === 'file' ? (
         <Stack spacing={1}>
           <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
             {field.name}
             {field.isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
-            <input hidden type="file" multiple onChange={(event) => addSelectedFiles(field.name, event)} />
+            <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
           </Button>
-          {getAttachments(form.additionalInfo[field.name]).map((file) => (
+          {getAttachments(fieldValue).map((file) => (
             <Button
               key={file.id}
               component="a"
@@ -396,14 +401,14 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               {file.name}
             </Button>
           ))}
-          {(pendingFiles[field.name] || []).length > 0 && (
+          {(pendingFiles[storageKey] || []).length > 0 && (
             <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-              {pendingFiles[field.name].map((file) => (
+              {pendingFiles[storageKey].map((file) => (
                 <Chip
                   key={`${file.name}-${file.lastModified}-${file.size}`}
                   label={file.name}
                   size="small"
-                  onDelete={() => removeSelectedFile(field.name, file)}
+                  onDelete={() => removeSelectedFile(storageKey, file)}
                 />
               ))}
             </Stack>
@@ -415,13 +420,13 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           fullWidth
           label={field.name}
           type={field.type === 'number' ? 'number' : 'text'}
-          value={String(form.additionalInfo[field.name] || '')}
+          value={String(fieldValue || '')}
           placeholder={field.placeholder || ''}
-          onChange={(event) => setDynamicValue(field.name, event.target.value)}
+          onChange={(event) => setDynamicValue(field, event.target.value)}
         />
       )}
-    </Grid>
-  );
+    </Grid>;
+  };
 
   if (session.isPending || loading) return <ResourceGridSkeleton titleWidth={220} />;
   if (!session.data) return null;
@@ -530,7 +535,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                     </Stack>
                     <Divider sx={{ my: 2 }} />
                     <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                      <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/admin/capdev/${capdevId}/requests/${request.id}/status`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
+                      <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/portal/capdev/${capdevId}/requests/${request.id}/status`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
                         Track Progress
                       </Button>
                       <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
@@ -612,15 +617,16 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 </Grid>
 
                 {/* Dynamic CapDev Fields */}
-                {capdevDefinitions.map((field) => (
-                  <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
+                {capdevDefinitions.map((field) => {
+                  const fieldValue = getDynamicFieldValue(capdev.additionalInfo, field);
+                  return <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
                     {field.type === 'file' ? (
                       <Stack spacing={0.5}>
                         <Typography variant="caption" color="text.secondary">{field.name}</Typography>
-                        {getAttachments(capdev.additionalInfo[field.name]).length === 0 ? (
+                        {getAttachments(fieldValue).length === 0 ? (
                           <Typography variant="body2" color="text.secondary">—</Typography>
                         ) : (
-                          getAttachments(capdev.additionalInfo[field.name]).map((file) => (
+                          getAttachments(fieldValue).map((file) => (
                             <Button key={file.id} component="a" href={file.url} target="_blank" rel="noreferrer" size="small" startIcon={<AttachFileIcon />} sx={{ width: 'fit-content', textTransform: 'none' }}>
                               {file.name}
                             </Button>
@@ -633,15 +639,15 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                         disabled
                         template={field.options?.[0]}
                         showDimensionControls={false}
-                        value={capdev.additionalInfo[field.name]}
+                        value={fieldValue}
                       />
                     ) : field.type === 'textarea' ? (
-                      <TextField fullWidth multiline minRows={2} label={field.name} value={String(capdev.additionalInfo[field.name] ?? '—')} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
+                      <TextField fullWidth multiline minRows={2} label={field.name} value={String(fieldValue ?? '—')} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
                     ) : (
-                      <TextField fullWidth label={field.name} value={String(capdev.additionalInfo[field.name] ?? '—')} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
+                      <TextField fullWidth label={field.name} value={String(fieldValue ?? '—')} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
                     )}
-                  </Grid>
-                ))}
+                  </Grid>;
+                })}
               </Grid>
               <Divider sx={{ my: 3 }} />
             </Box>

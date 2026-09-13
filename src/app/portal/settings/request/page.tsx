@@ -117,7 +117,7 @@ export default function RequestConfigPage() {
 
   useEffect(() => {
     if (!session.data) return;
-    void getCurrentUserAccess().then((access) => { if (access.success && access.role !== 'admin') router.replace('/admin'); });
+    void getCurrentUserAccess().then((access) => { if (access.success && access.role !== 'admin') router.replace('/portal'); });
   }, [router, session.data]);
 
   useEffect(() => {
@@ -596,8 +596,8 @@ export default function RequestConfigPage() {
 
   function renderPreviewField(field: Field) {
     const isRequired = field.isRequired;
-    const value = previewData[field.name] || '';
-    const files = previewFiles[field.name] || [];
+    const value = previewData[field.key] || '';
+    const files = previewFiles[field.key] || [];
 
     switch (field.type) {
       case 'number':
@@ -612,7 +612,7 @@ export default function RequestConfigPage() {
               size="small"
               placeholder={field.placeholder || 'Enter number...'}
               value={value}
-              onChange={(e) => setPreviewData({ ...previewData, [field.name]: e.target.value })}
+              onChange={(e) => setPreviewData({ ...previewData, [field.key]: e.target.value })}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
             />
           </Stack>
@@ -623,7 +623,7 @@ export default function RequestConfigPage() {
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
               {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
-            <DateField size="small" value={value} onChange={(nextValue) => setPreviewData({ ...previewData, [field.name]: nextValue })} />
+            <DateField size="small" value={value} onChange={(nextValue) => setPreviewData({ ...previewData, [field.key]: nextValue })} />
           </Stack>
         );
       case 'file':
@@ -675,10 +675,10 @@ export default function RequestConfigPage() {
           <DynamicTableField
             label={field.name}
             required={isRequired}
-            value={previewData[field.name]}
+            value={previewData[field.key]}
             template={field.options?.[0]}
             showDimensionControls={false}
-            onChange={(val) => setPreviewData({ ...previewData, [field.name]: val })}
+            onChange={(val) => setPreviewData({ ...previewData, [field.key]: val })}
           />
         );
       case 'text':
@@ -694,8 +694,8 @@ export default function RequestConfigPage() {
                 freeSolo
                 options={field.options}
                 value={value}
-                onChange={(_, newValue) => setPreviewData({ ...previewData, [field.name]: newValue || '' })}
-                onInputChange={(_, newValue) => setPreviewData({ ...previewData, [field.name]: newValue })}
+                onChange={(_, newValue) => setPreviewData({ ...previewData, [field.key]: newValue || '' })}
+                onInputChange={(_, newValue) => setPreviewData({ ...previewData, [field.key]: newValue })}
                 renderInput={(params) => <TextField {...params} size="small" placeholder={field.placeholder || 'Select or type...'} sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }} />}
               />
             </Stack>
@@ -713,7 +713,7 @@ export default function RequestConfigPage() {
               size="small"
               placeholder={field.placeholder || 'Enter text...'}
               value={value}
-              onChange={(e) => setPreviewData({ ...previewData, [field.name]: e.target.value })}
+              onChange={(e) => setPreviewData({ ...previewData, [field.key]: e.target.value })}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
             />
           </Stack>

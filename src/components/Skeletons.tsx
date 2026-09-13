@@ -81,7 +81,7 @@ export function ResourceGridSkeleton({ titleWidth = 220 }: { titleWidth?: number
 
 /**
  * 2 rows x 3 columns settings panel skeleton.
- * Used for /admin/settings.
+ * Used for /portal/settings.
  */
 export function SettingsGridSkeleton() {
   return (
@@ -132,7 +132,7 @@ export function SettingsGridSkeleton() {
 
 /**
  * Status Timeline skeleton.
- * Used for /admin/capdev/[capdevId]/requests/[requestId]/status.
+ * Used for /portal/capdev/[capdevId]/requests/[requestId]/status.
  */
 export function TimelineGridSkeleton() {
   return (
@@ -194,7 +194,7 @@ export function TimelineGridSkeleton() {
 
 /**
  * Form Configuration Preview skeleton.
- * Used for /admin/settings/capdev and /admin/settings/request.
+ * Used for /portal/settings/capdev and /portal/settings/request.
  */
 export function FormConfigSkeleton({ titleWidth = 260 }: { titleWidth?: number }) {
   return (
@@ -220,7 +220,7 @@ export function FormConfigSkeleton({ titleWidth = 260 }: { titleWidth?: number }
 
 /**
  * Analytics Dashboard skeleton.
- * Used for /admin/analytics.
+ * Used for /portal/analytics.
  */
 export function AnalyticsSkeleton() {
   return (
@@ -260,7 +260,7 @@ export function AnalyticsSkeleton() {
 
 /**
  * Reports Page skeleton.
- * Used for /admin/reports.
+ * Used for /portal/reports.
  */
 export function ReportsSkeleton() {
   return (
