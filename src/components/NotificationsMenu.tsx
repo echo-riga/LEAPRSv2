@@ -79,15 +79,25 @@ function getIconBgColor(type: string) {
 }
 
 function getNotificationDestination(item: NotificationItem) {
-  if (item.link.includes('#')) return item.link;
+  if (item.type === 'capdev_created' && item.capdevId) {
+    return `/portal#capdev-record-${item.capdevId}`;
+  }
+  if (item.type === 'new_request' && item.capdevId && item.requestId) {
+    return `/portal/capdev/${item.capdevId}/requests#request-record-${item.requestId}`;
+  }
   if (item.type === 'role_approval') {
+    if (item.link.includes('#')) return item.link;
     const approvalId = new URL(item.link, window.location.origin).searchParams.get('approval');
     return approvalId ? `${item.link}#role-approval-${approvalId}` : item.link;
   }
-  if (item.type === 'completed' || item.type === 'denied') return `${item.link}#request-status-resolution`;
-  if (item.type === 'new_request') return `${item.link}#request-status-summary`;
-  if (item.type === 'capdev_created') return `${item.link}#capdev-summary`;
-  if (item.type === 'status_update') return `${item.link}#request-status-summary`;
+  if (item.type === 'completed' || item.type === 'denied') {
+    return item.link.includes('#') ? item.link : `${item.link}#request-status-resolution`;
+  }
+  if (item.type === 'status_update' && item.capdevId && item.requestId) {
+    if (/#request-status-update-\d+$/.test(item.link)) return item.link;
+    return `/portal/capdev/${item.capdevId}/requests#request-record-${item.requestId}`;
+  }
+  if (item.link.includes('#')) return item.link;
   return item.link;
 }
 
@@ -111,7 +121,7 @@ export default function NotificationsMenu() {
   }, []);
 
   useEffect(() => {
-    void fetchNotifications();
+    void Promise.resolve().then(fetchNotifications);
     const interval = window.setInterval(() => {
       void fetchNotifications();
     }, 30_000);

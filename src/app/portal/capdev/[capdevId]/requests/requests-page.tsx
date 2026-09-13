@@ -149,7 +149,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
 
   useEffect(() => {
     const focusTarget = (targetId: string) => {
-      if (targetId === 'capdev-summary') setNotificationFocus({ targetId, nonce: Date.now() });
+      if (/^request-record-\d+$/.test(targetId)) setNotificationFocus({ targetId, nonce: Date.now() });
     };
     const focusFromHash = () => {
       const targetId = decodeURIComponent(window.location.hash.slice(1));
@@ -168,17 +168,6 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       window.removeEventListener('leaprs:notification-focus', handleNotificationFocus);
     };
   }, []);
-
-  useEffect(() => {
-    if (!notificationFocus || loading) return;
-    const target = document.getElementById(notificationFocus.targetId);
-    if (!target) return;
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const timeoutId = window.setTimeout(() => {
-      setNotificationFocus((current) => current?.nonce === notificationFocus.nonce ? null : current);
-    }, 1400);
-    return () => window.clearTimeout(timeoutId);
-  }, [loading, notificationFocus]);
 
   const loadData = useCallback(async () => {
     const [projectData, requestData, fieldData, capdevFieldData] = await Promise.all([
@@ -259,6 +248,35 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / 6));
   const visible = filtered.slice((page - 1) * 6, page * 6);
+
+  useEffect(() => {
+    if (!notificationFocus || loading) return;
+    const requestIdToFocus = Number(notificationFocus.targetId.replace('request-record-', ''));
+    const filteredIndex = filtered.findIndex((request) => request.id === requestIdToFocus);
+
+    if (filteredIndex < 0 && requests.some((request) => request.id === requestIdToFocus)) {
+      const resetTimeoutId = window.setTimeout(() => {
+        setSearch('');
+        setFilters({ setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' });
+      }, 0);
+      return () => window.clearTimeout(resetTimeoutId);
+    }
+    if (filteredIndex < 0) return;
+
+    const targetPage = Math.floor(filteredIndex / 6) + 1;
+    if (page !== targetPage) {
+      const pageTimeoutId = window.setTimeout(() => setPage(targetPage), 0);
+      return () => window.clearTimeout(pageTimeoutId);
+    }
+
+    const target = document.getElementById(notificationFocus.targetId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timeoutId = window.setTimeout(() => {
+      setNotificationFocus((current) => current?.nonce === notificationFocus.nonce ? null : current);
+    }, 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [filtered, loading, notificationFocus, page, requests]);
   const requiredDefinitions = definitions.filter((field) => field.isRequired || field.section === 'required');
   const additionalDefinitions = definitions.filter((field) => !field.isRequired && field.section !== 'required');
   const configuredSections = Array.from(new Set(additionalDefinitions.map((field) => field.section || 'Additional Information')));
@@ -472,21 +490,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px)' }}>
       <Container maxWidth={false} sx={{ p: 0, width: '100%', flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-          <Box
-            id="capdev-summary"
-            sx={{
-              scrollMarginTop: 96,
-              animation: notificationFocus?.targetId === 'capdev-summary'
-                ? 'capdevNotificationFocus 900ms ease-in-out'
-                : 'none',
-              '@keyframes capdevNotificationFocus': {
-                '0%': { transform: 'scale(1)' },
-                '30%': { transform: 'scale(0.975)' },
-                '65%': { transform: 'scale(1.035)' },
-                '100%': { transform: 'scale(1)' },
-              },
-            }}
-          >
+          <Box>
             <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>
               Requests
             </Typography>
@@ -524,7 +528,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
         ) : (
           <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>
             {visible.map((request) => (
-              <Grid key={request.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3 }}>
+              <Grid id={`request-record-${request.id}`} key={request.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3, scrollMarginTop: 96 }}>
                 <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}>
                   <Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}>
                     <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>
@@ -543,6 +547,15 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                     display: 'flex',
                     flexDirection: 'column',
                     transition: 'all 0.2s',
+                    animation: notificationFocus?.targetId === `request-record-${request.id}`
+                      ? 'requestNotificationFocus 900ms ease-in-out'
+                      : 'none',
+                    '@keyframes requestNotificationFocus': {
+                      '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
+                      '30%': { transform: 'scale(0.975)', boxShadow: '0 0 0 3px rgba(46, 125, 50, 0.22)' },
+                      '65%': { transform: 'scale(1.025)', boxShadow: '0 8px 24px rgba(46, 125, 50, 0.2)' },
+                      '100%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
+                    },
                     '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' },
                   }}
                 >

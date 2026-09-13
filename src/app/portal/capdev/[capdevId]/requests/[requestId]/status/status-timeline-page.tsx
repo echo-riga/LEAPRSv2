@@ -169,7 +169,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   useEffect(() => {
     const focusTarget = (targetId: string) => {
       if (
-        targetId !== 'request-status-summary' &&
         targetId !== 'request-status-resolution' &&
         !targetId.startsWith('request-status-update-')
       ) return;
@@ -449,24 +448,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px)' }}>
       <Container maxWidth={false} sx={{ p: 0, width: '100%', flexGrow: 1 }}>
         <Stack
-          id="request-status-summary"
           direction={{ xs: 'column', sm: 'row' }}
           spacing={2}
-          sx={{
-            alignItems: { sm: 'center' },
-            justifyContent: 'space-between',
-            mb: 3,
-            scrollMarginTop: 96,
-            animation: timelineFocus?.targetId === 'request-status-summary'
-              ? 'timelineSummaryFocus 900ms ease-in-out'
-              : 'none',
-            '@keyframes timelineSummaryFocus': {
-              '0%': { transform: 'scale(1)' },
-              '30%': { transform: 'scale(0.985)' },
-              '65%': { transform: 'scale(1.015)' },
-              '100%': { transform: 'scale(1)' },
-            },
-          }}
+          sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between', mb: 3 }}
         >
           <Box>
             <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>

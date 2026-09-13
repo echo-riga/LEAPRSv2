@@ -767,7 +767,7 @@ export async function createCapdev(data: CapdevInput) {
       capdevId: created.id,
       title: `New CapDev Project: ${created.aipCode}`,
       message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-      link: `/portal/capdev/${created.id}/requests#capdev-summary`,
+      link: `/portal#capdev-record-${created.id}`,
       type: 'capdev_created',
     });
     return { success: true, capdev: created };
@@ -1190,7 +1190,7 @@ export async function createRequest(data: RequestInput) {
       requestId: created.id,
       title: `New Requisition: ${created.setting || 'CapDev Request'}`,
       message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-      link: `/portal/capdev/${created.capdevId}/requests/${created.id}/status#request-status-summary`,
+      link: `/portal/capdev/${created.capdevId}/requests#request-record-${created.id}`,
       type: 'new_request',
     });
     return { success: true, request: created };
@@ -1709,6 +1709,8 @@ export type NotificationItem = {
   id: number;
   userId: string | null;
   actorId?: string | null;
+  capdevId: number | null;
+  requestId: number | null;
   title: string;
   message: string;
   link: string;
@@ -1778,6 +1780,8 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
       id: n.id,
       userId: n.userId,
       actorId: n.actorId,
+      capdevId: n.capdevId,
+      requestId: n.requestId,
       title: n.title,
       message: n.message,
       link: n.link,

@@ -61,10 +61,33 @@ export default function PortalPage() {
   const [error, setError] = useState('');
   const [budgetHistory, setBudgetHistory] = useState<BudgetHistoryEntry[]>([]);
   const [role, setRole] = useState<AppRole>('employee');
+  const [notificationFocus, setNotificationFocus] = useState<{ targetId: string; nonce: number } | null>(null);
   const filtersInitialized = useRef(false);
   const saveProjectInFlight = useRef(false);
 
   useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
+
+  useEffect(() => {
+    const focusTarget = (targetId: string) => {
+      if (/^capdev-record-\d+$/.test(targetId)) setNotificationFocus({ targetId, nonce: Date.now() });
+    };
+    const focusFromHash = () => {
+      const targetId = decodeURIComponent(window.location.hash.slice(1));
+      if (targetId) focusTarget(targetId);
+    };
+    const handleNotificationFocus = (event: Event) => {
+      const detail = (event as CustomEvent<{ targetId?: string }>).detail;
+      if (detail?.targetId) focusTarget(detail.targetId);
+    };
+
+    window.addEventListener('hashchange', focusFromHash);
+    window.addEventListener('leaprs:notification-focus', handleNotificationFocus);
+    focusFromHash();
+    return () => {
+      window.removeEventListener('hashchange', focusFromHash);
+      window.removeEventListener('leaprs:notification-focus', handleNotificationFocus);
+    };
+  }, []);
 
   const loadData = async () => {
     const [projectData, fieldData, departmentData] = await Promise.all([getAllCapdevs(), getCapdevFieldDefinitions(), getDepartmentOptions()]);
@@ -94,6 +117,38 @@ export default function PortalPage() {
   }).sort((a, b) => filters.sort === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()), [filters, projects, search]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / 6));
   const visible = filtered.slice((page - 1) * 6, page * 6);
+
+  useEffect(() => {
+    if (!notificationFocus || loading) return;
+    const capdevIdToFocus = Number(notificationFocus.targetId.replace('capdev-record-', ''));
+    const filteredIndex = filtered.findIndex((project) => project.id === capdevIdToFocus);
+
+    if (filteredIndex < 0 && projects.some((project) => project.id === capdevIdToFocus)) {
+      const resetTimeoutId = window.setTimeout(() => {
+        setSearch('');
+        setFilters({
+          departments: Array.from(new Set(projects.map((project) => project.department))).sort(),
+          initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest',
+        });
+      }, 0);
+      return () => window.clearTimeout(resetTimeoutId);
+    }
+    if (filteredIndex < 0) return;
+
+    const targetPage = Math.floor(filteredIndex / 6) + 1;
+    if (page !== targetPage) {
+      const pageTimeoutId = window.setTimeout(() => setPage(targetPage), 0);
+      return () => window.clearTimeout(pageTimeoutId);
+    }
+
+    const target = document.getElementById(notificationFocus.targetId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timeoutId = window.setTimeout(() => {
+      setNotificationFocus((current) => current?.nonce === notificationFocus.nonce ? null : current);
+    }, 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [filtered, loading, notificationFocus, page, projects]);
   const requiredDefinitions = definitions.filter((field) => field.isRequired || field.section === 'required');
   const additionalDefinitions = definitions.filter((field) => !field.isRequired && field.section !== 'required');
   const configuredSections = Array.from(new Set(additionalDefinitions.map((field) => field.section || 'Additional Information')));
@@ -304,9 +359,9 @@ export default function PortalPage() {
       </Stack>
 
         {visible.length === 0 ? <Card variant="outlined" sx={{ borderRadius: 2, minHeight: 300, display: 'grid', placeItems: 'center' }}><Stack spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}><CapdevIcon sx={{ fontSize: 42 }} /><Typography>No CapDev projects found</Typography></Stack></Card> :
-          <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>{visible.map((project) => <Grid key={project.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3 }}>
+          <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>{visible.map((project) => <Grid id={`capdev-record-${project.id}`} key={project.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3, scrollMarginTop: 96 }}>
             <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}><Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}><Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>Added {formatDate(project.createdAt)}</Typography></Box></Box>
-            <Card variant="outlined" sx={{ position: 'relative', zIndex: 1, borderRadius: 2, bgcolor: '#ffffff', height: '100%', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' } }}>
+            <Card variant="outlined" sx={{ position: 'relative', zIndex: 1, borderRadius: 2, bgcolor: '#ffffff', height: '100%', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', animation: notificationFocus?.targetId === `capdev-record-${project.id}` ? 'capdevNotificationFocus 900ms ease-in-out' : 'none', '@keyframes capdevNotificationFocus': { '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' }, '30%': { transform: 'scale(0.975)', boxShadow: '0 0 0 3px rgba(46, 125, 50, 0.22)' }, '65%': { transform: 'scale(1.025)', boxShadow: '0 8px 24px rgba(46, 125, 50, 0.2)' }, '100%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' } }, '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' } }}>
               <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
                 <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}><Box sx={{ bgcolor: 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CapdevIcon color="primary" /></Box><Box sx={{ flexGrow: 1 }}><Typography variant="h6" sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>{project.aipCode}</Typography><Typography variant="body2" color="text.secondary">{project.department}</Typography></Box></Stack>
                 <Stack spacing={1.5} sx={{ my: 1 }}><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Initial Balance</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(project.initialBudget)}</Typography></Stack><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Remaining Balance</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: Number(project.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(project.budget)}</Typography></Stack></Stack>
