@@ -143,7 +143,7 @@ Notifications are event records, but they are visible only while their associate
 
 * Department is a fixed important field, not a configurable dynamic field.
 * Department inputs in CapDev CRUD, signup, Users Management, and the CapDev form preview use a single combobox populated with previously saved departments. The final option is **Not listed (please specify)**; selecting it makes the same combobox editable for entering a new department.
-* The shared suggestion list is read from saved user profiles and CapDev projects. Saving a new department value makes it available as a future suggestion; departments intentionally have create/read behavior only, with no separate update or delete screen.
+* The shared suggestion list is read from saved user profiles and CapDev projects. Saving a new department value makes it available as a future suggestion. An Admin may hide or restore a suggestion from the CapDev form configuration without rewriting historical department values; departments otherwise retain create/read behavior with no separate update or delete screen.
 
 ### D. Maintenance Mode
 

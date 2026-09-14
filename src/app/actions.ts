@@ -288,6 +288,42 @@ export async function getOrCreateUserRole(userId: string): Promise<AppRole | 'pe
   }
 }
 
+type DepartmentOptionsConfig = {
+  included: string[];
+  excluded: string[];
+};
+
+function parseDepartmentOptionsConfig(value: unknown): DepartmentOptionsConfig {
+  if (Array.isArray(value)) {
+    return {
+      included: value.filter((option): option is string => typeof option === 'string'),
+      excluded: [],
+    };
+  }
+  if (!value || typeof value !== 'object') return { included: [], excluded: [] };
+  const config = value as Record<string, unknown>;
+  return {
+    included: Array.isArray(config.included)
+      ? config.included.filter((option): option is string => typeof option === 'string')
+      : [],
+    excluded: Array.isArray(config.excluded)
+      ? config.excluded.filter((option): option is string => typeof option === 'string')
+      : [],
+  };
+}
+
+function cleanDepartmentOptions(options: string[]) {
+  const byNormalizedName = new Map<string, string>();
+  options.forEach((option) => {
+    const cleaned = option.trim();
+    const normalized = cleaned.toLocaleLowerCase();
+    if (cleaned && cleaned !== 'Unassigned' && cleaned !== 'None' && !byNormalizedName.has(normalized)) {
+      byNormalizedName.set(normalized, cleaned);
+    }
+  });
+  return Array.from(byNormalizedName.values()).slice(0, 100);
+}
+
 export async function getDepartmentOptions() {
   try {
     const [userDepartments, capdevDepartments, configuredOptions] = await Promise.all([
@@ -295,10 +331,15 @@ export async function getDepartmentOptions() {
       db.select({ department: capdevs.department }).from(capdevs),
       db.select({ options: capdevFieldDefinitions.options }).from(capdevFieldDefinitions).where(and(eq(capdevFieldDefinitions.name, '__department_options__'), eq(capdevFieldDefinitions.isActive, false))),
     ]);
-    const configured = configuredOptions.flatMap((record) => Array.isArray(record.options) ? record.options.filter((option): option is string => typeof option === 'string') : []);
-    return Array.from(new Set([...userDepartments, ...capdevDepartments, ...configured.map((department) => ({ department }))]
-      .map((record) => record.department.trim())
-      .filter((department) => department && department !== 'Unassigned' && department !== 'None')))
+    const configs = configuredOptions.map((record) => parseDepartmentOptionsConfig(record.options));
+    const included = configs.flatMap((config) => config.included);
+    const excluded = new Set(configs.flatMap((config) => config.excluded).map((option) => option.trim().toLocaleLowerCase()));
+    return cleanDepartmentOptions([
+      ...userDepartments.map((record) => record.department),
+      ...capdevDepartments.map((record) => record.department),
+      ...included,
+    ])
+      .filter((department) => !excluded.has(department.toLocaleLowerCase()))
       .sort((a, b) => a.localeCompare(b));
   } catch (error) {
     console.error('Failed to load department options:', error);
@@ -309,14 +350,34 @@ export async function getDepartmentOptions() {
 export async function saveDepartmentOptions(options: string[], updatedById: string) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin') return unauthorized;
-  const cleaned = Array.from(new Set(options.map((option) => option.trim()).filter(Boolean))).slice(0, 100);
-  const [existing] = await db.select({ id: capdevFieldDefinitions.id }).from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.name, '__department_options__')).limit(1);
+  const cleaned = cleanDepartmentOptions(options);
+  const [userDepartments, capdevDepartments, existingRows] = await Promise.all([
+    db.select({ department: users.department }).from(users),
+    db.select({ department: capdevs.department }).from(capdevs),
+    db.select({ id: capdevFieldDefinitions.id, options: capdevFieldDefinitions.options })
+      .from(capdevFieldDefinitions)
+      .where(eq(capdevFieldDefinitions.name, '__department_options__'))
+      .limit(1),
+  ]);
+  const existing = existingRows[0];
+  const previous = parseDepartmentOptionsConfig(existing?.options);
+  const submitted = new Set(cleaned.map((option) => option.toLocaleLowerCase()));
+  const previouslyVisible = cleanDepartmentOptions([
+    ...userDepartments.map((record) => record.department),
+    ...capdevDepartments.map((record) => record.department),
+    ...previous.included,
+  ]).filter((department) => !previous.excluded.some((excluded) => excluded.toLocaleLowerCase() === department.toLocaleLowerCase()));
+  const excluded = cleanDepartmentOptions([
+    ...previous.excluded,
+    ...previouslyVisible.filter((department) => !submitted.has(department.toLocaleLowerCase())),
+  ]).filter((department) => !submitted.has(department.toLocaleLowerCase()));
+  const config: DepartmentOptionsConfig = { included: cleaned, excluded };
   if (existing) {
-    await db.update(capdevFieldDefinitions).set({ options: cleaned, isActive: false, updatedById, updatedAt: new Date() }).where(eq(capdevFieldDefinitions.id, existing.id));
+    await db.update(capdevFieldDefinitions).set({ options: config, isActive: false, updatedById, updatedAt: new Date() }).where(eq(capdevFieldDefinitions.id, existing.id));
   } else {
-    await db.insert(capdevFieldDefinitions).values({ name: '__department_options__', type: 'text', options: cleaned, isRequired: false, isActive: false, section: 'optional', width: 'full', sortOrder: 0, updatedById });
+    await db.insert(capdevFieldDefinitions).values({ name: '__department_options__', type: 'text', options: config, isRequired: false, isActive: false, section: 'optional', width: 'full', sortOrder: 0, updatedById });
   }
-  await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'Department options', details: { options: cleaned } });
+  await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'Department options', details: config });
   return { success: true };
 }
 
