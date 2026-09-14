@@ -86,7 +86,7 @@ Google Drive is the sole durable file store; Vercel and the database do not stor
 ### C. Form Configuration & Custom Layouts
 * Admins can configure the forms for CapDev and Requests.
 * Dynamic field types supported: `text` (combobox: dropdown + text entry), `number`, `date` (datepicker), `file` (drag & drop upload).
-* An unpaired half-width dynamic field can occupy either the left or right column. Dragging it into its adjacent empty half-slot changes and persists that column position in both the configuration preview and operational forms.
+* An unpaired half-width dynamic field can occupy either the left or right column. Drag-and-drop never changes a field's configured width. A half-width field can fill an empty half-slot directly; dropping a full-width field there swaps its position with the adjacent half-width field so the full-width field keeps its whole row. Field order and half-width column position persist in both the configuration preview and operational forms.
 * Adding a field is a client-side draft operation. **Add Field** places the completed draft into the form preview without inserting it into the backend; the fixed bottom-right **Save Configuration** action is the explicit persistence point for staged additions and edits.
 
 ### D. Cascading Entity Deletions

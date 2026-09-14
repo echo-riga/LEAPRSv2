@@ -797,10 +797,11 @@ export default function CapdevConfigPage() {
                                 data-field-drop-width={f.type === 'table' ? 'full' : f.width}
                                 size={editing ? 12 : f.type === 'table' ? 12 : f.width === 'half' ? { xs: 12, sm: 6 } : 12}
                                 sx={{
-                                  opacity: isBeingDragged ? 0.45 : 1,
+                                  opacity: isBeingDragged ? 0.4 : 1,
                                   transform: isBeingDragged ? 'scale(0.98)' : 'none',
-                                  transition: 'all 0.15s ease',
+                                  transition: 'opacity 0.15s ease, transform 0.15s ease',
                                   position: 'relative',
+                                  pointerEvents: isBeingDragged ? 'none' : 'auto',
                                 }}
                               >
                                 {activeDropTarget && <FieldDropIndicator target={activeDropTarget} />}
@@ -815,9 +816,15 @@ export default function CapdevConfigPage() {
                                       p: 2,
                                       border: isBeingDragged
                                         ? '2px dashed #2e7d32'
+                                        : activeDropTarget
+                                        ? '2px solid #2e7d32'
                                         : '1px solid rgba(46, 125, 50, 0.12)',
                                       borderRadius: 2.5,
-                                      bgcolor: isBeingDragged ? 'rgba(46, 125, 50, 0.04)' : '#ffffff',
+                                      bgcolor: isBeingDragged
+                                        ? 'rgba(46, 125, 50, 0.04)'
+                                        : activeDropTarget
+                                        ? 'rgba(46, 125, 50, 0.03)'
+                                        : '#ffffff',
                                       transition: 'all 0.15s ease',
                                       '&:hover': {
                                         borderColor: 'primary.main',
@@ -839,11 +846,9 @@ export default function CapdevConfigPage() {
                                         borderRadius: '20px',
                                         px: 0.75,
                                         py: 0.25,
-                                        opacity: 0,
-                                        transition: 'opacity 0.2s',
+                                        opacity: 1,
                                         zIndex: 10,
                                         boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-                                        '@media (hover: none)': { opacity: 1 },
                                       }}
                                     >
                                       <IconButton size="small" color="primary" onClick={() => handleStartEdit(originalIndex)} sx={{ p: 0.4 }} title="Edit">
@@ -858,7 +863,7 @@ export default function CapdevConfigPage() {
                                         onKeyDown={(event) => handleKeyboardMove(event, f.key)}
                                         aria-label={`Reorder ${f.name || 'field'}`}
                                         aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
-                                        sx={{ width: 36, height: 36, cursor: 'grab', touchAction: 'none', userSelect: 'none', '&:active': { cursor: 'grabbing' } }}
+                                        sx={{ width: 40, height: 40, cursor: 'grab', touchAction: 'none', userSelect: 'none', '&:active': { cursor: 'grabbing' } }}
                                         title="Drag to reorder"
                                       >
                                         <DragIcon sx={{ fontSize: 18, color: 'text.secondary' }} />

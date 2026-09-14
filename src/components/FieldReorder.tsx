@@ -11,12 +11,14 @@ export interface FieldDropTarget {
   position: DropPosition;
   edge: DropEdge;
   columnPosition?: 'left' | 'right';
+  emptySlot?: boolean;
 }
 
 interface ReorderableField {
   id?: number;
   key: string;
   sortOrder: number;
+  type: string;
   width: string;
   columnPosition?: string;
 }
@@ -29,40 +31,91 @@ interface UseFieldReorderOptions<T extends ReorderableField> {
 }
 
 const DROP_TARGET_SELECTOR = '[data-field-drop-key]';
-const VERTICAL_EDGE_ZONE = 0.28;
 
 function getDropTarget(clientX: number, clientY: number, sourceKey: string): FieldDropTarget | null {
-  const element = document
+  // 1. Direct hit check with elementFromPoint
+  let element = document
     .elementFromPoint(clientX, clientY)
     ?.closest<HTMLElement>(DROP_TARGET_SELECTOR);
 
-  const key = element?.dataset.fieldDropKey;
-  if (!element || !key) return null;
+  // If directly hitting the dragged card itself (not an empty slot), or if in a grid gap/padding
+  const isSelfCard = element && element.dataset.fieldDropKey === sourceKey && element.dataset.fieldEmptySlot !== 'true';
+  if (!element || isSelfCard) {
+    const allTargets = Array.from(document.querySelectorAll<HTMLElement>(DROP_TARGET_SELECTOR))
+      .filter((el) => {
+        // Exclude the card being dragged, but allow empty slots belonging to it (for flipping left/right)
+        const isSelf = el.dataset.fieldDropKey === sourceKey && el.dataset.fieldEmptySlot !== 'true';
+        return !isSelf;
+      });
+
+    let closestEl: HTMLElement | null = null;
+    let minDistance = Infinity;
+
+    for (const targetEl of allTargets) {
+      const rect = targetEl.getBoundingClientRect();
+      const dx = Math.max(rect.left - clientX, 0, clientX - rect.right);
+      const dy = Math.max(rect.top - clientY, 0, clientY - rect.bottom);
+      const dist = Math.hypot(dx, dy);
+
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestEl = targetEl;
+      }
+    }
+
+    // Snap to the closest element within a 250px boundary
+    if (closestEl && minDistance <= 250) {
+      element = closestEl;
+    } else if (isSelfCard || !element) {
+      return null;
+    }
+  }
+
+  const key = element.dataset.fieldDropKey;
+  if (!key) return null;
 
   const explicitPosition = element.dataset.fieldDropPosition as DropPosition | undefined;
   const explicitEdge = element.dataset.fieldDropEdge as DropEdge | undefined;
   const explicitColumnPosition = element.dataset.fieldDropColumnPosition as 'left' | 'right' | undefined;
+  const emptySlot = element.dataset.fieldEmptySlot === 'true';
+
   if (explicitPosition && explicitEdge) {
-    return { key, position: explicitPosition, edge: explicitEdge, columnPosition: explicitColumnPosition };
+    return {
+      key,
+      position: explicitPosition,
+      edge: explicitEdge,
+      columnPosition: explicitColumnPosition,
+      emptySlot,
+    };
   }
 
+  // Dropping directly onto self (as a card) is a no-op
   if (key === sourceKey) return null;
 
   const rect = element.getBoundingClientRect();
-  const yRatio = (clientY - rect.top) / rect.height;
+  const xRatio = rect.width > 0 ? (clientX - rect.left) / rect.width : 0.5;
+  const yRatio = rect.height > 0 ? (clientY - rect.top) / rect.height : 0.5;
   const isHalfWidth = element.dataset.fieldDropWidth === 'half' && window.matchMedia('(min-width: 600px)').matches;
 
-  // A half-width card follows visual reading order: top/bottom edges move between
-  // rows, while the middle of the card uses left/right placement within the row.
-  if (isHalfWidth && yRatio > VERTICAL_EDGE_ZONE && yRatio < 1 - VERTICAL_EDGE_ZONE) {
-    return clientX < rect.left + rect.width / 2
-      ? { key, position: 'before', edge: 'left' }
-      : { key, position: 'after', edge: 'right' };
+  // A half-width card follows 4-quadrant placement:
+  // Top / bottom 22% inserts vertically before / after
+  // Middle area splits left / right for side-by-side positioning
+  if (isHalfWidth) {
+    if (yRatio < 0.22) {
+      return { key, position: 'before', edge: 'top', columnPosition: 'left' };
+    }
+    if (yRatio > 0.78) {
+      return { key, position: 'after', edge: 'bottom', columnPosition: 'left' };
+    }
+    return xRatio < 0.5
+      ? { key, position: 'before', edge: 'left', columnPosition: 'left' }
+      : { key, position: 'after', edge: 'right', columnPosition: 'right' };
   }
 
-  return clientY < rect.top + rect.height / 2
-    ? { key, position: 'before', edge: 'top' }
-    : { key, position: 'after', edge: 'bottom' };
+  // Full-width card: top half vs bottom half
+  return yRatio < 0.5
+    ? { key, position: 'before', edge: 'top', columnPosition: 'left' }
+    : { key, position: 'after', edge: 'bottom', columnPosition: 'left' };
 }
 
 export function useFieldReorder<T extends ReorderableField>({
@@ -77,6 +130,7 @@ export function useFieldReorder<T extends ReorderableField>({
   const disabledKeysRef = useRef(disabledKeys);
   const persistOrderRef = useRef(persistOrder);
   const activeCleanupRef = useRef<(() => void) | null>(null);
+  const latestTargetRef = useRef<FieldDropTarget | null>(null);
 
   useEffect(() => {
     fieldsRef.current = fields;
@@ -92,32 +146,63 @@ export function useFieldReorder<T extends ReorderableField>({
     if (sourceIndex === -1) return;
 
     const source = current[sourceIndex];
-    const nextColumnPosition = source.width === 'half' && target.columnPosition
-      ? target.columnPosition
-      : source.columnPosition;
 
+    // Dropping on own empty slot (e.g. flipping a single 50% field between left and right column)
     if (sourceKey === target.key) {
-      if (!target.columnPosition || nextColumnPosition === source.columnPosition) return;
-      const updated = current.map((field, index) => index === sourceIndex
-        ? { ...field, columnPosition: nextColumnPosition }
-        : field);
-      fieldsRef.current = updated;
-      setFields(updated);
-      void Promise.resolve(persistOrderRef.current(updated)).catch((error) => {
-        console.error('Failed to persist field layout:', error);
-      });
+      if (source.width === 'half' && target.columnPosition && source.columnPosition !== target.columnPosition) {
+        const updated = current.map((field, index) =>
+          index === sourceIndex ? { ...field, columnPosition: target.columnPosition } : field
+        );
+        fieldsRef.current = updated;
+        setFields(updated);
+        void Promise.resolve(persistOrderRef.current(updated)).catch((error) => {
+          console.error('Failed to persist field layout:', error);
+        });
+      }
       return;
     }
 
+    // Absolute Priority Move:
+    // Extract the dragged field and insert it directly at the target position.
     const reordered = [...current];
     const [sourceField] = reordered.splice(sourceIndex, 1);
-    const draggedField = { ...sourceField, columnPosition: nextColumnPosition };
+
     const targetIndex = reordered.findIndex((field) => field.key === target.key);
     if (targetIndex === -1) return;
 
-    reordered.splice(target.position === 'before' ? targetIndex : targetIndex + 1, 0, draggedField);
-    const sorted = reordered.map((field, index) => ({ ...field, sortOrder: index + 1 }));
-    if (sorted.every((field, index) => field.key === current[index]?.key)) return;
+    // Determine new columnPosition for half-width fields
+    let nextColumnPosition: string | undefined = sourceField.columnPosition;
+    if (sourceField.width === 'half') {
+      if (target.columnPosition) {
+        nextColumnPosition = target.columnPosition;
+      } else if (target.position === 'before' && (target.edge === 'left' || target.edge === 'top')) {
+        nextColumnPosition = 'left';
+      } else if (target.position === 'after' && target.edge === 'right') {
+        nextColumnPosition = 'right';
+      } else {
+        nextColumnPosition = 'left';
+      }
+    } else {
+      nextColumnPosition = 'left';
+    }
+
+    const draggedField = { ...sourceField, columnPosition: nextColumnPosition };
+    const insertIndex = target.position === 'before' ? targetIndex : targetIndex + 1;
+
+    reordered.splice(insertIndex, 0, draggedField);
+
+    const sorted = reordered.map((field, index) => ({
+      ...field,
+      sortOrder: index + 1,
+    }));
+
+    const isUnchanged = sorted.every((field, index) => (
+      field.key === current[index]?.key &&
+      field.width === current[index]?.width &&
+      field.columnPosition === current[index]?.columnPosition
+    ));
+
+    if (isUnchanged) return;
 
     fieldsRef.current = sorted;
     setFields(sorted);
@@ -138,14 +223,18 @@ export function useFieldReorder<T extends ReorderableField>({
     document.body.style.cursor = 'grabbing';
     document.body.style.userSelect = 'none';
     setDraggedFieldKey(sourceKey);
+    latestTargetRef.current = null;
 
     const move = (pointerEvent: PointerEvent) => {
       pointerEvent.preventDefault();
       const target = getDropTarget(pointerEvent.clientX, pointerEvent.clientY, sourceKey);
+      latestTargetRef.current = target;
       setDragOverTarget((current) => (
         current?.key === target?.key &&
         current?.position === target?.position &&
-        current?.edge === target?.edge
+        current?.edge === target?.edge &&
+        current?.columnPosition === target?.columnPosition &&
+        current?.emptySlot === target?.emptySlot
           ? current
           : target
       ));
@@ -163,11 +252,12 @@ export function useFieldReorder<T extends ReorderableField>({
       document.body.style.userSelect = previousUserSelect;
       setDraggedFieldKey(null);
       setDragOverTarget(null);
+      latestTargetRef.current = null;
       activeCleanupRef.current = null;
     };
 
     const finish = (pointerEvent: PointerEvent) => {
-      const target = getDropTarget(pointerEvent.clientX, pointerEvent.clientY, sourceKey);
+      const target = getDropTarget(pointerEvent.clientX, pointerEvent.clientY, sourceKey) || latestTargetRef.current;
       if (target) commitMove(sourceKey, target);
       cleanup();
     };
@@ -206,16 +296,16 @@ export function FieldDropIndicator({ target }: { target: FieldDropTarget }) {
       aria-hidden
       sx={{
         position: 'absolute',
-        top: target.edge === 'top' ? -4 : target.edge === 'bottom' ? 'auto' : 0,
-        bottom: target.edge === 'bottom' ? -4 : target.edge === 'top' ? 'auto' : 0,
-        left: target.edge === 'left' ? -4 : target.edge === 'right' ? 'auto' : 0,
-        right: target.edge === 'right' ? -4 : target.edge === 'left' ? 'auto' : 0,
-        width: vertical ? 4 : 'auto',
-        height: vertical ? 'auto' : 4,
-        bgcolor: 'primary.main',
+        top: target.edge === 'top' ? -3 : target.edge === 'bottom' ? 'auto' : 0,
+        bottom: target.edge === 'bottom' ? -3 : target.edge === 'top' ? 'auto' : 0,
+        left: target.edge === 'left' ? -3 : target.edge === 'right' ? 'auto' : 0,
+        right: target.edge === 'right' ? -3 : target.edge === 'left' ? 'auto' : 0,
+        width: vertical ? 5 : '100%',
+        height: vertical ? '100%' : 5,
+        bgcolor: '#2e7d32',
         borderRadius: 2,
-        zIndex: 20,
-        boxShadow: '0 0 8px rgba(46, 125, 50, 0.6)',
+        zIndex: 30,
+        boxShadow: '0 0 12px rgba(46, 125, 50, 0.85)',
         pointerEvents: 'none',
       }}
     />
@@ -240,19 +330,24 @@ export function EmptyHalfFieldDropSlot({
       data-field-drop-position={side === 'left' ? 'before' : 'after'}
       data-field-drop-edge={side}
       data-field-drop-column-position={side}
+      data-field-empty-slot="true"
       sx={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        minHeight: 80,
-        border: active ? '2px dashed #2e7d32' : '1px dashed rgba(46, 125, 50, 0.25)',
+        minHeight: 84,
+        border: active ? '2px dashed #2e7d32' : '1.5px dashed rgba(46, 125, 50, 0.25)',
         borderRadius: 2.5,
-        bgcolor: active ? 'rgba(46, 125, 50, 0.08)' : 'rgba(46, 125, 50, 0.02)',
-        transition: 'border-color 0.15s ease, background-color 0.15s ease',
+        bgcolor: active ? 'rgba(46, 125, 50, 0.12)' : 'rgba(46, 125, 50, 0.02)',
+        transform: active ? 'scale(1.01)' : 'none',
+        boxShadow: active ? '0 0 12px rgba(46, 125, 50, 0.2)' : 'none',
+        transition: 'border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease',
+        cursor: 'default',
+        userSelect: 'none',
       }}
     >
       <Typography variant="caption" sx={{ color: active ? 'primary.main' : 'text.secondary', fontWeight: 600 }}>
-        {active ? `Drop beside ${fieldName || 'field'}` : '+ Drop field here'}
+        {active ? `Drop beside ${fieldName || 'field'}` : '+ Empty 50% slot (drop here)'}
       </Typography>
     </Grid>
   );

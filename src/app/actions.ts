@@ -837,7 +837,7 @@ export async function createCapdev(data: CapdevInput) {
     const aipCode = data.aipCode.trim();
     const [existing] = await db.select({ id: capdevs.id }).from(capdevs).where(eq(capdevs.aipCode, aipCode)).limit(1);
     if (existing) return { success: false, error: `A CapDev project with AIP Code ${aipCode} already exists.` };
-    const [created] = await db.insert(capdevs).values({ ...data, aipCode, department: data.department.trim() || 'None', updatedById: access.userId, initialBudget: data.budget }).returning();
+    const [created] = await db.insert(capdevs).values({ ...data, aipCode, department: data.department?.trim() || 'None', updatedById: access.userId, initialBudget: data.budget }).returning();
     await writeAuditLog(access, { action: 'created', entityType: 'capdev', entityId: created.id, entityLabel: created.aipCode, details: { department: created.department, initialBudget: created.initialBudget } });
     void createNotification({
       actorId: access.userId,
@@ -869,7 +869,7 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [updated] = await db
       .update(capdevs)
-      .set({ aipCode: data.aipCode, description: data.description, department: data.department.trim() || 'None', additionalInfo: data.additionalInfo, updatedById: access.userId, updatedAt: new Date() })
+      .set({ aipCode: data.aipCode, description: data.description, department: data.department?.trim() || 'None', additionalInfo: data.additionalInfo, updatedById: access.userId, updatedAt: new Date() })
       .where(eq(capdevs.id, id))
       .returning();
     if (!updated) return { success: false, error: 'CapDev project not found.' };
