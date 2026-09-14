@@ -1,6 +1,8 @@
 ---
 name: leaprs-system-concept
-description: Core system workflow, business logic, entity model, and dynamic forms concept for LEAPRS.
+description: >-
+  Use when changing LEAPRS workflows, permissions, entities, notifications, file
+  uploads, authentication rules, or dynamic form behavior.
 ---
 
 # LEAPRS System Concept & Core Workflow
@@ -73,13 +75,19 @@ Chronological logs track request progression. Status updates are **fixed** (not 
 * *Enforcement*: Enforced via PostgreSQL partial unique indexes to block concurrency race conditions.
 
 ### B. File Uploads (Google Drive)
-All files are uploaded to Google Drive.
+Google Drive is the sole durable file store; Vercel and the database do not store attachment bytes.
 * **Folder Naming Structure**: `[Username] - [Date Submitted] - [Request Name]`
-* **Database Reference**: Array of JSON objects stored in the `files` JSONB column of the status update.
+* **Database Reference**: Persist only Drive metadata (`id`, `name`, `mimeType`, and `url`) in the relevant JSONB value, including the `files` column of a status update.
+* **Upload Path**: The authenticated server creates short-lived Google Drive resumable-upload sessions from file metadata. The browser uploads the file bytes directly to each session URL, bypassing Vercel's request-body limit; the application must not proxy those bytes through a Vercel function.
+* **Limits**: A single attachment selection supports at most 10 files whose combined size is **100 MB or less**.
+* **Execution Model**: Uploads run as part of the active client workflow. LEAPRS does not require Redis, a message queue, or a long-running background worker for Drive uploads.
+* **Failure Handling**: Save only the returned Drive metadata after upload succeeds. Return a specific failure reason when session preparation, Drive authorization, or an individual upload fails.
 
 ### C. Form Configuration & Custom Layouts
 * Admins can configure the forms for CapDev and Requests.
 * Dynamic field types supported: `text` (combobox: dropdown + text entry), `number`, `date` (datepicker), `file` (drag & drop upload).
+* An unpaired half-width dynamic field can occupy either the left or right column. Dragging it into its adjacent empty half-slot changes and persists that column position in both the configuration preview and operational forms.
+* Adding a field is a client-side draft operation. **Add Field** places the completed draft into the form preview without inserting it into the backend; the fixed bottom-right **Save Configuration** action is the explicit persistence point for staged additions and edits.
 
 ### D. Cascading Entity Deletions
 * **Allow Delete & Cascade Children**: When deleting any parent entity (such as a CapDev project or a Requisition request), the system must permit deletion by automatically removing all attached foreign-key child records (e.g., status updates, timeline logs, and sub-references) in the same operation. Never block parent deletion due to existing child history logs.
@@ -119,6 +127,9 @@ Notifications are event records, but they are visible only while their associate
 * **Viewer** receives CapDev, request, and request-status activity in their department.
 * **Viewer (All Departments)** receives CapDev, request, and request-status activity across all departments.
 * Deleting an associated request or CapDev removes its notifications from every audience. Audit logs remain independent and persist.
+* Clicking a notification marks it read and routes to its associated record. Target links use stable anchors for the exact CapDev card, request card, status update or stopper, final request resolution, or role-approval record.
+* The destination page makes a target visible across filters and pagination, smoothly scrolls to its full record card, and briefly pulses that card. Only the record box is emphasized; titles and headings are never focus targets.
+* A legacy status notification without a status-update anchor falls back to the associated request card rather than selecting an unrelated timeline update.
 
 ### B. Self-Registration
 
@@ -126,6 +137,7 @@ Notifications are event records, but they are visible only while their associate
 * Self-registration offers **Employee**, **Employee (All Department Requests)**, **Viewer**, and **Viewer (All Departments)**. Admin remains assignable only through Users Management.
 * Employee, Viewer, and Viewer (All Departments) accounts receive their selected application role and department immediately after Neon Auth creates the authentication record.
 * Employee (All Department Requests) registrations create a pending role approval request instead of an application user profile. Admins receive a notification linking to Users Management, where they can accept or reject it. Acceptance creates the application user profile with the requested role and department; rejection removes the pending authentication account.
+* New passwords and reset passwords must contain **8 to 128 characters**. Validation identifies only the failing condition: it reports the current length and required additions/removals, while password-confirmation mismatch is a separate error. The same length rule applies when an Admin creates a user.
 
 ### C. Shared Department Values
 
@@ -151,3 +163,14 @@ Notifications are event records, but they are visible only while their associate
 * While a request is stopped, normal Employees cannot add ordinary status updates. Instead, the active stopper card provides them a text and attachment response area so they can submit what the stopper reason asks for.
 * While stopped, Admin and Employee (All Department Requests) see **Resume Progress** in place of adding a status update. Resuming re-enables normal Employee status updates.
 * Server authorization enforces these rules: regular Employees can submit only a response to the active stopper on their own request; only Admin and Employee (All Department Requests) can stop or resume progress.
+
+## 6. Timeline Navigation and Shared Help
+
+* The progress summary in the request-status header mirrors timeline events while omitting nested stopper responses and resume-log rows. It includes a final resolution node when the request is Completed or Denied.
+* Every progress node targets its exact timeline update, stopper card, or final-resolution card. Selecting a node smoothly scrolls to and briefly pulses the whole destination card.
+* The portal header exposes a friendly robot help chat to every authenticated role. It currently provides UI-only, deterministic guidance about CapDev projects, requests, attachments, status updates, and settings; it does not call an AI service or perform backend actions.
+
+## 7. CapDev Uniqueness
+
+* `AIP Code` is unique across CapDev projects. Creation performs a friendly pre-check, while the database unique constraint remains the concurrency-safe final authority.
+* A duplicate is returned as a specific business error naming the conflicting AIP Code. The UI presents that failed save in an action-error modal instead of a top-of-form banner.

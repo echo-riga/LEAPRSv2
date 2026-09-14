@@ -290,18 +290,34 @@ export async function getOrCreateUserRole(userId: string): Promise<AppRole | 'pe
 
 export async function getDepartmentOptions() {
   try {
-    const [userDepartments, capdevDepartments] = await Promise.all([
+    const [userDepartments, capdevDepartments, configuredOptions] = await Promise.all([
       db.select({ department: users.department }).from(users),
       db.select({ department: capdevs.department }).from(capdevs),
+      db.select({ options: capdevFieldDefinitions.options }).from(capdevFieldDefinitions).where(and(eq(capdevFieldDefinitions.name, '__department_options__'), eq(capdevFieldDefinitions.isActive, false))),
     ]);
-    return Array.from(new Set([...userDepartments, ...capdevDepartments]
+    const configured = configuredOptions.flatMap((record) => Array.isArray(record.options) ? record.options.filter((option): option is string => typeof option === 'string') : []);
+    return Array.from(new Set([...userDepartments, ...capdevDepartments, ...configured.map((department) => ({ department }))]
       .map((record) => record.department.trim())
-      .filter((department) => department && department !== 'Unassigned')))
+      .filter((department) => department && department !== 'Unassigned' && department !== 'None')))
       .sort((a, b) => a.localeCompare(b));
   } catch (error) {
     console.error('Failed to load department options:', error);
     return [];
   }
+}
+
+export async function saveDepartmentOptions(options: string[], updatedById: string) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return unauthorized;
+  const cleaned = Array.from(new Set(options.map((option) => option.trim()).filter(Boolean))).slice(0, 100);
+  const [existing] = await db.select({ id: capdevFieldDefinitions.id }).from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.name, '__department_options__')).limit(1);
+  if (existing) {
+    await db.update(capdevFieldDefinitions).set({ options: cleaned, isActive: false, updatedById, updatedAt: new Date() }).where(eq(capdevFieldDefinitions.id, existing.id));
+  } else {
+    await db.insert(capdevFieldDefinitions).values({ name: '__department_options__', type: 'text', options: cleaned, isRequired: false, isActive: false, section: 'optional', width: 'full', sortOrder: 0, updatedById });
+  }
+  await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'Department options', details: { options: cleaned } });
+  return { success: true };
 }
 
 export async function completeSelfRegistration(input: { role: string; department: string }) {
@@ -760,7 +776,7 @@ export async function createCapdev(data: CapdevInput) {
     const aipCode = data.aipCode.trim();
     const [existing] = await db.select({ id: capdevs.id }).from(capdevs).where(eq(capdevs.aipCode, aipCode)).limit(1);
     if (existing) return { success: false, error: `A CapDev project with AIP Code ${aipCode} already exists.` };
-    const [created] = await db.insert(capdevs).values({ ...data, aipCode, updatedById: access.userId, initialBudget: data.budget }).returning();
+    const [created] = await db.insert(capdevs).values({ ...data, aipCode, department: data.department.trim() || 'None', updatedById: access.userId, initialBudget: data.budget }).returning();
     await writeAuditLog(access, { action: 'created', entityType: 'capdev', entityId: created.id, entityLabel: created.aipCode, details: { department: created.department, initialBudget: created.initialBudget } });
     void createNotification({
       actorId: access.userId,
@@ -792,7 +808,7 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [updated] = await db
       .update(capdevs)
-      .set({ aipCode: data.aipCode, description: data.description, department: data.department, additionalInfo: data.additionalInfo, updatedById: access.userId, updatedAt: new Date() })
+      .set({ aipCode: data.aipCode, description: data.description, department: data.department.trim() || 'None', additionalInfo: data.additionalInfo, updatedById: access.userId, updatedAt: new Date() })
       .where(eq(capdevs.id, id))
       .returning();
     if (!updated) return { success: false, error: 'CapDev project not found.' };
@@ -914,10 +930,11 @@ export async function saveCapdevFieldDefinition(data: {
   id?: number;
   name: string;
   type: string;
-  options?: any | null; // Dropdown options array
+  options?: unknown[] | null; // Dropdown options array
   isRequired: boolean;
   section: string;
   width: string;
+  columnPosition?: 'left' | 'right';
   placeholder?: string | null;
   sortOrder?: number;
   updatedById: string;
@@ -933,8 +950,9 @@ export async function saveCapdevFieldDefinition(data: {
           type: data.type,
           options: data.options || null,
           isRequired: data.isRequired,
-          section: data.section,
+        section: data.isRequired ? 'required' : 'optional',
           width: data.width,
+          columnPosition: data.columnPosition || 'left',
           placeholder: data.placeholder || null,
           updatedById: data.updatedById,
           updatedAt: new Date(),
@@ -955,8 +973,9 @@ export async function saveCapdevFieldDefinition(data: {
           type: data.type,
           options: data.options || null,
           isRequired: data.isRequired,
-          section: data.section,
+          section: data.isRequired ? 'required' : 'optional',
           width: data.width,
+          columnPosition: data.columnPosition || 'left',
           placeholder: data.placeholder || null,
           sortOrder: data.sortOrder !== undefined ? data.sortOrder : nextOrder,
           updatedById: data.updatedById,
@@ -992,23 +1011,27 @@ export async function deleteCapdevFieldDefinition(id: number, updatedById: strin
   }
 }
 
-export async function updateCapdevFieldsOrder(idOrderArray: number[], updatedById: string) {
+export async function updateCapdevFieldsOrder(
+  fieldLayout: Array<{ id: number; columnPosition: 'left' | 'right' }>,
+  updatedById: string,
+) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
-    if (idOrderArray.length === 0) return { success: true };
-    const orderRows = idOrderArray.map((id, index) => sql`(${id}::integer, ${index + 1}::integer)`);
+    if (fieldLayout.length === 0) return { success: true };
+    const orderRows = fieldLayout.map((field, index) => sql`(${field.id}::integer, ${index + 1}::integer, ${field.columnPosition}::varchar)`);
     // The Neon HTTP driver cannot use Drizzle callback transactions. This is one
     // PostgreSQL statement, so every field order is updated atomically instead.
     await db.execute(sql`
       UPDATE capdev_field_definitions AS field
       SET sort_order = ordered.sort_order,
+          column_position = ordered.column_position,
           updated_by_id = ${updatedById},
           updated_at = NOW()
-      FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order)
+      FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order, column_position)
       WHERE field.id = ordered.id
     `);
-    await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'CapDev field order', details: { fieldIds: idOrderArray } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'CapDev field layout', details: { fieldLayout } });
     return { success: true };
   } catch (error) {
     console.error('Failed to reorder CapDev fields:', error);
@@ -1038,6 +1061,7 @@ export async function saveRequestFieldDefinition(data: {
   isRequired: boolean;
   section: string;
   width: string;
+  columnPosition?: 'left' | 'right';
   placeholder?: string | null;
   sortOrder?: number;
   updatedById: string;
@@ -1053,8 +1077,9 @@ export async function saveRequestFieldDefinition(data: {
           type: data.type,
           options: data.options || null,
           isRequired: data.isRequired,
-          section: data.section,
+          section: data.isRequired ? 'required' : 'optional',
           width: data.width,
+          columnPosition: data.columnPosition || 'left',
           placeholder: data.placeholder || null,
           updatedById: data.updatedById,
           updatedAt: new Date(),
@@ -1076,8 +1101,9 @@ export async function saveRequestFieldDefinition(data: {
         type: data.type,
         options: data.options || null,
         isRequired: data.isRequired,
-        section: data.section,
+          section: data.isRequired ? 'required' : 'optional',
         width: data.width,
+        columnPosition: data.columnPosition || 'left',
         placeholder: data.placeholder || null,
         sortOrder: data.sortOrder !== undefined ? data.sortOrder : nextOrder,
         updatedById: data.updatedById,
@@ -1108,23 +1134,27 @@ export async function deleteRequestFieldDefinition(id: number, updatedById: stri
   }
 }
 
-export async function updateRequestFieldsOrder(idOrderArray: number[], updatedById: string) {
+export async function updateRequestFieldsOrder(
+  fieldLayout: Array<{ id: number; columnPosition: 'left' | 'right' }>,
+  updatedById: string,
+) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
-    if (idOrderArray.length === 0) return { success: true };
-    const orderRows = idOrderArray.map((id, index) => sql`(${id}::integer, ${index + 1}::integer)`);
+    if (fieldLayout.length === 0) return { success: true };
+    const orderRows = fieldLayout.map((field, index) => sql`(${field.id}::integer, ${index + 1}::integer, ${field.columnPosition}::varchar)`);
     // See updateCapdevFieldsOrder: a single statement is compatible with Neon HTTP
     // and preserves all-or-nothing ordering updates.
     await db.execute(sql`
       UPDATE request_field_definitions AS field
       SET sort_order = ordered.sort_order,
+          column_position = ordered.column_position,
           updated_by_id = ${updatedById},
           updated_at = NOW()
-      FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order)
+      FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order, column_position)
       WHERE field.id = ordered.id
     `);
-    await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityLabel: 'Request field order', details: { fieldIds: idOrderArray } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityLabel: 'Request field layout', details: { fieldLayout } });
     return { success: true };
   } catch (error) {
     console.error('Failed to reorder Request fields:', error);

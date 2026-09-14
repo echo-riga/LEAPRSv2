@@ -58,6 +58,7 @@ import {
 } from '@/app/actions';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import ActionErrorDialog from '@/components/ActionErrorDialog';
+import { getHalfFieldLayout } from '@/components/FieldReorder';
 
 type RequestRecord = {
   id: number;
@@ -73,7 +74,7 @@ type RequestRecord = {
   requestedBudget: string;
   additionalInfo: Record<string, unknown>;
 };
-type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; width: string; placeholder: string | null; section?: string };
+type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; width: string; columnPosition: string; placeholder: string | null; section?: string };
 type RequestForm = Pick<RequestRecord, 'setting' | 'description' | 'requestedBudget' | 'additionalInfo'>;
 type CapdevDetail = {
   id: number;
@@ -278,13 +279,9 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     return () => window.clearTimeout(timeoutId);
   }, [filtered, loading, notificationFocus, page, requests]);
   const requiredDefinitions = definitions.filter((field) => field.isRequired || field.section === 'required');
-  const additionalDefinitions = definitions.filter((field) => !field.isRequired && field.section !== 'required');
-  const configuredSections = Array.from(new Set(additionalDefinitions.map((field) => field.section || 'Additional Information')));
-  const getSectionLabel = (section: string) => {
-    if (section === 'required') return 'Activity Design';
-    if (section === 'basic' || section === 'Additional Information') return 'Additional Information';
-    return section;
-  };
+  const allDefinitions = definitions;
+  const rightAlignedFieldIds = getHalfFieldLayout(allDefinitions.map((field) => ({ ...field, key: field.id }))).before;
+  const rightAlignedCapdevFieldIds = getHalfFieldLayout(capdevDefinitions.map((field) => ({ ...field, key: field.id }))).before;
   const setValue = (updates: Partial<RequestForm>) => setForm((current) => ({ ...current, ...updates }));
   const setDynamicValue = (field: DynamicField, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [dynamicFieldStorageKey(field)]: value } }));
   const resetPage = () => setPage(1);
@@ -370,7 +367,11 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const renderDynamicField = (field: DynamicField) => {
     const storageKey = dynamicFieldStorageKey(field);
     const fieldValue = getDynamicFieldValue(form.additionalInfo, field);
-    return <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
+    return <Grid
+      key={field.id}
+      size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
+      offset={rightAlignedFieldIds.has(field.id) ? { xs: 0, sm: 6 } : undefined}
+    >
       {((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
         <Autocomplete
           freeSolo
@@ -677,7 +678,11 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 {/* Dynamic CapDev Fields */}
                 {capdevDefinitions.map((field) => {
                   const fieldValue = getDynamicFieldValue(capdev.additionalInfo, field);
-                  return <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
+                  return <Grid
+                    key={field.id}
+                    size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
+                    offset={rightAlignedCapdevFieldIds.has(field.id) ? { xs: 0, sm: 6 } : undefined}
+                  >
                     {field.type === 'file' ? (
                       <Stack spacing={0.5}>
                         <Typography variant="caption" color="text.secondary">{field.name}</Typography>
@@ -753,24 +758,9 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                   sx={disabledFieldSx}
                 />
               </Grid>
-              {requiredDefinitions.map(renderDynamicField)}
+              {allDefinitions.map(renderDynamicField)}
             </Grid>
           </Box>
-          {configuredSections.map((section) => {
-            const fields = additionalDefinitions.filter((field) => (field.section || 'Additional Information') === section);
-            if (fields.length === 0) return null;
-            return (
-              <React.Fragment key={section}>
-                <Divider sx={{ my: 3 }} />
-                <Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>
-                  {getSectionLabel(section)}
-                </Typography>
-                <Grid container spacing={2.5}>
-                  {fields.map(renderDynamicField)}
-                </Grid>
-              </React.Fragment>
-            );
-          })}
           {editing && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 3 }}>
               Added {formatDate(editing.createdAt)}

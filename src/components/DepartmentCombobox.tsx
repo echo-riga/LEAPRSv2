@@ -35,8 +35,11 @@ export default function DepartmentCombobox({
       forcePopupIcon
       openOnFocus
       options={[...departments, OTHER_DEPARTMENT]}
-      value={otherSelected ? null : value || null}
+      // Keep the typed custom value as the Autocomplete value too. With `null`
+      // here, MUI hides the clear control while “Not listed” is selected.
+      value={value || null}
       inputValue={value}
+      clearOnEscape
       disabled={disabled}
       getOptionLabel={(option) => option === OTHER_DEPARTMENT ? 'Not listed (please specify)' : option}
       onChange={(_, selected) => {

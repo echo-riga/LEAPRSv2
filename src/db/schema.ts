@@ -58,8 +58,9 @@ export const capdevFieldDefinitions = pgTable('capdev_field_definitions', {
   options: jsonb('options'), // Dropdown options array
   isRequired: boolean('is_required').default(false).notNull(),
   isActive: boolean('is_active').default(true).notNull(),
-  section: varchar('section', { length: 100 }).default('basic').notNull(), // 'basic' | 'supporting'
+  section: varchar('section', { length: 100 }).default('optional').notNull(), // legacy storage; derived from isRequired
   width: varchar('width', { length: 50 }).default('full').notNull(), // 'half' | 'full'
+  columnPosition: varchar('column_position', { length: 10 }).default('left').notNull(), // 'left' | 'right' for unpaired half-width fields
   sortOrder: integer('sort_order').default(0).notNull(),
   placeholder: varchar('placeholder', { length: 255 }), // Placeholder text
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED CONFIG LAST
@@ -89,8 +90,9 @@ export const requestFieldDefinitions = pgTable('request_field_definitions', {
   options: jsonb('options'),
   isRequired: boolean('is_required').default(false).notNull(),
   isActive: boolean('is_active').default(true).notNull(),
-  section: varchar('section', { length: 100 }).default('basic').notNull(),
+  section: varchar('section', { length: 100 }).default('optional').notNull(), // legacy storage; derived from isRequired
   width: varchar('width', { length: 50 }).default('full').notNull(), // 'half' | 'full'
+  columnPosition: varchar('column_position', { length: 10 }).default('left').notNull(), // 'left' | 'right' for unpaired half-width fields
   sortOrder: integer('sort_order').default(0).notNull(),
   placeholder: varchar('placeholder', { length: 255 }), // Placeholder text
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED CONFIG LAST

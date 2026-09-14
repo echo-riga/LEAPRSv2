@@ -83,8 +83,23 @@ Use these as the default patterns when extending existing LEAPRS screens:
 - **Create actions**: Operational listing pages use the existing fixed, extended green FAB at bottom-right. Do not replace it with a different creation control unless requested.
 - **Forms and edit dialogs**: Use the established MUI dialog layout, field grid, section dividers, and existing input styles. Read-only metadata belongs as text, not as a disabled input.
 - **Status and state**: Use compact MUI chips in the established green palette for status information. Do not invent alternative badge shapes or placements when a matching chip is already used nearby.
+- **User-facing labels and badges**: Display role and status labels in readable title case through the shared label mapping (for example, `Employee`, never `employee`). Keep lowercase database values internal.
 - **Empty/loading states**: Reuse the existing centered outlined panel with its icon and concise label, and the existing centered spinner treatment.
 - **Dialogs**: Reuse the existing title, divided content, and bottom-right action row. UI-only future functionality may open a concise placeholder dialog, but its trigger must still match the surrounding page pattern.
+- **Header help chat**: The friendly outlined robot icon sits with the other header utilities and is available to every role. Its popover follows the existing compact white-green styling. The current chatbot is UI-only, so its messages must not imply that it performed a server action or changed data.
+
+### Record Focus and Deep-Link Feedback
+
+- Compact timeline progress circles are interactive summary controls. Each circle needs a tooltip and keyboard-accessible button semantics, and clicking it must smoothly scroll to the matching timeline update or final-resolution card.
+- Notification links must focus the record associated with the event: a CapDev card, request card, timeline update or stopper card, final-resolution card, or role-approval box. If the target is on another filtered or paginated listing state, first make the target visible, then scroll to it.
+- Emphasize a focused destination with one brief pulse on the **entire record card or box**: slightly shrink, slightly enlarge, and return to normal. Never apply this animation to the page title, section heading, card title text, or surrounding page container.
+- An older status notification without an exact timeline-update identifier may fall back to its request card. Do not guess a different timeline entry.
+
+### Form Configuration Commit Pattern
+
+- **Add Field** validates and stages the new field in the on-screen form only; it does not create the database field immediately.
+- Use one fixed bottom-right **Save Configuration** action as the clear commit point for staged field additions and edits. Do not add a per-field **Save Field** action or a header loading/checkmark save indicator.
+- Keep **Cancel** beside **Add Field** inside the field editor. Cancel removes an unsaved field or restores the edited field's prior draft value.
 
 ### Code Pattern Template (Material UI)
 
@@ -159,6 +174,12 @@ export default function StandardPage() {
 
 - **No Top-of-Form Error Banners**: When an action fails business validation (e.g., requesting budget exceeding the project's remaining allocation), do not display an inline alert box above the form fields.
 - **Dedicated Validation Dialog**: Present a dedicated validation modal dialog with an alert icon, a concise title (e.g., "Budget Limit Exceeded"), explanatory text comparing relevant figures, and an "Understood" primary action to dismiss and return smoothly to the form.
+- **Save and Upload Failures**: Apply the same dialog treatment to confirmed create/update/upload failures, including duplicate AIP Codes. Keep ordinary field-level correction beside the affected input; reserve the modal for action-level failure after the user attempts to save.
+
+### Password Guidance
+
+- Every new/reset password field must show the exact baseline rule: **Use 8 to 128 characters.**
+- On failure, replace the generic security-standards message with only the rule that failed. For a short password, show its current length and how many characters must be added; for a long password, show how many must be removed; report confirmation mismatch separately.
 
 ---
 

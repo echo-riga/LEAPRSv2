@@ -22,7 +22,6 @@ import {
   FormControlLabel,
   Checkbox,
   Autocomplete,
-  Tooltip,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -31,14 +30,18 @@ import {
   DragIndicator as DragIcon,
   CloudUpload as UploadIcon,
   Edit as EditIcon,
-  KeyboardArrowUp as ArrowUpIcon,
-  KeyboardArrowDown as ArrowDownIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess } from '@/app/actions';
 import { FormConfigSkeleton } from '@/components/Skeletons';
 import DateField from '@/components/DateField';
 import DynamicTableField from '@/components/DynamicTableField';
+import {
+  EmptyHalfFieldDropSlot,
+  FieldDropIndicator,
+  getHalfFieldLayout,
+  useFieldReorder,
+} from '@/components/FieldReorder';
 import {
   getRequestFieldDefinitions,
   saveRequestFieldDefinition,
@@ -55,6 +58,7 @@ interface Field {
   isRequired: boolean;
   section: string;
   width: string;
+  columnPosition: 'left' | 'right';
   placeholder?: string | null;
   sortOrder: number;
   isTemp?: boolean;
@@ -66,8 +70,6 @@ export default function RequestConfigPage() {
   const [fields, setFields] = useState<Field[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | string | null>(null);
-  const [draggedFieldKey, setDraggedFieldKey] = useState<string | null>(null);
-  const [dragOverTarget, setDragOverTarget] = useState<{ key: string; position: 'before' | 'after' } | null>(null);
 
   // Inline editing state (replaces the old modal)
   const [editingKeys, setEditingKeys] = useState<Set<string>>(new Set());
@@ -77,22 +79,12 @@ export default function RequestConfigPage() {
   const [isSavingConfiguration, setIsSavingConfiguration] = useState(false);
   const [configurationSaved, setConfigurationSaved] = useState(false);
   const configurationSaveTimeout = useRef<number | null>(null);
-
   useEffect(() => () => {
     if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
   }, []);
 
-  // Add-section state
-  const [extraSections, setExtraSections] = useState<string[]>([]);
-  const [sectionOrder, setSectionOrder] = useState<string[]>(['basic', 'supporting']);
-  const [draggedSection, setDraggedSection] = useState<string | null>(null);
-  const [editingSection, setEditingSection] = useState<string | null>(null);
-  const [sectionDraft, setSectionDraft] = useState('');
-  const [addingSection, setAddingSection] = useState(false);
-  const [newSectionName, setNewSectionName] = useState('');
-
   // Interactive preview input states
-  const [previewData, setPreviewData] = useState<Record<string, any>>({});
+  const [previewData, setPreviewData] = useState<Record<string, unknown>>({});
   const [previewFiles, setPreviewFiles] = useState<Record<string, File[]>>({});
 
   // Fixed/required preview fields (AIP Code, Budget, etc.) — typeable, placeholder only
@@ -125,6 +117,8 @@ export default function RequestConfigPage() {
           key: `field-${f.id}`,
           options: Array.isArray(f.options) ? (f.options as string[]) : [],
           placeholder: f.placeholder || '',
+          section: f.isRequired ? 'required' : 'optional',
+          columnPosition: f.columnPosition === 'right' ? 'right' as const : 'left' as const,
         }));
         setFields(mapped);
       } catch (error) {
@@ -136,19 +130,19 @@ export default function RequestConfigPage() {
     loadFields();
   }, []);
 
-    // Global dragend/drop listener to guarantee dragged state is reset and never stays stuck gray
-  useEffect(() => {
-    const handleGlobalDragEnd = () => {
-      setDraggedFieldKey(null);
-      setDragOverTarget(null);
-    };
-    window.addEventListener('dragend', handleGlobalDragEnd);
-    window.addEventListener('drop', handleGlobalDragEnd);
-    return () => {
-      window.removeEventListener('dragend', handleGlobalDragEnd);
-      window.removeEventListener('drop', handleGlobalDragEnd);
-    };
-  }, []);
+  const { draggedFieldKey, dragOverTarget, handlePointerDragStart, handleKeyboardMove } = useFieldReorder({
+    fields,
+    setFields,
+    disabledKeys: editingKeys,
+    persistOrder: async (sortedFields) => {
+      const currentUserId = session.data?.user.id;
+      if (!currentUserId) return;
+      const fieldLayout = sortedFields
+        .filter((field): field is Field & { id: number } => typeof field.id === 'number')
+        .map((field) => ({ id: field.id, columnPosition: field.columnPosition }));
+      await updateRequestFieldsOrder(fieldLayout, currentUserId);
+    },
+  });
 
   if (session.isPending || loading) {
     return <FormConfigSkeleton titleWidth={260} />;
@@ -162,7 +156,7 @@ export default function RequestConfigPage() {
 
   // ---- Inline add / edit / cancel / save / delete -------------------------------------------
 
-  const handleAddFieldToSection = (secKey: string) => {
+  const handleAddField = (isRequired = false) => {
     tempCounter.current += 1;
     const key = `temp-${tempCounter.current}`;
     const newField: Field = {
@@ -170,9 +164,10 @@ export default function RequestConfigPage() {
       name: '',
       type: 'text',
       options: [],
-      isRequired: secKey === 'required',
-      section: secKey === 'required' ? 'required' : secKey,
+      isRequired,
+      section: isRequired ? 'required' : 'optional',
       width: 'full',
+      columnPosition: 'left',
       placeholder: '',
       sortOrder: fields.length + 1,
       isTemp: true,
@@ -240,8 +235,9 @@ export default function RequestConfigPage() {
           type: field.type,
           options: field.options,
           isRequired: field.isRequired,
-          section: field.isRequired ? 'required' : field.section,
+          section: field.isRequired ? 'required' : 'optional',
           width: field.width,
+          columnPosition: field.columnPosition,
           placeholder: field.placeholder || '',
           sortOrder: field.sortOrder,
           updatedById: currentUserId,
@@ -308,282 +304,7 @@ export default function RequestConfigPage() {
     handleFieldChange(originalIndex, { options: currentOptions.filter((o) => o !== optToRemove) });
   };
 
-    // ---- Drag and drop & 1-click reordering -----------------------------------------------------
-
-  
-  const handleMoveField = async (fieldKey: string, direction: 'up' | 'down') => {
-    const currentField = fields.find((f) => f.key === fieldKey);
-    if (!currentField) return;
-    const currentSection = currentField.isRequired ? 'required' : currentField.section;
-    const sectionFields = fields.filter((f) => (f.isRequired ? 'required' : f.section) === currentSection);
-    const secIndex = sectionFields.findIndex((f) => f.key === fieldKey);
-    if (secIndex === -1) return;
-    const targetSecIndex = direction === 'up' ? secIndex - 1 : secIndex + 1;
-    if (targetSecIndex < 0 || targetSecIndex >= sectionFields.length) return;
-
-    const targetField = sectionFields[targetSecIndex];
-    const currentIndex = fields.findIndex((f) => f.key === currentField.key);
-
-    const updated = [...fields];
-    updated.splice(currentIndex, 1);
-    const newTargetIndex = updated.findIndex((f) => f.key === targetField.key);
-    const insertIndex = direction === 'up' ? newTargetIndex : newTargetIndex + 1;
-    updated.splice(insertIndex, 0, currentField);
-
-    const sorted = updated.map((f, i) => ({ ...f, sortOrder: i + 1 }));
-    setFields(sorted);
-
-    const idOrder = sorted.map((f) => f.id).filter((id): id is number => typeof id === 'number');
-    await updateRequestFieldsOrder(idOrder, currentUserId);
-  };
-
-  const handleDragStart = (e: React.DragEvent, key: string) => {
-    if (editingKeys.has(key)) {
-      e.preventDefault();
-      return;
-    }
-    setDraggedFieldKey(key);
-    e.dataTransfer.setData('text/plain', key);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleFieldDragOver = (e: React.DragEvent, targetKey: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
-
-    if (!draggedFieldKey || draggedFieldKey === targetKey) {
-      if (dragOverTarget) setDragOverTarget(null);
-      return;
-    }
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const isHorizontal = rect.width > rect.height * 1.5;
-    const isFirstHalf = isHorizontal
-      ? (e.clientX - rect.left) < rect.width / 2
-      : (e.clientY - rect.top) < rect.height / 2;
-
-    const position: 'before' | 'after' = isFirstHalf ? 'before' : 'after';
-
-    if (!dragOverTarget || dragOverTarget.key !== targetKey || dragOverTarget.position !== position) {
-      setDragOverTarget({ key: targetKey, position });
-    }
-  };
-
-  const handleFieldDragLeave = (e: React.DragEvent, targetKey: string) => {
-    if (dragOverTarget?.key === targetKey) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      if (
-        e.clientX < rect.left ||
-        e.clientX >= rect.right ||
-        e.clientY < rect.top ||
-        e.clientY >= rect.bottom
-      ) {
-        setDragOverTarget(null);
-      }
-    }
-  };
-
-  const handleDrop = async (
-    e: React.DragEvent,
-    targetIndex: number,
-    destinationSection?: string,
-    forcedPosition?: 'before' | 'after'
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const sourceKey = draggedFieldKey || e.dataTransfer.getData('text/plain');
-    const sourceIndex = sourceKey ? fields.findIndex((field) => field.key === sourceKey) : -1;
-    
-    const currentDragOver = dragOverTarget;
-    setDraggedFieldKey(null);
-    setDragOverTarget(null);
-
-    if (sourceIndex === -1) return;
-
-    const updated = [...fields];
-    const draggedField = { ...updated[sourceIndex] };
-
-    const targetField = fields[targetIndex];
-    if (!targetField) return;
-
-    const position = forcedPosition || (currentDragOver?.key === targetField.key ? currentDragOver.position : 'after');
-    const targetSection = destinationSection || (targetField.isRequired ? 'required' : targetField.section);
-    if (!targetSection) return;
-
-    let changed = false;
-
-    if (draggedField.isRequired && targetSection !== 'required') {
-      draggedField.isRequired = false;
-      draggedField.section = targetSection;
-      changed = true;
-    } else if (!draggedField.isRequired && targetSection === 'required') {
-      draggedField.isRequired = true;
-      draggedField.section = 'required';
-      changed = true;
-    } else if (draggedField.section !== targetSection) {
-      draggedField.section = targetSection;
-      changed = true;
-    }
-
-    updated.splice(sourceIndex, 1);
-    const targetIdxInUpdated = updated.findIndex((f) => f.key === targetField.key);
-    if (targetIdxInUpdated === -1) return;
-
-    const insertIndex = position === 'before' ? targetIdxInUpdated : targetIdxInUpdated + 1;
-    updated.splice(insertIndex, 0, draggedField);
-
-    const sorted = updated.map((f, i) => ({ ...f, sortOrder: i + 1 }));
-    setFields(sorted);
-
-    const idOrder = sorted.map((f) => f.id).filter((id): id is number => typeof id === 'number');
-    await updateRequestFieldsOrder(idOrder, currentUserId);
-
-    if (changed && draggedField.id) {
-      const payload = {
-        id: draggedField.id,
-        name: draggedField.name,
-        type: draggedField.type,
-        options: draggedField.options,
-        isRequired: draggedField.isRequired,
-        section: draggedField.section,
-        width: draggedField.width,
-        placeholder: draggedField.placeholder || '',
-        sortOrder: draggedField.sortOrder,
-        updatedById: currentUserId,
-      };
-      await saveRequestFieldDefinition(payload);
-    }
-  };
-
-  const handleDragEnd = () => {
-    setDraggedFieldKey(null);
-    setDragOverTarget(null);
-  };
-
-  const getSectionInsertIndex = (section: string) => {
-    let lastIndex = -1;
-    fields.forEach((field, index) => {
-      if ((field.isRequired ? 'required' : field.section) === section) lastIndex = index;
-    });
-    return lastIndex + 1 || fields.length;
-  };
-
-  // ---- Section helpers ------------------------------------------------------------------------
-
-  const availableSections = Array.from(
-    new Set([
-      'basic',
-      'required',
-      'supporting',
-      ...fields.map((f) => f.section).filter(Boolean),
-      ...extraSections,
-    ])
-  );
-
-  const getSectionLabel = (sec: string) => {
-    if (sec === 'basic') return 'Basic Information';
-    if (sec === 'required') return 'Activity Design';
-    if (sec === 'supporting') return 'Supporting Information';
-    return sec;
-  };
-
-  const getSectionKey = (val: string | null) => {
-    if (!val) return 'basic';
-    const clean = val.trim().toLowerCase();
-    if (clean === 'required' || clean === 'required information' || clean === 'activity design') return 'required';
-    if (clean === 'basic' || clean === 'basic information') return 'basic';
-    if (clean === 'supporting' || clean === 'supporting information') return 'supporting';
-    return val.trim();
-  };
-
-  const sectionsToRender = Array.from(
-    new Set([
-      'required',
-      ...fields.map((f) => (f.isRequired ? 'required' : f.section)).filter(Boolean),
-      ...extraSections,
-    ])
-  );
-
-  const sortedSections = sectionsToRender.sort((a, b) => {
-    if (a === 'required') return -1;
-    if (b === 'required') return 1;
-    const indexA = sectionOrder.indexOf(a);
-    const indexB = sectionOrder.indexOf(b);
-    if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-    if (indexA !== -1) return -1;
-    if (indexB !== -1) return 1;
-    return a.localeCompare(b);
-  });
-
-  const handleConfirmAddSection = () => {
-    const trimmed = newSectionName.trim();
-    if (!trimmed) {
-      setAddingSection(false);
-      return;
-    }
-    const key = getSectionKey(trimmed);
-    if (!sectionsToRender.includes(key) && !extraSections.includes(key)) {
-      setExtraSections((prev) => [...prev, key]);
-      setSectionOrder((prev) => [...prev, key]);
-    }
-    setNewSectionName('');
-    setAddingSection(false);
-  };
-
-  const saveSectionFields = async (updatedFields: Field[]) => {
-    await Promise.all(updatedFields.filter((field) => field.id).map((field) => saveRequestFieldDefinition({
-      id: field.id,
-      name: field.name,
-      type: field.type,
-      options: field.options,
-      isRequired: field.isRequired,
-      section: field.isRequired ? 'required' : field.section,
-      width: field.width,
-      placeholder: field.placeholder || '',
-      sortOrder: field.sortOrder,
-      updatedById: currentUserId,
-    })));
-  };
-
-  const handleSectionDrop = async (targetSection: string) => {
-    if (!draggedSection || draggedSection === targetSection || draggedSection === 'required' || targetSection === 'required') return;
-    const movableSections = sortedSections.filter((section) => section !== 'required');
-    const sourceIndex = movableSections.indexOf(draggedSection);
-    const targetIndex = movableSections.indexOf(targetSection);
-    if (sourceIndex === -1 || targetIndex === -1) return;
-    movableSections.splice(sourceIndex, 1);
-    movableSections.splice(targetIndex, 0, draggedSection);
-    setSectionOrder(movableSections);
-    setDraggedSection(null);
-
-    const reordered = ['required', ...movableSections].flatMap((section) => fields.filter((field) => (field.isRequired ? 'required' : field.section) === section));
-    const normalized = reordered.map((field, index) => ({ ...field, sortOrder: index + 1 }));
-    setFields(normalized);
-    await updateRequestFieldsOrder(normalized.map((field) => field.id).filter((id): id is number => typeof id === 'number'), currentUserId);
-  };
-
-  const handleSaveSection = async (section: string) => {
-    const nextSection = getSectionKey(sectionDraft);
-    if (!nextSection || nextSection === 'required' || (nextSection !== section && sectionsToRender.includes(nextSection))) return;
-    const updated = fields.map((field) => field.section === section && !field.isRequired ? { ...field, section: nextSection } : field);
-    setFields(updated);
-    setExtraSections((prev) => prev.map((item) => item === section ? nextSection : item));
-    setSectionOrder((prev) => prev.map((item) => item === section ? nextSection : item));
-    setEditingSection(null);
-    await saveSectionFields(updated.filter((field) => field.section === nextSection && !field.isRequired));
-  };
-
-  const handleDeleteSection = async (section: string) => {
-    if (section === 'required') return;
-    const fieldsToDelete = fields.filter((field) => !field.isRequired && field.section === section);
-    const deletedKeys = new Set(fieldsToDelete.map((field) => field.key));
-    setFields((prev) => prev.filter((field) => !deletedKeys.has(field.key)));
-    setEditingKeys((prev) => new Set([...prev].filter((key) => !deletedKeys.has(key))));
-    setExtraSections((prev) => prev.filter((item) => item !== section));
-    setSectionOrder((prev) => prev.filter((item) => item !== section));
-    await Promise.all(fieldsToDelete.filter((field) => field.id).map((field) => deleteRequestFieldDefinition(field.id!, currentUserId)));
-  };
+  const groups = [{ key: 'all', label: 'Request' }] as const;
 
   // ---- Interactive Upload Preview --------------------------------------------------------------
 
@@ -605,7 +326,8 @@ export default function RequestConfigPage() {
 
   function renderPreviewField(field: Field) {
     const isRequired = field.isRequired;
-    const value = previewData[field.key] || '';
+    const storedValue = previewData[field.key];
+    const value = typeof storedValue === 'string' ? storedValue : '';
     const files = previewFiles[field.key] || [];
 
     switch (field.type) {
@@ -797,22 +519,6 @@ export default function RequestConfigPage() {
               </Select>
             </FormControl>
           </Grid>
-          <Grid size={{ xs: 12, sm: 4 }}>
-            <Autocomplete
-              freeSolo
-              options={availableSections.map(getSectionLabel)}
-              value={getSectionLabel(f.isRequired ? 'required' : f.section)}
-              onChange={(event, newValue) => {
-                const sectionVal = getSectionKey(newValue);
-                handleFieldChange(originalIndex, { section: sectionVal, isRequired: sectionVal === 'required' });
-              }}
-              onInputChange={(event, newInputValue) => {
-                const sectionVal = getSectionKey(newInputValue);
-                handleFieldChange(originalIndex, { section: sectionVal, isRequired: sectionVal === 'required' });
-              }}
-              renderInput={(params) => <TextField {...params} label="Section" size="small" />}
-            />
-          </Grid>
           <Grid size={12}>
             <FormControlLabel
               control={
@@ -822,7 +528,7 @@ export default function RequestConfigPage() {
                     const checked = e.target.checked;
                     handleFieldChange(originalIndex, {
                       isRequired: checked,
-                      section: checked ? 'required' : f.section === 'required' ? 'basic' : f.section,
+                      section: checked ? 'required' : 'optional',
                     });
                   }}
                 />
@@ -940,7 +646,7 @@ export default function RequestConfigPage() {
           Activity Design Layout
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Configure dynamic fields, custom categories, and drag to sort directly in the form.
+          Configure required and optional fields, then drag to set their order.
         </Typography>
 
         <Card
@@ -962,32 +668,22 @@ export default function RequestConfigPage() {
                 boxShadow: '0 2px 8px rgba(28, 40, 28, 0.04)',
               }}
             >
-              {sortedSections.map((secKey) => {
-                const sectionFields = fields.filter(
-                  (f) => (f.isRequired ? 'required' : f.section) === secKey
-                );
-                if (sectionFields.length === 0 && secKey !== 'required' && !extraSections.includes(secKey)) {
-                  return null;
-                }
+              {groups.map(({ key: secKey, label }) => {
+                const sectionFields = fields;
 
                 return (
-                  <Box key={secKey} sx={{ mb: 4.5, opacity: draggedSection === secKey ? 0.45 : 1 }}>
-                    <Stack direction="row" spacing={1} draggable={secKey !== 'required' && editingSection !== secKey} onDragStart={(event) => { if (secKey !== 'required') { setDraggedSection(secKey); event.dataTransfer.effectAllowed = 'move'; } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void handleSectionDrop(secKey); }} onDragEnd={() => setDraggedSection(null)} sx={{ alignItems: 'center', mb: 1.5, borderBottom: '2px solid #2e7d32', pb: 0.75 }}>
-                      {editingSection === secKey ? (
-                        <TextField size="small" autoFocus value={sectionDraft} onChange={(event) => setSectionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void handleSaveSection(secKey); if (event.key === 'Escape') setEditingSection(null); }} sx={{ flexGrow: 1 }} />
-                      ) : (
-                        <Typography variant="subtitle2" sx={{ color: 'primary.dark', fontWeight: 'bold', letterSpacing: '0.1px', flexGrow: 1 }}>
-                          {getSectionLabel(secKey)}
-                        </Typography>
-                      )}
-                      {editingSection === secKey ? <><Button size="small" onClick={() => void handleSaveSection(secKey)}>Save</Button><Button size="small" color="inherit" onClick={() => setEditingSection(null)}>Cancel</Button></> : secKey !== 'required' && <Stack direction="row" spacing={0.25}><Tooltip title="Edit section"><IconButton size="small" color="primary" onClick={() => { setEditingSection(secKey); setSectionDraft(getSectionLabel(secKey)); }}><EditIcon fontSize="small" /></IconButton></Tooltip><Tooltip title="Delete section"><IconButton size="small" color="error" onClick={() => void handleDeleteSection(secKey)}><DeleteIcon fontSize="small" /></IconButton></Tooltip><Tooltip title="Drag to reorder section"><IconButton size="small" color="default" aria-label="Drag to reorder section"><DragIcon fontSize="small" /></IconButton></Tooltip></Stack>}
+                  <Box key={secKey} sx={{ mb: 4.5 }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5, borderBottom: '2px solid #2e7d32', pb: 0.75 }}>
+                      <Typography variant="subtitle2" sx={{ color: 'primary.dark', fontWeight: 'bold', letterSpacing: '0.1px', flexGrow: 1 }}>
+                        {label}
+                      </Typography>
                     </Stack>
                     <Grid container spacing={{ xs: 2.5, sm: 3 }}>
                       {/* Fixed fields shown inside the Activity Design Section.
                           Placeholder-only (not defaultValue), not read-only, so admins can
                           type into them to test the layout — the placeholder is just a hint
                           of what real data will look like once wired to the AIP record. */}
-                      {secKey === 'required' && (
+                      {secKey === 'all' && (
                         <>
                           <Grid size={12}>
                             <Stack spacing={0.5}>
@@ -1060,49 +756,31 @@ export default function RequestConfigPage() {
                         </>
                       )}
 
-                      {/* Compute unpaired half-width fields for side-by-side drop slot */}
                       {(() => {
-                        const unpairedHalfIndices = new Set<number>();
-                        let rowCols = 0;
-                        let lastHalfIndex = -1;
-                        sectionFields.forEach((field, i) => {
-                          if (field.width === 'half' && field.type !== 'table') {
-                            if (rowCols === 0) {
-                              rowCols = 6;
-                              lastHalfIndex = i;
-                            } else {
-                              rowCols = 0;
-                              lastHalfIndex = -1;
-                            }
-                          } else {
-                            if (rowCols === 6 && lastHalfIndex !== -1) {
-                              unpairedHalfIndices.add(lastHalfIndex);
-                              rowCols = 0;
-                              lastHalfIndex = -1;
-                            }
-                          }
-                        });
-                        if (rowCols === 6 && lastHalfIndex !== -1) {
-                          unpairedHalfIndices.add(lastHalfIndex);
-                        }
+                        const halfFieldLayout = getHalfFieldLayout(
+                          sectionFields.map((field) => editingKeys.has(field.key) ? { ...field, width: 'full' } : field)
+                        );
 
-                        return sectionFields.map((f, secIdx) => {
+                        return sectionFields.map((f) => {
                           const originalIndex = fields.findIndex((field) => field.key === f.key);
                           const editing = editingKeys.has(f.key);
                           const isBeingDragged = draggedFieldKey === f.key;
-                          const isOverBefore = dragOverTarget?.key === f.key && dragOverTarget.position === 'before';
-                          const isOverAfter = dragOverTarget?.key === f.key && dragOverTarget.position === 'after';
+                          const activeDropTarget = dragOverTarget?.key === f.key ? dragOverTarget : null;
 
                           return (
                             <React.Fragment key={f.key}>
+                              {halfFieldLayout.before.has(f.key) && (
+                                <EmptyHalfFieldDropSlot
+                                  fieldKey={f.key}
+                                  fieldName={f.name}
+                                  side="left"
+                                  active={dragOverTarget?.key === f.key && dragOverTarget.columnPosition === 'left'}
+                                />
+                              )}
                               <Grid
+                                data-field-drop-key={f.key}
+                                data-field-drop-width={f.type === 'table' ? 'full' : f.width}
                                 size={editing ? 12 : f.type === 'table' ? 12 : f.width === 'half' ? { xs: 12, sm: 6 } : 12}
-                                draggable={!editing}
-                                onDragStart={(e) => handleDragStart(e, f.key)}
-                                onDragOver={(e) => handleFieldDragOver(e, f.key)}
-                                onDragLeave={(e) => handleFieldDragLeave(e, f.key)}
-                                onDrop={(e) => handleDrop(e, originalIndex)}
-                                onDragEnd={handleDragEnd}
                                 sx={{
                                   opacity: isBeingDragged ? 0.45 : 1,
                                   transform: isBeingDragged ? 'scale(0.98)' : 'none',
@@ -1110,37 +788,7 @@ export default function RequestConfigPage() {
                                   position: 'relative',
                                 }}
                               >
-                                {/* Visual insertion indicator lines */}
-                                {isOverBefore && (
-                                  <Box
-                                    sx={{
-                                      position: 'absolute',
-                                      top: -4,
-                                      left: 0,
-                                      right: 0,
-                                      height: 4,
-                                      bgcolor: 'primary.main',
-                                      borderRadius: 2,
-                                      zIndex: 20,
-                                      boxShadow: '0 0 8px rgba(46, 125, 50, 0.6)',
-                                    }}
-                                  />
-                                )}
-                                {isOverAfter && (
-                                  <Box
-                                    sx={{
-                                      position: 'absolute',
-                                      bottom: -4,
-                                      left: 0,
-                                      right: 0,
-                                      height: 4,
-                                      bgcolor: 'primary.main',
-                                      borderRadius: 2,
-                                      zIndex: 20,
-                                      boxShadow: '0 0 8px rgba(46, 125, 50, 0.6)',
-                                    }}
-                                  />
-                                )}
+                                {activeDropTarget && <FieldDropIndicator target={activeDropTarget} />}
 
                                 {editing ? (
                                   renderFieldEditor(f, originalIndex)
@@ -1148,7 +796,7 @@ export default function RequestConfigPage() {
                                   <Box
                                     sx={{
                                       position: 'relative',
-                                      '&:hover .field-actions': { opacity: 1 },
+                                      '&:hover .field-actions, &:focus-within .field-actions': { opacity: 1 },
                                       p: 2,
                                       border: isBeingDragged
                                         ? '2px dashed #2e7d32'
@@ -1180,37 +828,26 @@ export default function RequestConfigPage() {
                                         transition: 'opacity 0.2s',
                                         zIndex: 10,
                                         boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                                        '@media (hover: none)': { opacity: 1 },
                                       }}
                                     >
-                                      <IconButton
-                                        size="small"
-                                        color="primary"
-                                        disabled={secIdx === 0}
-                                        onClick={() => void handleMoveField(f.key, 'up')}
-                                        sx={{ p: 0.4 }}
-                                        title="Move Up"
-                                      >
-                                        <ArrowUpIcon sx={{ fontSize: 16 }} />
-                                      </IconButton>
-                                      <IconButton
-                                        size="small"
-                                        color="primary"
-                                        disabled={secIdx === sectionFields.length - 1}
-                                        onClick={() => void handleMoveField(f.key, 'down')}
-                                        sx={{ p: 0.4 }}
-                                        title="Move Down"
-                                      >
-                                        <ArrowDownIcon sx={{ fontSize: 16 }} />
-                                      </IconButton>
                                       <IconButton size="small" color="primary" onClick={() => handleStartEdit(originalIndex)} sx={{ p: 0.4 }} title="Edit">
                                         <EditIcon sx={{ fontSize: 16 }} />
                                       </IconButton>
                                       <IconButton size="small" color="error" onClick={() => handleDeleteFieldDirect(originalIndex)} sx={{ p: 0.4 }} title="Delete">
                                         <DeleteIcon sx={{ fontSize: 16 }} />
                                       </IconButton>
-                                      <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'grab', px: 0.4 }} title="Drag to reorder">
-                                        <DragIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
-                                      </Box>
+                                      <IconButton
+                                        size="small"
+                                        onPointerDown={(event) => handlePointerDragStart(event, f.key)}
+                                        onKeyDown={(event) => handleKeyboardMove(event, f.key)}
+                                        aria-label={`Reorder ${f.name || 'field'}`}
+                                        aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
+                                        sx={{ width: 36, height: 36, cursor: 'grab', touchAction: 'none', userSelect: 'none', '&:active': { cursor: 'grabbing' } }}
+                                        title="Drag to reorder"
+                                      >
+                                        <DragIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                                      </IconButton>
                                     </Stack>
 
                                     {renderPreviewField(f)}
@@ -1218,48 +855,13 @@ export default function RequestConfigPage() {
                                 )}
                               </Grid>
 
-                              {/* Drop slot placeholder for unpaired half-width field */}
-                              {unpairedHalfIndices.has(secIdx) && (
-                                <Grid
-                                  size={{ xs: 12, sm: 6 }}
-                                  onDragOver={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    e.dataTransfer.dropEffect = 'move';
-                                    if (draggedFieldKey && draggedFieldKey !== f.key) {
-                                      setDragOverTarget({ key: f.key, position: 'after' });
-                                    }
-                                  }}
-                                  onDragLeave={(e) => {
-                                    if (dragOverTarget?.key === f.key && dragOverTarget?.position === 'after') {
-                                      setDragOverTarget(null);
-                                    }
-                                  }}
-                                  onDrop={(e) => handleDrop(e, originalIndex, undefined, 'after')}
-                                  sx={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    minHeight: 80,
-                                    border:
-                                      dragOverTarget?.key === f.key && dragOverTarget?.position === 'after'
-                                        ? '2px dashed #2e7d32'
-                                        : '1px dashed rgba(46, 125, 50, 0.25)',
-                                    borderRadius: 2.5,
-                                    bgcolor:
-                                      dragOverTarget?.key === f.key && dragOverTarget?.position === 'after'
-                                        ? 'rgba(46, 125, 50, 0.08)'
-                                        : 'rgba(46, 125, 50, 0.02)',
-                                    transition: 'all 0.15s ease',
-                                    cursor: 'default',
-                                  }}
-                                >
-                                  <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                                    {dragOverTarget?.key === f.key && dragOverTarget?.position === 'after'
-                                      ? `Drop beside ${f.name || 'field'}`
-                                      : '+ Drop field here'}
-                                  </Typography>
-                                </Grid>
+                              {halfFieldLayout.after.has(f.key) && (
+                                <EmptyHalfFieldDropSlot
+                                  fieldKey={f.key}
+                                  fieldName={f.name}
+                                  side="right"
+                                  active={dragOverTarget?.key === f.key && dragOverTarget.columnPosition === 'right'}
+                                />
                               )}
                             </React.Fragment>
                           );
@@ -1269,9 +871,9 @@ export default function RequestConfigPage() {
                       {/* Add Field, scoped to this section */}
                       <Grid size={12}>
                         <Box
-                          onClick={() => handleAddFieldToSection(secKey)}
+                          onClick={() => handleAddField()}
                           onDragOver={(event) => event.preventDefault()}
-                          onDrop={(event) => { event.preventDefault(); event.stopPropagation(); void handleDrop(event, getSectionInsertIndex(secKey), secKey); }}
+                          onDrop={(event) => { event.preventDefault(); event.stopPropagation(); }}
                           sx={{
                             border: '2px dashed rgba(46, 125, 50, 0.3)',
                             borderRadius: 2.5,
@@ -1285,7 +887,7 @@ export default function RequestConfigPage() {
                           <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', justifyContent: 'center' }}>
                             <AddIcon sx={{ fontSize: 18, color: 'primary.main' }} />
                             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'primary.main' }}>
-                              Add Field to {getSectionLabel(secKey)}
+                              Add Field
                             </Typography>
                           </Stack>
                         </Box>
@@ -1297,45 +899,6 @@ export default function RequestConfigPage() {
 
               {/* Add Section — right-aligned to match the rest of the toolbar actions */}
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
-                {addingSection ? (
-                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                    <TextField
-                      size="small"
-                      autoFocus
-                      placeholder="Section name"
-                      value={newSectionName}
-                      onChange={(e) => setNewSectionName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleConfirmAddSection();
-                        }
-                      }}
-                    />
-                    <Button variant="contained" size="small" onClick={handleConfirmAddSection}>
-                      Add
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => {
-                        setAddingSection(false);
-                        setNewSectionName('');
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </Stack>
-                ) : (
-                  <Button
-                    variant="outlined"
-                    startIcon={<AddIcon />}
-                    onClick={() => setAddingSection(true)}
-                    sx={{ borderStyle: 'dashed', borderWidth: 2 }}
-                  >
-                    Add Section
-                  </Button>
-                )}
               </Box>
             </Box>
           </CardContent>

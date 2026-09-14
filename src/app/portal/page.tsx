@@ -13,8 +13,9 @@ import DepartmentCombobox from '@/components/DepartmentCombobox';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import ActionErrorDialog from '@/components/ActionErrorDialog';
+import { getHalfFieldLayout } from '@/components/FieldReorder';
 
-type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; section: string; width: string; placeholder: string | null };
+type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; section: string; width: string; columnPosition: string; placeholder: string | null };
 type Capdev = { id: number; aipCode: string; description: string; initialBudget: string; budget: string; department: string; updatedById: string; createdAt: Date | string; additionalInfo: Record<string, unknown> };
 type CapdevForm = Omit<Capdev, 'id' | 'createdAt' | 'updatedById'>;
 type BudgetHistoryEntry = { authorName: string | null; amount: string; createdAt: Date | string };
@@ -23,7 +24,6 @@ const EMPTY_FORM: CapdevForm = { aipCode: '', description: '', initialBudget: ''
 const formatCurrency = (value: string) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
 const formatDate = (value: Date | string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
 const getAttachments = (value: unknown): StatusAttachment[] => Array.isArray(value) ? value.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file) : [];
-const getSectionLabel = (section: string) => section === 'basic' ? 'Basic Information' : section === 'supporting' ? 'Supporting Information' : section;
 const formatAipCode = (value: string) => {
   const digits = value.replace(/\D/g, '').slice(0, 17);
   const groupLengths = [4, 3, 1, 1, 2, 3, 3];
@@ -150,8 +150,8 @@ export default function PortalPage() {
     return () => window.clearTimeout(timeoutId);
   }, [filtered, loading, notificationFocus, page, projects]);
   const requiredDefinitions = definitions.filter((field) => field.isRequired || field.section === 'required');
-  const additionalDefinitions = definitions.filter((field) => !field.isRequired && field.section !== 'required');
-  const configuredSections = Array.from(new Set(additionalDefinitions.map((field) => field.section || 'Additional Information')));
+  const allDefinitions = definitions;
+  const rightAlignedFieldIds = getHalfFieldLayout(allDefinitions.map((field) => ({ ...field, key: field.id }))).before;
   const resetPage = () => setPage(1);
   const setValue = (updates: Partial<CapdevForm>) => setForm((current) => ({ ...current, ...updates }));
   const setDynamicValue = (field: DynamicField, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [dynamicFieldStorageKey(field)]: value } }));
@@ -203,7 +203,7 @@ export default function PortalPage() {
         const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
         additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
       }
-      const payload = { ...form, additionalInfo, aipCode: form.aipCode.trim(), department: form.department.trim(), updatedById: session.data.user.id };
+      const payload = { ...form, additionalInfo, aipCode: form.aipCode.trim(), department: form.department.trim() || 'None', updatedById: session.data.user.id };
       const result = editing ? await updateCapdev(editing.id, payload) : await createCapdev(payload);
       if (result.success) {
         setEditorOpen(false);
@@ -225,7 +225,11 @@ export default function PortalPage() {
     const storageKey = dynamicFieldStorageKey(field);
     const fieldValue = getDynamicFieldValue(form.additionalInfo, field);
     return (
-      <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}>
+      <Grid
+        key={field.id}
+        size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
+        offset={rightAlignedFieldIds.has(field.id) ? { xs: 0, sm: 6 } : undefined}
+      >
         {((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
           <Autocomplete
             freeSolo
@@ -395,17 +399,16 @@ export default function PortalPage() {
       <Dialog open={editorOpen} onClose={() => !saving && setEditorOpen(false)} fullWidth maxWidth="md">
         <DialogTitle sx={{ fontWeight: 800 }}>{editing ? 'Edit CapDev Project' : 'Add CapDev Project'}</DialogTitle>
         <DialogContent dividers>
-          <Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>Required Information</Typography>
+          <Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>Capacity Development</Typography>
           <Grid container spacing={2.5} sx={{ pt: 0.5 }}>
             <Grid size={{ xs: 12, sm: 6 }}><TextField required fullWidth label="AIP Code" placeholder="0000-000-0-0-00-000-000" value={form.aipCode} onChange={(event) => setValue({ aipCode: formatAipCode(event.target.value) })} /></Grid>
-            <Grid size={{ xs: 12, sm: 6 }}><DepartmentCombobox options={departmentOptions} value={form.department} onChange={(department) => setValue({ department })} otherSelected={departmentIsOther} onOtherSelectedChange={setDepartmentIsOther} required /></Grid>
+            <Grid size={{ xs: 12, sm: 6 }}><DepartmentCombobox options={departmentOptions} value={form.department} onChange={(department) => setValue({ department })} otherSelected={departmentIsOther} onOtherSelectedChange={setDepartmentIsOther} /></Grid>
             {editing ? <><Grid size={{ xs: 12, sm: 6 }}><Typography variant="body2" color="text.secondary">Initial Balance</Typography><Typography sx={{ fontWeight: 700 }}>{formatCurrency(form.initialBudget)}</Typography></Grid><Grid size={{ xs: 12, sm: 6 }}><Typography variant="body2" color="text.secondary">Remaining Balance</Typography><Typography sx={{ fontWeight: 700, color: Number(form.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(form.budget)}</Typography></Grid></> : <Grid size={12}><TextField required fullWidth label="Initial Balance" type="number" value={form.budget} onChange={(event) => setValue({ budget: event.target.value, initialBudget: event.target.value })} /></Grid>}
-            {requiredDefinitions.map(renderDynamicField)}
+            {allDefinitions.map(renderDynamicField)}
           </Grid>
-          {configuredSections.map((section) => { const fields = additionalDefinitions.filter((field) => (field.section || 'Additional Information') === section); return <React.Fragment key={section}><Divider sx={{ my: 3 }} /><Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>{getSectionLabel(section)}</Typography><Grid container spacing={2.5}>{fields.map(renderDynamicField)}</Grid></React.Fragment>; })}
           {editing && <><Divider sx={{ my: 3 }} /><Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>Balance History</Typography><Stack spacing={1.25}><Stack direction="row" sx={{ justifyContent: 'space-between' }}><Typography variant="body2">Initial balance</Typography><Typography variant="body2" sx={{ fontWeight: 800 }}>{formatCurrency(form.initialBudget)}</Typography></Stack>{budgetHistory.map((entry, index) => <Stack key={`${String(entry.createdAt)}-${index}`} direction="row" spacing={1} sx={{ pl: 2, alignItems: 'center', color: 'error.main' }}><Typography aria-hidden sx={{ fontWeight: 800 }}>└</Typography><Typography variant="body2" sx={{ flexGrow: 1 }}>Deducted by {entry.authorName || 'Staff member'}</Typography><Typography variant="body2" sx={{ fontWeight: 800 }}>−{formatCurrency(entry.amount)}</Typography></Stack>)}<Divider /><Stack direction="row" sx={{ justifyContent: 'space-between' }}><Typography variant="body2" sx={{ fontWeight: 800 }}>Remaining balance</Typography><Typography variant="body2" sx={{ fontWeight: 800, color: Number(form.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(form.budget)}</Typography></Stack></Stack><Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 3 }}>Added {formatDate(editing.createdAt)}</Typography></>}
         </DialogContent>
-        <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Close</Button>{isAdmin && <Button onClick={saveProject} disabled={saving || !form.aipCode || !form.budget || !form.department || !areRequiredFieldsComplete} variant="contained">{saving ? 'Saving' : 'Save CapDev'}</Button>}</DialogActions>
+        <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Close</Button>{isAdmin && <Button onClick={saveProject} disabled={saving || !form.aipCode || !form.budget || !areRequiredFieldsComplete} variant="contained">{saving ? 'Saving' : 'Save CapDev'}</Button>}</DialogActions>
       </Dialog>
       <ActionErrorDialog open={Boolean(error)} title="Unable to Save CapDev" message={error} onClose={() => setError('')} />
       <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev Projects</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const d = new Date().toISOString().slice(0, 10); setDraftFilters({ ...draftFilters, dateFrom: d, dateTo: d }); }}>Today</Button><Button size="small" onClick={() => { const d = new Date(); setDraftFilters({ ...draftFilters, dateFrom: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`, dateTo: d.toISOString().slice(0,10) }); }}>This month</Button><Button size="small" onClick={() => { const d = new Date(); setDraftFilters({ ...draftFilters, dateFrom: `${d.getFullYear()}-01-01`, dateTo: d.toISOString().slice(0,10) }); }}>This year</Button></Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { setFilters({ ...draftFilters, departments: [...draftFilters.departments] }); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
