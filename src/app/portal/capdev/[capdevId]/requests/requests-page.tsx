@@ -497,7 +497,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
             </Typography>
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 0.5 }}>
               <Typography variant="body2" color="text.secondary">
-                {capdev.aipCode} · {capdev.department}
+                {capdev.aipCode}{capdev.department && capdev.department !== 'None' ? ` · ${capdev.department}` : ''}
               </Typography>
               <Typography variant="body2" sx={{ fontWeight: 700, color: isCapdevBudgetDepleted ? 'error.main' : 'primary.dark' }}>
                 (Remaining: {formatCurrency(capdev.budget)})
@@ -664,7 +664,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                   <TextField fullWidth label="AIP Code" value={capdev.aipCode || '—'} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
-                  <TextField fullWidth label="Department" value={capdev.department || '—'} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
+                  <TextField fullWidth label="Department" value={(capdev.department && capdev.department !== 'None') ? capdev.department : '—'} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
                 </Grid>
                 <Grid size={12}>
                 </Grid>

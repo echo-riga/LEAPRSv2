@@ -99,9 +99,8 @@ export default function PortalPage() {
     setProjects(normalizedProjects);
     setDepartmentOptions(departmentData);
     if (!filtersInitialized.current) {
-      const initialDepartments = Array.from(new Set(normalizedProjects.map((project) => project.department?.trim() || 'None')));
-      if (!initialDepartments.includes('None')) initialDepartments.unshift('None');
-      initialDepartments.sort((a, b) => (a === 'None' ? -1 : b === 'None' ? 1 : a.localeCompare(b)));
+      const initialDepartments = Array.from(new Set(normalizedProjects.map((project) => (project.department && project.department !== 'None' ? project.department.trim() : '')).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+      initialDepartments.unshift('None');
       setFilters((current) => ({ ...current, departments: initialDepartments }));
       setDraftFilters((current) => ({ ...current, departments: initialDepartments }));
       filtersInitialized.current = true;
@@ -113,9 +112,9 @@ export default function PortalPage() {
   useEffect(() => { void Promise.resolve().then(loadData); }, []);
 
   const departments = useMemo(() => {
-    const list = Array.from(new Set(projects.map((project) => project.department?.trim() || 'None')));
-    if (!list.includes('None')) list.unshift('None');
-    return list.sort((a, b) => (a === 'None' ? -1 : b === 'None' ? 1 : a.localeCompare(b)));
+    const list = Array.from(new Set(projects.map((project) => (project.department && project.department !== 'None' ? project.department.trim() : '')).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    list.unshift('None');
+    return list;
   }, [projects]);
   const filtered = useMemo(() => projects.filter((project) => {
     const projectDept = project.department?.trim() || 'None';
@@ -168,7 +167,7 @@ export default function PortalPage() {
   const setDynamicValue = (field: DynamicField, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [dynamicFieldStorageKey(field)]: value } }));
 
   const openCreate = () => { setError(''); setPendingFiles({}); setBudgetHistory([]); setEditing(null); setForm(EMPTY_FORM); setDepartmentIsOther(false); setEditorOpen(true); };
-  const openEdit = async (project: Capdev) => { setError(''); setPendingFiles({}); setEditing(project); setForm({ ...project, additionalInfo: { ...project.additionalInfo } }); setDepartmentIsOther(false); setBudgetHistory(await getCapdevBudgetHistory(project.id)); setEditorOpen(true); };
+  const openEdit = async (project: Capdev) => { setError(''); setPendingFiles({}); setEditing(project); setForm({ ...project, department: (project.department && project.department !== 'None') ? project.department : '', additionalInfo: { ...project.additionalInfo } }); setDepartmentIsOther(false); setBudgetHistory(await getCapdevBudgetHistory(project.id)); setEditorOpen(true); };
   const addSelectedFiles = (fieldName: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
     setPendingFiles((current) => ({ ...current, [fieldName]: [...(current[fieldName] || []), ...selectedFiles].filter((file, index, files) => files.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index) }));
@@ -214,7 +213,7 @@ export default function PortalPage() {
         const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
         additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
       }
-      const payload = { ...form, additionalInfo, aipCode: form.aipCode.trim(), department: form.department?.trim() || 'None', updatedById: session.data.user.id };
+      const payload = { ...form, additionalInfo, aipCode: form.aipCode.trim(), department: (form.department && form.department.trim() !== 'None') ? form.department.trim() : '', updatedById: session.data.user.id };
       const result = editing ? await updateCapdev(editing.id, payload) : await createCapdev(payload);
       if (result.success) {
         setEditorOpen(false);
@@ -378,7 +377,7 @@ export default function PortalPage() {
             <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}><Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}><Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>Added {formatDate(project.createdAt)}</Typography></Box></Box>
             <Card variant="outlined" sx={{ position: 'relative', zIndex: 1, borderRadius: 2, bgcolor: '#ffffff', height: '100%', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', animation: notificationFocus?.targetId === `capdev-record-${project.id}` ? 'capdevNotificationFocus 900ms ease-in-out' : 'none', '@keyframes capdevNotificationFocus': { '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' }, '30%': { transform: 'scale(0.975)', boxShadow: '0 0 0 3px rgba(46, 125, 50, 0.22)' }, '65%': { transform: 'scale(1.025)', boxShadow: '0 8px 24px rgba(46, 125, 50, 0.2)' }, '100%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' } }, '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' } }}>
               <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
-                <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}><Box sx={{ bgcolor: 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CapdevIcon color="primary" /></Box><Box sx={{ flexGrow: 1 }}><Typography variant="h6" sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>{project.aipCode}</Typography><Typography variant="body2" color="text.secondary">{project.department || 'None'}</Typography></Box></Stack>
+                <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}><Box sx={{ bgcolor: 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CapdevIcon color="primary" /></Box><Box sx={{ flexGrow: 1 }}><Typography variant="h6" sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>{project.aipCode}</Typography>{project.department && project.department !== 'None' && <Typography variant="body2" color="text.secondary">{project.department}</Typography>}</Box></Stack>
                 <Stack spacing={1.5} sx={{ my: 1 }}><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Initial Balance</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(project.initialBudget)}</Typography></Stack><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Remaining Balance</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: Number(project.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(project.budget)}</Typography></Stack></Stack>
                 <Divider sx={{ my: 2 }} />
                 <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
