@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Add as AddIcon, AttachFile as AttachFileIcon, ChevronRight as ChevronRightIcon, DeleteOutlined as DeleteIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
+import { Add as AddIcon, AttachFile as AttachFileIcon, ChevronRight as ChevronRightIcon, Close as CloseIcon, DeleteOutlined as DeleteIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
 import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Chip, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, FormControlLabel, Grid, IconButton, InputAdornment, MenuItem, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import { authClient } from '@/lib/auth/client';
 import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
@@ -174,6 +174,13 @@ export default function PortalPage() {
     event.target.value = '';
   };
   const removeSelectedFile = (fieldName: string, file: File) => setPendingFiles((current) => ({ ...current, [fieldName]: (current[fieldName] || []).filter((candidate) => candidate !== file) }));
+  const removeExistingAttachment = (field: DynamicField, fileId: string) => {
+    const current = getDynamicFieldValue(form.additionalInfo, field);
+    const updated = Array.isArray(current)
+      ? current.filter((item: unknown) => (typeof item === 'object' && item && 'id' in item ? (item as { id: string }).id !== fileId : true))
+      : [];
+    setDynamicValue(field, updated);
+  };
   const hasDynamicValue = (field: DynamicField) => {
     const storageKey = dynamicFieldStorageKey(field);
     const value = getDynamicFieldValue(form.additionalInfo, field);
@@ -307,18 +314,50 @@ export default function PortalPage() {
               <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
             </Button>
             {getAttachments(fieldValue).map((file) => (
-              <Button
+              <Stack
                 key={file.id}
-                component="a"
-                href={file.url}
-                target="_blank"
-                rel="noreferrer"
-                size="small"
-                startIcon={<AttachFileIcon />}
-                sx={{ width: 'fit-content', textTransform: 'none' }}
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'center',
+                  bgcolor: 'rgba(0,0,0,0.03)',
+                  px: 1.5,
+                  py: 0.5,
+                  borderRadius: 1.5,
+                  width: 'fit-content',
+                  maxWidth: '100%',
+                }}
               >
-                {file.name}
-              </Button>
+                <Button
+                  component="a"
+                  href={file.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  size="small"
+                  startIcon={<AttachFileIcon />}
+                  sx={{
+                    textTransform: 'none',
+                    p: 0,
+                    minWidth: 0,
+                    fontWeight: 600,
+                    color: 'primary.main',
+                    textAlign: 'left',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {file.name}
+                </Button>
+                <IconButton
+                  size="small"
+                  onClick={() => removeExistingAttachment(field, file.id)}
+                  aria-label={`Remove ${file.name}`}
+                  sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                >
+                  <CloseIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Stack>
             ))}
             {(pendingFiles[storageKey] || []).length > 0 && (
               <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>

@@ -5,7 +5,7 @@ import {
   Add as AddIcon,
   AttachFile as AttachFileIcon,
   Assignment as RequestIcon,
-  ChevronRight as ChevronRightIcon,
+  ChevronRight as ChevronRightIcon, Close as CloseIcon,
   DeleteOutlined as DeleteIcon,
   KeyboardArrowDown as KeyboardArrowDownIcon,
   Payments as PaymentsIcon,
@@ -294,6 +294,13 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     event.target.value = '';
   };
   const removeSelectedFile = (fieldName: string, file: File) => setPendingFiles((current) => ({ ...current, [fieldName]: (current[fieldName] || []).filter((candidate) => candidate !== file) }));
+  const removeExistingAttachment = (field: DynamicField, fileId: string) => {
+    const current = getDynamicFieldValue(form.additionalInfo, field);
+    const updated = Array.isArray(current)
+      ? current.filter((item: unknown) => (typeof item === 'object' && item && 'id' in item ? (item as { id: string }).id !== fileId : true))
+      : [];
+    setDynamicValue(field, updated);
+  };
   const hasDynamicValue = (field: DynamicField) => {
     const storageKey = dynamicFieldStorageKey(field);
     const value = getDynamicFieldValue(form.additionalInfo, field);
@@ -439,19 +446,51 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
             <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
           </Button>
           {getAttachments(fieldValue).map((file) => (
-            <Button
-              key={file.id}
-              component="a"
-              href={file.url}
-              target="_blank"
-              rel="noreferrer"
-              size="small"
-              startIcon={<AttachFileIcon />}
-              sx={{ width: 'fit-content', textTransform: 'none' }}
-            >
-              {file.name}
-            </Button>
-          ))}
+              <Stack
+                key={file.id}
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'center',
+                  bgcolor: 'rgba(0,0,0,0.03)',
+                  px: 1.5,
+                  py: 0.5,
+                  borderRadius: 1.5,
+                  width: 'fit-content',
+                  maxWidth: '100%',
+                }}
+              >
+                <Button
+                  component="a"
+                  href={file.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  size="small"
+                  startIcon={<AttachFileIcon />}
+                  sx={{
+                    textTransform: 'none',
+                    p: 0,
+                    minWidth: 0,
+                    fontWeight: 600,
+                    color: 'primary.main',
+                    textAlign: 'left',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {file.name}
+                </Button>
+                <IconButton
+                  size="small"
+                  onClick={() => removeExistingAttachment(field, file.id)}
+                  aria-label={`Remove ${file.name}`}
+                  sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                >
+                  <CloseIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Stack>
+            ))}
           {(pendingFiles[storageKey] || []).length > 0 && (
             <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
               {pendingFiles[storageKey].map((file) => (
