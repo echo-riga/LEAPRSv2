@@ -120,13 +120,24 @@ Verified System Grounding:
 ${PORTAL_CHATBOT_GUIDE}`;
 
     // Read-only tools exposed to the chatbot for real-time live queries
+    const CHATBOT_ALLOWED_TOOLS = [
+      'find_capdev_by_aip_code',
+      'get_request_status',
+      'get_my_requests_summary',
+      'get_department_budget_balance',
+      'list_available_capdev_projects',
+      'get_request_form_schema',
+    ];
+
     const availableTools = [
       {
-        functionDeclarations: LEAPRS_MCP_TOOLS.map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.inputSchema,
-        })),
+        functionDeclarations: LEAPRS_MCP_TOOLS
+          .filter((t) => CHATBOT_ALLOWED_TOOLS.includes(t.name))
+          .map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.inputSchema,
+          })),
       },
     ];
 
@@ -152,7 +163,8 @@ ${PORTAL_CHATBOT_GUIDE}`;
       );
 
       if (!response.ok) {
-        console.error('Gemini help request failed:', response.status);
+        const errorText = await response.text();
+        console.error('Gemini help request failed:', response.status, errorText);
         return { success: false as const, error: 'The help service is temporarily unavailable.' };
       }
 
@@ -175,12 +187,12 @@ ${PORTAL_CHATBOT_GUIDE}`;
         const { name, args } = functionCallPart.functionCall;
         const toolExecutionResult = await executeMcpTool(access, name, args || {});
 
-        // Append assistant's functionCall and user's functionResponse
+        // Append model's full response (preserving thought_signature) and user's functionResponse
         contents = [
           ...contents,
-          {
+          (candidate?.content as { role: string; parts: Array<Record<string, unknown>> }) || {
             role: 'model',
-            parts: [{ functionCall: functionCallPart.functionCall }],
+            parts: parts as Array<Record<string, unknown>>,
           },
           {
             role: 'user',

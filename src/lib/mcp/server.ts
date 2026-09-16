@@ -53,8 +53,8 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
       type: 'object',
       properties: {
         request_id: {
-          type: ['number', 'string'],
-          description: 'The numeric database ID of the request (e.g. 30).',
+          type: 'string',
+          description: 'The numeric database ID of the request (e.g. "30").',
         },
       },
       required: ['request_id'],
@@ -124,8 +124,8 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
           description: 'Whether the training/activity is internal or external.',
         },
         requested_budget: {
-          type: ['number', 'string'],
-          description: 'The requested budget amount in PHP.',
+          type: 'string',
+          description: 'The requested budget amount in PHP (e.g. "50000").',
         },
         description: {
           type: 'string',
@@ -187,7 +187,8 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
           enum: ['internal', 'external'],
         },
         requested_budget: {
-          type: ['number', 'string'],
+          type: 'string',
+          description: 'The requested budget amount in PHP.',
         },
         description: {
           type: 'string',
