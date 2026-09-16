@@ -8,6 +8,7 @@ import { sendPasswordResetEmail } from '@/lib/email';
 import {
   createRequestEvaluationForm,
   getEvaluationSummary,
+  isLegacyRequestEvaluationForm,
   type EvaluationSummary,
 } from '@/lib/google-forms';
 import { hashPassword } from 'better-auth/crypto';
@@ -17,8 +18,22 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { headers } from 'next/headers';
 import { getDynamicFieldValue } from '@/lib/dynamic-fields';
-
-
+import { PORTAL_CHATBOT_GUIDE } from '@/lib/portal-chatbot-guide';
+import {
+  findCapdevByAipCodeService,
+  getRequestFormSchemaService,
+  createRequestDraftService,
+  submitRequestService,
+  getRequestStatusService,
+  type RequestDraftInput,
+  type RequestSubmissionInput,
+} from '@/lib/services/leaprs-service';
+import {
+  extractActivityDesignWithGemini,
+  type ActivityDesignFileInput,
+  type ExtractedActivityDesign,
+} from '@/lib/gemini-activity-design';
+import { executeMcpTool, LEAPRS_MCP_TOOLS } from '@/lib/mcp/server';
 
 export interface DbStatus {
   success: boolean;
@@ -30,7 +45,7 @@ export interface DbStatus {
 }
 
 export type AppRole = 'admin' | 'employee' | 'employee-department' | 'viewer' | 'viewer-full';
-export type UserAccess = { userId: string; role: AppRole; department: string };
+export type UserAccess = { userId: string; role: AppRole; department: string; name?: string; email?: string };
 
 const VALID_ROLES: AppRole[] = ['admin', 'employee', 'employee-department', 'viewer', 'viewer-full'];
 const SELF_REGISTRATION_ROLES = ['employee', 'employee-department', 'viewer', 'viewer-full'] as const;
@@ -57,7 +72,145 @@ async function getCurrentAccess(): Promise<UserAccess | null> {
     userId: session.user.id,
     role,
     department: storedUser.department,
+    name: session.user.name || session.user.email || 'LEAPRS User',
+    email: session.user.email || undefined,
   };
+}
+
+export async function askPortalChatbot(message: string, history: Array<{ sender: 'assistant' | 'user'; text: string }> = []) {
+  const access = await getCurrentAccess();
+  const question = message.trim();
+  if (!access) return { success: false as const, error: unauthorized.error };
+  if (!question || question.length > 1200) return { success: false as const, error: 'Enter a question of up to 1,200 characters.' };
+
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey) return { success: false as const, error: 'The help service is not configured.' };
+
+  try {
+    const model = process.env.GEMINI_CHAT_MODEL || 'gemini-2.5-flash';
+    const conversation = history
+      .slice(-6)
+      .map((item) => ({ role: item.sender === 'assistant' ? 'model' : 'user', parts: [{ text: item.text.slice(0, 1200) }] }));
+
+    const systemInstructionText = `You are LEAPRS Help, the intelligent assistant for the Lifelong Education Advancement Program Requisition System (LEAPRS).
+Current User Context: User ID "${access.userId}", Department "${access.department}", Role "${access.role}".
+
+Tone & Structure Rules (STRICT):
+- Keep every answer ultra-simple, clear, and direct (zero fluff, no greetings or pleasantries).
+- Recognize all UI controls, header icons, pages, and features.
+- Consistent Bolding: Always bold ALL UI names, buttons, sections, icons, request IDs, and pages (**Fullscreen**, **Settings**, **CapDev**, **Users & Access**, **Manage Users**, **View Audit Logs**, **Reports**, **Export Reports**, **Analytics**, **CapDev Configuration**, **Request Configuration**, **Add Request**, **Add Status**, Request **#30**). Do not bold ordinary words.
+- When asked "What can you do?" or for general help, list your 4 core capabilities:
+  1. **Activity Design Extraction**: Upload/paste activity designs to generate structured request drafts.
+  2. **Live Request Status**: Check real-time progress, milestones, and blockers for specific requests (e.g. Request **#30**).
+  3. **My Submissions & History**: View your submitted requests, total counts, or pending items.
+  4. **Department Budget & CapDev**: Inquire about remaining departmental balances and active CapDev AIP Codes.
+- When the user asks about a request's status:
+  * If a request number is mentioned (e.g. "Request #30", "status of 30"), call the tool to get live database information and summarize its status, budget, and last update.
+  * If no request number is provided (e.g. "what's the status of my request?", "show my requests"): call "get_my_requests_summary" to see their active submissions. If they have requests, list the IDs and statuses concisely and ask which one they need details on. If they have none, let them know how to submit one.
+- When the user asks about department budget or CapDev balance, call the corresponding database tool.
+- If asked about the system flow or workflow, provide this exact 4-step format:
+Here is the LEAPRS workflow in 4 simple steps:
+1. **CapDev Projects**: Create a parent project with an **AIP Code** and a budget.
+2. **Requisition Requests**: Submit employee requests under that project using **Add Request** or by pasting an activity design in chat.
+3. **Timeline Tracking**: Track progress using **Add Status**, handle blockers, and finish by marking requests as **Complete** or **Deny**.
+4. **Evaluations & Reports**: Generate feedback forms via **Open Form** and monitor budget health in **Analytics**.
+- Only if a user asks a question completely unrelated to LEAPRS (such as weather or cooking), reply: "I can only help with LEAPRS."
+
+Verified System Grounding:
+${PORTAL_CHATBOT_GUIDE}`;
+
+    // Read-only tools exposed to the chatbot for real-time live queries
+    const availableTools = [
+      {
+        functionDeclarations: LEAPRS_MCP_TOOLS.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        })),
+      },
+    ];
+
+    let contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [
+      ...conversation,
+      { role: 'user', parts: [{ text: question }] },
+    ];
+
+    // Tool calling execution loop (up to 3 turns)
+    for (let turn = 0; turn < 3; turn++) {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemInstructionText }] },
+            contents,
+            tools: availableTools,
+            generationConfig: { temperature: 0.1, maxOutputTokens: 500 },
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        console.error('Gemini help request failed:', response.status);
+        return { success: false as const, error: 'The help service is temporarily unavailable.' };
+      }
+
+      const payload = (await response.json()) as {
+        candidates?: Array<{
+          content?: {
+            parts?: Array<{
+              text?: string;
+              functionCall?: { name: string; args: Record<string, unknown> };
+            }>;
+          };
+        }>;
+      };
+
+      const candidate = payload.candidates?.[0];
+      const parts = candidate?.content?.parts || [];
+      const functionCallPart = parts.find((p) => p.functionCall);
+
+      if (functionCallPart && functionCallPart.functionCall) {
+        const { name, args } = functionCallPart.functionCall;
+        const toolExecutionResult = await executeMcpTool(access, name, args || {});
+
+        // Append assistant's functionCall and user's functionResponse
+        contents = [
+          ...contents,
+          {
+            role: 'model',
+            parts: [{ functionCall: functionCallPart.functionCall }],
+          },
+          {
+            role: 'user',
+            parts: [
+              {
+                functionResponse: {
+                  name,
+                  response: {
+                    name,
+                    content: toolExecutionResult,
+                  },
+                },
+              },
+            ],
+          },
+        ];
+        continue;
+      }
+
+      const reply = parts.map((part) => part.text || '').join('').trim();
+      if (reply) {
+        return { success: true as const, reply };
+      }
+    }
+
+    return { success: true as const, reply: 'I processed your request, but could not format a final response.' };
+  } catch (error) {
+    console.error('Gemini help request failed:', error);
+    return { success: false as const, error: 'The help service is temporarily unavailable.' };
+  }
 }
 
 async function getActorSnapshot(access: UserAccess) {
@@ -447,6 +600,32 @@ export async function getPendingRoleApprovals() {
   } catch (error) {
     console.error('Failed to get pending role approvals:', error);
     return { success: false as const, approvals: [] as PendingRoleApproval[], error: 'Unable to load role approval requests.' };
+  }
+}
+
+export async function getUserManagementCounts() {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') {
+    return { success: false as const, activeUsers: 0, pendingApprovals: 0, error: unauthorized.error };
+  }
+
+  try {
+    const [{ data: authUsers, error: authError }, pendingApprovals] = await Promise.all([
+      auth.admin.listUsers({ query: { limit: 100 } }),
+      db.select({ userId: roleApprovalRequests.userId }).from(roleApprovalRequests).where(eq(roleApprovalRequests.status, 'pending')),
+    ]);
+    if (authError || !authUsers) throw new Error(authError?.message || 'Neon Auth did not return users.');
+
+    const pendingUserIds = new Set(pendingApprovals.map((approval) => approval.userId));
+
+    return {
+      success: true as const,
+      activeUsers: authUsers.users.filter((user) => !pendingUserIds.has(user.id)).length,
+      pendingApprovals: pendingApprovals.length,
+    };
+  } catch (error) {
+    console.error('Failed to get user management counts:', error);
+    return { success: false as const, activeUsers: 0, pendingApprovals: 0, error: 'Unable to load user counts.' };
   }
 }
 
@@ -1516,28 +1695,26 @@ async function ensureRequestEvaluationForms(request: typeof requests.$inferSelec
 
   let participantFeedbackFormId = request.participantFeedbackFormId;
   let participantFeedbackFormUrl = request.participantFeedbackFormUrl;
-  let supervisorEvaluationFormId = request.supervisorEvaluationFormId;
-  let supervisorEvaluationFormUrl = request.supervisorEvaluationFormUrl;
+  // The former two-form workflow always stored a supervisor form. Treat that
+  // as a legacy test pair and replace the visible participant form once.
+  const hasLegacyTestForms = Boolean(request.supervisorEvaluationFormId || request.supervisorEvaluationFormUrl)
+    || (participantFeedbackFormId ? await isLegacyRequestEvaluationForm(participantFeedbackFormId) : false);
 
-  if (!participantFeedbackFormId || !participantFeedbackFormUrl) {
-    const form = await createRequestEvaluationForm({ kind: 'participant', requestId: request.id, aipCode: capdev.aipCode });
+  if (!participantFeedbackFormId || !participantFeedbackFormUrl || hasLegacyTestForms) {
+    const form = await createRequestEvaluationForm({ requestId: request.id, aipCode: capdev.aipCode });
     participantFeedbackFormId = form.formId;
     participantFeedbackFormUrl = form.responderUrl;
-    await db.update(requests).set({ participantFeedbackFormId, participantFeedbackFormUrl }).where(eq(requests.id, request.id));
-  }
-
-  if (!supervisorEvaluationFormId || !supervisorEvaluationFormUrl) {
-    const form = await createRequestEvaluationForm({ kind: 'supervisor', requestId: request.id, aipCode: capdev.aipCode });
-    supervisorEvaluationFormId = form.formId;
-    supervisorEvaluationFormUrl = form.responderUrl;
-    await db.update(requests).set({ supervisorEvaluationFormId, supervisorEvaluationFormUrl }).where(eq(requests.id, request.id));
+    await db.update(requests).set({
+      participantFeedbackFormId,
+      participantFeedbackFormUrl,
+      supervisorEvaluationFormId: null,
+      supervisorEvaluationFormUrl: null,
+    }).where(eq(requests.id, request.id));
   }
 
   return {
     participantFeedbackFormId,
     participantFeedbackFormUrl,
-    supervisorEvaluationFormId,
-    supervisorEvaluationFormUrl,
   };
 }
 
@@ -1557,7 +1734,6 @@ export async function getOrCreateRequestEvaluationForms(requestId: number) {
 
 export async function getRequestEvaluationSummary(
   requestId: number,
-  kind: 'participant' | 'supervisor',
 ): Promise<{ success: true; summary: EvaluationSummary } | { success: false; error: string }> {
   try {
     const access = await getCurrentAccess();
@@ -1565,7 +1741,7 @@ export async function getRequestEvaluationSummary(
     if (!request) return { success: false, error: unauthorized.error };
     if (request.status !== 'completed') return { success: false, error: 'Evaluation summaries are available after completion.' };
     const forms = await ensureRequestEvaluationForms(request);
-    const formId = kind === 'participant' ? forms.participantFeedbackFormId : forms.supervisorEvaluationFormId;
+    const formId = forms.participantFeedbackFormId;
     if (!formId) return { success: false, error: 'The evaluation form is unavailable.' };
     return { success: true, summary: await getEvaluationSummary(formId) };
   } catch (error) {
@@ -1580,6 +1756,9 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
     if (!access || !canManageRequests(access)) return unauthorized;
     const req = await getAccessibleRequest(access, requestId);
     if (!req) return unauthorized;
+    if (req.isStopped && access.role === 'employee') {
+      return { success: false, error: 'This request is stopped. Progress must be resumed before you can complete or deny it.' };
+    }
 
     const forms = status === 'completed' ? await ensureRequestEvaluationForms(req) : null;
 
@@ -2079,4 +2258,111 @@ export async function verifyAndResetPassword(rawEmail: string, rawCode: string, 
     console.error('Password reset failed:', error);
     return { success: false, error: error.message || 'Failed to reset password.' };
   }
+}
+
+export async function handleChatbotActivityDesignUpload(
+  fileData: ActivityDesignFileInput,
+  attachment?: StatusAttachment
+) {
+  const access = await getCurrentAccess();
+  if (!access) return { success: false as const, error: unauthorized.error };
+  if (!canManageRequests(access)) {
+    return { success: false as const, error: 'You do not have permission to create requests.' };
+  }
+
+  const schemaResult = await getRequestFormSchemaService(access);
+  if (!schemaResult.success) {
+    return { success: false as const, error: 'Unable to load request schema.' };
+  }
+
+  const extractResult = await extractActivityDesignWithGemini(fileData, schemaResult);
+  if (!extractResult.success || !extractResult.data) {
+    return { success: false as const, error: extractResult.error || 'Failed to extract activity design.' };
+  }
+
+  const extracted = extractResult.data;
+  if (!extracted.isActivityDesign) {
+    return {
+      success: true as const,
+      isActivityDesign: false,
+      reply: extracted.explanation || 'I reviewed the provided image.',
+      draft: null,
+      extracted,
+    };
+  }
+
+  const draftResult = await createRequestDraftService(access, {
+    aipCode: extracted.aipCode || undefined,
+    setting: extracted.setting || 'internal',
+    requestedBudget: extracted.requestedBudget || undefined,
+    description: extracted.description || undefined,
+    dynamicFields: extracted.dynamicFields,
+    sourceFile: attachment,
+  });
+
+  const reply = extracted.description
+    ? `I found an activity design for **${extracted.description}**.`
+    : 'I found an activity design.';
+
+  return {
+    success: true as const,
+    isActivityDesign: true,
+    reply,
+    draft: draftResult.draft,
+    extracted,
+  };
+}
+
+export async function handleChatbotAipCodeInput(
+  aipCode: string,
+  currentDraft: RequestDraftInput
+) {
+  const access = await getCurrentAccess();
+  if (!access) return { success: false as const, error: unauthorized.error };
+  if (!canManageRequests(access)) {
+    return { success: false as const, error: 'You do not have permission to create requests.' };
+  }
+
+  const capdevResult = await findCapdevByAipCodeService(access, aipCode);
+  if (!capdevResult.success) {
+    return {
+      success: false as const,
+      error: capdevResult.error || `CapDev project with AIP Code “${aipCode}” was not found.`,
+    };
+  }
+
+  const updatedDraftInput: RequestDraftInput = {
+    ...currentDraft,
+    aipCode: capdevResult.capdev.aipCode,
+  };
+
+  const draftResult = await createRequestDraftService(access, updatedDraftInput);
+
+  let reply = '';
+  if (draftResult.draft.missingRequiredFields.length > 0) {
+    reply = `Connected to CapDev **${capdevResult.capdev.aipCode}** (${capdevResult.capdev.department || 'All Departments'}). Please provide the missing required information: ${draftResult.draft.missingRequiredFields.join(', ')}.`;
+  } else if (!draftResult.draft.budgetValidation.isValid) {
+    reply = `Connected to CapDev **${capdevResult.capdev.aipCode}**. ${draftResult.draft.budgetValidation.error || 'Requested budget exceeds remaining CapDev balance.'}`;
+  } else {
+    reply = `Connected to CapDev **${capdevResult.capdev.aipCode}**. Review the request draft below and confirm when ready.`;
+  }
+
+  return {
+    success: true as const,
+    reply,
+    draft: draftResult.draft,
+    capdev: capdevResult.capdev,
+  };
+}
+
+export async function handleChatbotSubmitRequest(submission: RequestSubmissionInput) {
+  const access = await getCurrentAccess();
+  if (!access) return { success: false as const, error: unauthorized.error };
+  return await submitRequestService(access, submission);
+}
+
+export async function callMcpToolAction(toolName: string, args: Record<string, unknown>) {
+  const access = await getCurrentAccess();
+  if (!access) return { success: false as const, error: unauthorized.error };
+  return await executeMcpTool(access, toolName, args);
 }

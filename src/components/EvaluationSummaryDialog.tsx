@@ -2,7 +2,6 @@
 
 import React from 'react';
 import {
-  AutoAwesome as AiIcon,
   BarChart as ChartIcon,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
@@ -16,7 +15,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  Divider,
   Skeleton,
   Stack,
   Typography,
@@ -111,15 +109,9 @@ export default function EvaluationSummaryDialog({ open, loading, error, summary,
               })}
             </Box>
 
-            {summary.aiSummary && (
+            {summary.aiSummary && (summary.aiSummary.strengths.length > 0 || summary.aiSummary.improvements.length > 0 || summary.aiSummary.recommendations.length > 0) && (
               <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#ffffff' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.25 }}>
-                    <AiIcon color="primary" />
-                    <Typography variant="h6" sx={{ fontWeight: 800 }}>Simple Summary</Typography>
-                  </Stack>
-                  <Typography variant="body1" sx={{ lineHeight: 1.6 }}>{summary.aiSummary.overview}</Typography>
-                  <Divider sx={{ my: 2 }} />
                   <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2.5 }}>
                     <SummaryList title="Strengths" items={summary.aiSummary.strengths} />
                     <SummaryList title="Improvements" items={summary.aiSummary.improvements} />

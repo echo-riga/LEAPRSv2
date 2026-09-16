@@ -1,9 +1,19 @@
-type FormKind = 'participant' | 'supervisor';
-
 type QuestionTemplate = {
   title: string;
-  kind: 'rating' | 'paragraph';
+  kind: 'rating' | 'short';
   required: boolean;
+};
+
+type EvaluationSection = {
+  title: string;
+  description?: string;
+  questions: QuestionTemplate[];
+};
+
+type FormItemTemplate = QuestionTemplate | {
+  title: string;
+  description?: string;
+  pageBreak: true;
 };
 
 type GoogleForm = {
@@ -20,6 +30,7 @@ type GoogleForm = {
         textQuestion?: { paragraph?: boolean };
       };
     };
+    pageBreakItem?: Record<string, never>;
   }>;
 };
 
@@ -30,8 +41,7 @@ type GoogleFormResponse = {
   }>;
 };
 
-type GeminiSummary = {
-  overview: string;
+type AiSummary = {
   strengths: string[];
   improvements: string[];
   recommendations: string[];
@@ -45,7 +55,7 @@ export type EvaluationSummary = {
     average: number;
     distribution: number[];
   }>;
-  aiSummary: GeminiSummary | null;
+  aiSummary: AiSummary | null;
   aiError?: string;
 };
 
@@ -54,24 +64,50 @@ export type GeneratedGoogleForm = {
   responderUrl: string;
 };
 
-const PARTICIPANT_QUESTIONS: QuestionTemplate[] = [
-  { title: 'Overall satisfaction with the activity', kind: 'rating', required: true },
-  { title: 'Relevance of the content to your work', kind: 'rating', required: true },
-  { title: 'Effectiveness of the facilitator or resource person', kind: 'rating', required: true },
-  { title: 'Organization and logistics', kind: 'rating', required: true },
-  { title: 'What was most useful?', kind: 'paragraph', required: false },
-  { title: 'What could be improved?', kind: 'paragraph', required: false },
-  { title: 'Additional comments', kind: 'paragraph', required: false },
-];
-
-const SUPERVISOR_QUESTIONS: QuestionTemplate[] = [
-  { title: "Relevance of the activity to the employee's role", kind: 'rating', required: true },
-  { title: 'Improvement in knowledge or skills', kind: 'rating', required: true },
-  { title: 'Application of learning in the workplace', kind: 'rating', required: true },
-  { title: 'Overall value of the activity', kind: 'rating', required: true },
-  { title: 'What positive changes have you observed?', kind: 'paragraph', required: false },
-  { title: 'What follow-up support is recommended?', kind: 'paragraph', required: false },
-  { title: 'Additional comments', kind: 'paragraph', required: false },
+const EVALUATION_SECTIONS: EvaluationSection[] = [
+  {
+    title: 'Guest Speaker',
+    questions: [
+      { title: 'The speaker demonstrated strong knowledge and expertise on the topic', kind: 'rating', required: true },
+      { title: 'The speaker presented concepts clearly and logically.', kind: 'rating', required: true },
+      { title: "The speaker maintained the audience's attention and involvement.", kind: 'rating', required: true },
+      { title: 'The speaker answered participant questions effectively and respectfully.', kind: 'rating', required: true },
+      { title: 'The speaker used appropriate visual aids or materials to support the presentation.', kind: 'rating', required: true },
+      { title: "The content presented was relevant to the seminar's theme and participants’ needs.", kind: 'rating', required: true },
+      { title: 'The speaker provided practical examples or applications related to the topic.', kind: 'rating', required: true },
+      { title: 'The speaker displayed professionalism in speech, appearance, and conduct.', kind: 'rating', required: true },
+      { title: 'The speaker contributed positively to my learning and engagement in the seminar.', kind: 'rating', required: true },
+    ],
+  },
+  {
+    title: 'Learnings and Content',
+    description: 'Please assess how the learning content supported your reflection, realignment, and renewal for personal and professional development.',
+    questions: [
+      { title: 'Relevance of topics discussed', kind: 'rating', required: true },
+      { title: 'Overall learning gained', kind: 'rating', required: true },
+    ],
+  },
+  {
+    title: 'Overall Satisfaction',
+    questions: [
+      { title: 'Overall organization of the event', kind: 'rating', required: true },
+      { title: 'Time management and flow', kind: 'rating', required: true },
+    ],
+  },
+  {
+    title: 'Comments and Suggestions',
+    questions: [
+      { title: 'What did you like most about the seminar?', kind: 'short', required: true },
+      { title: 'What can be improved in future seminars?', kind: 'short', required: true },
+    ],
+  },
+  {
+    title: 'Skills or Training Areas',
+    questions: [
+      { title: 'What topics or areas of personal and professional growth would you like to see included in future seminars to support you in your role as an admin?', kind: 'short', required: true },
+      { title: 'Name to appear in certificate (Firstname MI. Lastname)', kind: 'short', required: true },
+    ],
+  },
 ];
 
 async function getGoogleAccessToken() {
@@ -119,21 +155,26 @@ async function googleJson<T>(url: string, accessToken: string, init?: RequestIni
 }
 
 export async function createRequestEvaluationForm(input: {
-  kind: FormKind;
   requestId: number;
   aipCode: string;
 }): Promise<GeneratedGoogleForm> {
   const accessToken = await getGoogleAccessToken();
-  const isParticipant = input.kind === 'participant';
-  const label = isParticipant ? 'Participant Feedback' : 'Supervisor Evaluation';
-  const questions = isParticipant ? PARTICIPANT_QUESTIONS : SUPERVISOR_QUESTIONS;
-  const title = `${label} – ${input.aipCode} – Request #${input.requestId}`;
+  // Google Forms keeps this as the editable Section 1 title. Coordinators set
+  // the actual seminar name with the Edit Form action after generation.
+  const title = 'TITLE';
 
   const created = await googleJson<GoogleForm>('https://forms.googleapis.com/v1/forms?unpublished=true', accessToken, {
     method: 'POST',
     body: JSON.stringify({ info: { title, documentTitle: title } }),
   });
   if (!created.formId) throw new Error('Google Forms did not return a form ID.');
+
+  // The form title and description are Section 1. Every evaluation group,
+  // including Guest Speaker, must begin with its own page break.
+  const formItems: FormItemTemplate[] = EVALUATION_SECTIONS.flatMap((section) => [
+    { title: section.title, description: section.description, pageBreak: true as const },
+    ...section.questions,
+  ]);
 
   await googleJson(`https://forms.googleapis.com/v1/forms/${created.formId}:batchUpdate`, accessToken, {
     method: 'POST',
@@ -142,26 +183,31 @@ export async function createRequestEvaluationForm(input: {
         {
           updateFormInfo: {
             info: {
-              description: `LEAPRS ${label} for ${input.aipCode}, Request #${input.requestId}. Rate each item from 1 (lowest) to 5 (highest).`,
+              description: `Thank you for participating in the seminar TITLE.\n\nYour insights and feedback are highly valuable to us, as they help ensure that our programs remain relevant, impactful, and aligned with the institution’s Five-Year Development Plan and internationalization goals.\n\nWe kindly invite you to take a few minutes to evaluate the seminar by rating its various aspects. Your responses will be treated with strict confidentiality and will be used solely for continuous improvement and future program enhancement.\n\nInstructions:\nFor each item, please rate your level of agreement or satisfaction using the scale below:\n\n5 – Strongly Agree / Excellent\n4 – Agree / Very Good\n3 – Neutral / Good\n2 – Disagree / Fair\n1 – Strongly Disagree / Poor\n\nWe appreciate your honest and constructive feedback!`,
             },
             updateMask: 'description',
           },
         },
-        ...questions.map((question, index) => ({
-          createItem: {
-            item: {
-              title: question.title,
-              questionItem: {
-                question: {
-                  required: question.required,
-                  ...(question.kind === 'rating'
-                    ? { scaleQuestion: { low: 1, high: 5, lowLabel: 'Lowest', highLabel: 'Highest' } }
-                    : { textQuestion: { paragraph: true } }),
+        ...formItems.map((item, index) => ({
+          createItem: 'pageBreak' in item
+            ? {
+                item: { title: item.title, description: item.description, pageBreakItem: {} },
+                location: { index },
+              }
+            : {
+                item: {
+                  title: item.title,
+                  questionItem: {
+                    question: {
+                      required: item.required,
+                      ...(item.kind === 'rating'
+                        ? { scaleQuestion: { low: 1, high: 5, lowLabel: 'Strongly Disagree / Poor', highLabel: 'Strongly Agree / Excellent' } }
+                        : { textQuestion: { paragraph: false } }),
+                    },
+                  },
                 },
+                location: { index },
               },
-            },
-            location: { index },
-          },
         })),
       ],
     }),
@@ -187,6 +233,20 @@ export async function createRequestEvaluationForm(input: {
   };
 }
 
+export async function isLegacyRequestEvaluationForm(formId: string) {
+  try {
+    const accessToken = await getGoogleAccessToken();
+    const form = await googleJson<GoogleForm>(`https://forms.googleapis.com/v1/forms/${formId}`, accessToken);
+    const title = form.info?.title?.trim() || '';
+    const hasGuestSpeakerSection = form.items?.some((item) => item.pageBreakItem && item.title === 'Guest Speaker');
+    return title.startsWith('Evaluation for ') || title.startsWith('Participant Feedback') || !hasGuestSpeakerSection;
+  } catch (error) {
+    // Keep the existing link available if Google is temporarily unreachable.
+    console.error('Unable to check the generated evaluation form:', error);
+    return false;
+  }
+}
+
 async function getAllResponses(formId: string, accessToken: string) {
   const responses: GoogleFormResponse[] = [];
   let pageToken: string | undefined;
@@ -201,51 +261,46 @@ async function getAllResponses(formId: string, accessToken: string) {
   return responses;
 }
 
-async function summarizeWithGemini(input: {
+async function summarizeWithGroq(input: {
   formTitle: string;
   responseCount: number;
   ratings: EvaluationSummary['ratingQuestions'];
   comments: Array<{ question: string; responses: string[] }>;
-}): Promise<GeminiSummary> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey) throw new Error('Gemini is not configured.');
-  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+}): Promise<AiSummary> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('Groq is not configured.');
+  const model = process.env.GROQ_SUMMARY_MODEL || 'qwen/qwen3.8-27b';
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      contents: [{
-        role: 'user',
-        parts: [{
-          text: `Summarize this evaluation in simple, neutral language for government staff. Base every statement only on the supplied data. Do not infer identities, quote personal information, or overstate findings from a small sample.\n\n${JSON.stringify(input)}`,
-        }],
-      }],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'OBJECT',
-          properties: {
-            overview: { type: 'STRING' },
-            strengths: { type: 'ARRAY', items: { type: 'STRING' } },
-            improvements: { type: 'ARRAY', items: { type: 'STRING' } },
-            recommendations: { type: 'ARRAY', items: { type: 'STRING' } },
-          },
-          required: ['overview', 'strengths', 'improvements', 'recommendations'],
-        },
-      },
+      model,
+      temperature: 0.2,
+      reasoning_format: 'hidden',
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'user', content: `Identify written-response strengths, improvements, and recommended actions for government staff. Rating charts are already displayed separately: never repeat, summarize, mention, or infer a rating, score, average, count, or chart result. Base every item only on written comments. Do not infer identities, quote personal information, or overstate findings from a small sample. Return only JSON in this shape: {"strengths":["..."],"improvements":["..."],"recommendations":["..."]}. Use empty arrays when the written comments do not support a section.\n\n${JSON.stringify(input)}` },
+      ],
     }),
   });
   if (!response.ok) {
-    console.error('Gemini summary request failed:', response.status, await response.text());
-    throw new Error('Gemini could not generate the summary.');
+    console.error('Groq summary request failed:', response.status);
+    throw new Error('Groq could not generate the summary.');
   }
   const payload = await response.json() as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    choices?: Array<{ message?: { content?: string | null } }>;
   };
-  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Gemini returned an empty summary.');
-  return JSON.parse(text) as GeminiSummary;
+  const text = payload.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Groq returned an empty summary.');
+  const summary = JSON.parse(text) as Partial<AiSummary>;
+  if (!Array.isArray(summary.strengths) || !Array.isArray(summary.improvements) || !Array.isArray(summary.recommendations)) {
+    throw new Error('Groq returned an invalid summary.');
+  }
+  return {
+    strengths: summary.strengths.filter((item): item is string => typeof item === 'string'),
+    improvements: summary.improvements.filter((item): item is string => typeof item === 'string'),
+    recommendations: summary.recommendations.filter((item): item is string => typeof item === 'string'),
+  };
 }
 
 export async function getEvaluationSummary(formId: string): Promise<EvaluationSummary> {
@@ -281,11 +336,11 @@ export async function getEvaluationSummary(formId: string): Promise<EvaluationSu
     }
   }
 
-  let aiSummary: GeminiSummary | null = null;
+  let aiSummary: AiSummary | null = null;
   let aiError: string | undefined;
   if (responses.length > 0) {
     try {
-      aiSummary = await summarizeWithGemini({
+      aiSummary = await summarizeWithGroq({
         formTitle: form.info?.title || 'Evaluation',
         responseCount: responses.length,
         ratings: ratingQuestions,

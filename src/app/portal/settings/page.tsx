@@ -27,7 +27,7 @@ import {
   Analytics as AnalyticsIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
-import { getCurrentUserAccess, getDynamicFieldCounts, getMaintenanceMode, setMaintenanceMode as saveMaintenanceMode, type AppRole } from '@/app/actions';
+import { getCurrentUserAccess, getDynamicFieldCounts, getMaintenanceMode, getUserManagementCounts, setMaintenanceMode as saveMaintenanceMode, type AppRole } from '@/app/actions';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -36,12 +36,16 @@ export default function SettingsPage() {
   const [maintenanceSaving, setMaintenanceSaving] = useState(false);
   const [maintenanceError, setMaintenanceError] = useState('');
   const [counts, setCounts] = useState({ capdevFieldsCount: 0, requestFieldsCount: 0 });
+  const [userCounts, setUserCounts] = useState({ activeUsers: 0, pendingApprovals: 0 });
   const [role, setRole] = useState<AppRole | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
 
   useEffect(() => {
     getDynamicFieldCounts().then(setCounts);
     getMaintenanceMode().then((result) => setMaintenanceMode(result.enabled));
+    void getUserManagementCounts().then((result) => {
+      if (result.success) setUserCounts(result);
+    });
   }, []);
 
   const handleMaintenanceChange = async (enabled: boolean) => {
@@ -86,8 +90,8 @@ export default function SettingsPage() {
       description: 'Manage roles, access policies, and audit activity.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
-          <Chip label="12 Active Users" size="small" variant="outlined" color="primary" />
-          <Chip label="2 Pending" size="small" variant="outlined" color="warning" />
+          <Chip label={`${userCounts.activeUsers} Active Users`} size="small" variant="outlined" color="primary" />
+          <Chip label={`${userCounts.pendingApprovals} Pending`} size="small" variant="outlined" color="warning" />
         </Stack>
       ),
       footer: (
@@ -100,11 +104,11 @@ export default function SettingsPage() {
     {
       title: 'Reports',
       icon: <ReportsIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'Configure and download Excel/CSV data exports.',
+      description: 'Generate and download the monitoring sheet.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
-          <Chip label="Excel & CSV" size="small" variant="outlined" color="success" />
-          <Chip label="3 Templates" size="small" variant="outlined" />
+          <Chip label="Excel" size="small" variant="outlined" color="success" />
+          <Chip label="1 Template" size="small" variant="outlined" />
         </Stack>
       ),
       actionText: 'Export Reports',
@@ -113,10 +117,11 @@ export default function SettingsPage() {
     {
       title: 'Analytics',
       icon: <AnalyticsIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'KPI widget settings and dashboard charts layout.',
+      description: 'View live request and budget metrics.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
-          <Chip label="4 Active Indicators" size="small" variant="outlined" color="primary" />
+          <Chip label="3 KPI Cards" size="small" variant="outlined" color="primary" />
+          <Chip label="4 Charts" size="small" variant="outlined" />
         </Stack>
       ),
       actionText: 'Configure Analytics',

@@ -78,6 +78,7 @@ export default function RequestConfigPage() {
   const tempCounter = useRef(0);
   const [isSavingConfiguration, setIsSavingConfiguration] = useState(false);
   const [configurationSaved, setConfigurationSaved] = useState(false);
+  const [hasPendingDeletion, setHasPendingDeletion] = useState(false);
   const configurationSaveTimeout = useRef<number | null>(null);
   useEffect(() => () => {
     if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
@@ -153,6 +154,7 @@ export default function RequestConfigPage() {
   const currentUserId = session.data.user.id;
   const draftFields = fields.filter((field) => field.isTemp || editingKeys.has(field.key));
   const hasInvalidDraft = draftFields.some((field) => !field.name.trim());
+  const hasConfigurationChanges = draftFields.length > 0 || hasPendingDeletion;
 
   // ---- Inline add / edit / cancel / save / delete -------------------------------------------
 
@@ -224,7 +226,14 @@ export default function RequestConfigPage() {
   };
 
   const handleSaveConfiguration = async () => {
-    if (draftFields.length === 0 || hasInvalidDraft) return;
+    if (hasInvalidDraft) return;
+    if (draftFields.length === 0) {
+      setHasPendingDeletion(false);
+      setConfigurationSaved(true);
+      if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
+      configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
+      return;
+    }
     setIsSavingConfiguration(true);
     setConfigurationSaved(false);
     try {
@@ -253,6 +262,7 @@ export default function RequestConfigPage() {
         setEditingKeys(new Set());
         setBackups({});
         setOptionDrafts({});
+        setHasPendingDeletion(false);
         setConfigurationSaved(true);
         if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
         configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
@@ -278,6 +288,8 @@ export default function RequestConfigPage() {
       if (result.success) {
         setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
         clearEditingState(fieldToDelete.key);
+        setHasPendingDeletion(true);
+        setConfigurationSaved(false);
       }
     } catch (error) {
       console.error('Delete failed:', error);
@@ -914,7 +926,7 @@ export default function RequestConfigPage() {
         size="large"
         startIcon={isSavingConfiguration ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
         onClick={() => void handleSaveConfiguration()}
-        disabled={isSavingConfiguration || draftFields.length === 0 || hasInvalidDraft}
+        disabled={isSavingConfiguration || !hasConfigurationChanges || hasInvalidDraft}
         sx={{ position: 'fixed', right: { xs: 16, md: 24 }, bottom: { xs: 16, md: 24 }, zIndex: (theme) => theme.zIndex.appBar - 1 }}
       >
         {isSavingConfiguration ? 'Saving...' : configurationSaved ? 'Saved' : 'Save Configuration'}

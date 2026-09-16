@@ -10,6 +10,7 @@ import {
   CheckCircle as CheckCircleIcon,
   ContentCopy as ContentCopyIcon,
   Description as FormIcon,
+  Edit as EditIcon,
   Insights as SummaryIcon,
   OpenInNew as OpenInNewIcon,
   Payments as PaymentsIcon,
@@ -70,8 +71,6 @@ type RequestSummary = {
   activeStopperId: number | null;
   participantFeedbackFormId: string | null;
   participantFeedbackFormUrl: string | null;
-  supervisorEvaluationFormId: string | null;
-  supervisorEvaluationFormUrl: string | null;
 };
 type StatusUpdate = {
   id: number;
@@ -151,7 +150,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [formsModalOpen, setFormsModalOpen] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [summaryModalOpen, setSummaryModalOpen] = useState(false);
-  const [summaryKind, setSummaryKind] = useState<'participant' | 'supervisor'>('participant');
   const [evaluationSummary, setEvaluationSummary] = useState<EvaluationSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
@@ -240,13 +238,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       let formFields = {
         participantFeedbackFormId: requestData.participantFeedbackFormId,
         participantFeedbackFormUrl: requestData.participantFeedbackFormUrl,
-        supervisorEvaluationFormId: requestData.supervisorEvaluationFormId,
-        supervisorEvaluationFormUrl: requestData.supervisorEvaluationFormUrl,
       };
-      if (
-        requestData.status === 'completed' &&
-        (!formFields.participantFeedbackFormUrl || !formFields.supervisorEvaluationFormUrl)
-      ) {
+      if (requestData.status === 'completed') {
         const generated = await getOrCreateRequestEvaluationForms(requestId);
         if (generated.success) formFields = generated.forms;
         else setError(generated.error);
@@ -276,6 +269,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const isDenied = request?.status === 'denied';
   const isConcluded = isCompleted || isDenied;
   const canControlStopper = role === 'admin' || role === 'employee-department';
+  const canConcludeRequest = (role === 'admin' || role === 'employee' || role === 'employee-department') && !(request?.isStopped && role === 'employee');
   const visibleUpdates = useMemo(() => updates.filter((update) => !update.isStopperResponse && !update.isResume), [updates]);
 
   const openAdd = () => {
@@ -397,14 +391,13 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     setTimeout(() => setCopiedLink(null), 2500);
   };
 
-  const loadEvaluationSummary = async (kind: 'participant' | 'supervisor') => {
-    setSummaryKind(kind);
+  const loadEvaluationSummary = async () => {
     setFormsModalOpen(false);
     setSummaryModalOpen(true);
     setSummaryLoading(true);
     setSummaryError('');
     setEvaluationSummary(null);
-    const result = await getRequestEvaluationSummary(requestId, kind);
+    const result = await getRequestEvaluationSummary(requestId);
     if (result.success) setEvaluationSummary(result.summary);
     else setSummaryError(result.error);
     setSummaryLoading(false);
@@ -684,7 +677,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                 }}
               >
                 {!isConcluded ? (
-                  (role === 'admin' || role === 'employee' || role === 'employee-department') ? (
+                  canConcludeRequest ? (
                     <Stack spacing={2} sx={{ width: '100%', maxWidth: 210 }}>
                       <Button
                         variant="contained"
@@ -756,11 +749,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       </Stack>
 
                       <Stack spacing={1}>
-                        {/* Form 1 */}
                         <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: '#fafcfa', border: '1px solid rgba(0,0,0,0.06)' }}>
                           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1 }}>
                             <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
-                              Participant Feedback
+                              Seminar Evaluation
                             </Typography>
                             <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
                               <Button
@@ -780,6 +772,19 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                               <Button
                                 size="small"
                                 variant="outlined"
+                                startIcon={<EditIcon sx={{ fontSize: 13 }} />}
+                                component="a"
+                                href={request.participantFeedbackFormId ? `https://docs.google.com/forms/d/${request.participantFeedbackFormId}/edit` : undefined}
+                                target="_blank"
+                                rel="noreferrer"
+                                disabled={!request.participantFeedbackFormId}
+                                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="outlined"
                                 color="inherit"
                                 startIcon={copiedLink === 'Participant Form' ? <CheckIcon sx={{ fontSize: 13, color: 'success.main' }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
                                 onClick={() => handleCopyFormLink('Participant Form', request.participantFeedbackFormUrl)}
@@ -792,7 +797,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 size="small"
                                 variant="outlined"
                                 startIcon={<SummaryIcon sx={{ fontSize: 13 }} />}
-                                onClick={() => void loadEvaluationSummary('participant')}
+                                onClick={() => void loadEvaluationSummary()}
                                 disabled={!request.participantFeedbackFormId}
                                 sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
                               >
@@ -802,51 +807,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                           </Stack>
                         </Box>
 
-                        {/* Form 2 */}
-                        <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: '#fafcfa', border: '1px solid rgba(0,0,0,0.06)' }}>
-                          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1 }}>
-                            <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
-                              Supervisor Evaluation
-                            </Typography>
-                            <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
-                              <Button
-                                size="small"
-                                variant="contained"
-                                color="primary"
-                                startIcon={<OpenInNewIcon sx={{ fontSize: 13 }} />}
-                                component="a"
-                                href={request.supervisorEvaluationFormUrl || undefined}
-                                target="_blank"
-                                rel="noreferrer"
-                                disabled={!request.supervisorEvaluationFormUrl}
-                                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
-                              >
-                                Open
-                              </Button>
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                color="inherit"
-                                startIcon={copiedLink === 'Supervisor Form' ? <CheckIcon sx={{ fontSize: 13, color: 'success.main' }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
-                                onClick={() => handleCopyFormLink('Supervisor Form', request.supervisorEvaluationFormUrl)}
-                                disabled={!request.supervisorEvaluationFormUrl}
-                                sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
-                              >
-                                {copiedLink === 'Supervisor Form' ? 'Copied!' : 'Copy'}
-                              </Button>
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                startIcon={<SummaryIcon sx={{ fontSize: 13 }} />}
-                                onClick={() => void loadEvaluationSummary('supervisor')}
-                                disabled={!request.supervisorEvaluationFormId}
-                                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
-                              >
-                                Summary
-                              </Button>
-                            </Stack>
-                          </Stack>
-                        </Box>
                       </Stack>
                     </CardContent>
                   </Card>
@@ -1175,11 +1135,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: 'rgba(46, 125, 50, 0.12)', display: 'flex' }}>
             <CheckCircleIcon color="success" />
           </Box>
-          Evaluation Forms Generated
+          Evaluation Form Ready
         </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={1.5} sx={{ py: 1 }}>
-            {/* Form 1 */}
             <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#fafcfa' }}>
               <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
                 <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1.5 }}>
@@ -1188,7 +1147,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       <FormIcon fontSize="small" />
                     </Box>
                     <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
-                      Participant Feedback Form
+                      Seminar Evaluation Form
                     </Typography>
                   </Stack>
                   <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
@@ -1208,6 +1167,19 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     </Button>
                     <Button
                       variant="outlined"
+                      size="small"
+                      startIcon={<EditIcon fontSize="small" />}
+                      component="a"
+                      href={request.participantFeedbackFormId ? `https://docs.google.com/forms/d/${request.participantFeedbackFormId}/edit` : undefined}
+                      target="_blank"
+                      rel="noreferrer"
+                      disabled={!request.participantFeedbackFormId}
+                      sx={{ fontWeight: 700, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
+                    >
+                      Edit Form
+                    </Button>
+                    <Button
+                      variant="outlined"
                       color="inherit"
                       size="small"
                       startIcon={copiedLink === 'Modal Participant' ? <CheckIcon color="success" fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
@@ -1221,61 +1193,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       variant="outlined"
                       size="small"
                       startIcon={<SummaryIcon fontSize="small" />}
-                      onClick={() => void loadEvaluationSummary('participant')}
+                      onClick={() => void loadEvaluationSummary()}
                       disabled={!request.participantFeedbackFormId}
-                      sx={{ fontWeight: 700, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
-                    >
-                      See Summary
-                    </Button>
-                  </Stack>
-                </Stack>
-              </CardContent>
-            </Card>
-
-            {/* Form 2 */}
-            <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#fafcfa' }}>
-              <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1.5 }}>
-                  <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', minWidth: 0 }}>
-                    <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: 'rgba(46, 125, 50, 0.1)', color: 'primary.main', display: 'flex' }}>
-                      <FormIcon fontSize="small" />
-                    </Box>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
-                      Supervisor Evaluation Form
-                    </Typography>
-                  </Stack>
-                  <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
-                    <Button
-                      variant="contained"
-                      color="primary"
-                      size="small"
-                      startIcon={<OpenInNewIcon fontSize="small" />}
-                      component="a"
-                      href={request.supervisorEvaluationFormUrl || undefined}
-                      target="_blank"
-                      rel="noreferrer"
-                      disabled={!request.supervisorEvaluationFormUrl}
-                      sx={{ fontWeight: 700, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
-                    >
-                      Open Form
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      color="inherit"
-                      size="small"
-                      startIcon={copiedLink === 'Modal Supervisor' ? <CheckIcon color="success" fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
-                      onClick={() => handleCopyFormLink('Modal Supervisor', request.supervisorEvaluationFormUrl)}
-                      disabled={!request.supervisorEvaluationFormUrl}
-                      sx={{ fontWeight: 600, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
-                    >
-                      {copiedLink === 'Modal Supervisor' ? 'Copied Link!' : 'Copy Link'}
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      startIcon={<SummaryIcon fontSize="small" />}
-                      onClick={() => void loadEvaluationSummary('supervisor')}
-                      disabled={!request.supervisorEvaluationFormId}
                       sx={{ fontWeight: 700, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
                     >
                       See Summary
@@ -1304,7 +1223,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         error={summaryError}
         summary={evaluationSummary}
         onClose={() => setSummaryModalOpen(false)}
-        onRefresh={() => void loadEvaluationSummary(summaryKind)}
+        onRefresh={() => void loadEvaluationSummary()}
       />
       <ActionErrorDialog open={Boolean(error)} title="Unable to Complete Action" message={error} onClose={() => setError('')} />
     </Box>

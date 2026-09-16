@@ -111,7 +111,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
           </Stack>
           <Stack direction="row" spacing={0.75} sx={{ gridColumn: { xs: 2, md: 3 }, gridRow: 1, justifySelf: 'end', flexShrink: 0, alignItems: 'center' }}>
             {!isDashboard && <Tooltip title="Back"><IconButton color="primary" onClick={() => router.push(backHref)} aria-label="Back"><ArrowBackIcon /></IconButton></Tooltip>}
-            <PortalChatbot />
+            <PortalChatbot userRole={role} />
             <NotificationsMenu />
             {role && role !== 'employee' && role !== 'employee-department' && !isSettingsPage && <Tooltip title="Settings"><IconButton color="primary" onClick={() => router.push(settingsHref)} aria-label="Settings"><SettingsIcon /></IconButton></Tooltip>}
             <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}><IconButton color="primary" onClick={handleFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>{isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}</IconButton></Tooltip>
