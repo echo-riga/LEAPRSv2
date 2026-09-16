@@ -308,11 +308,13 @@ export default function PortalPage() {
           />
         ) : field.type === 'file' ? (
           <Stack spacing={1}>
-            <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
-              {field.name}
-              {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
-              <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
-            </Button>
+            {isAdmin && (
+              <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
+                {field.name}
+                {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
+                <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
+              </Button>
+            )}
             {getAttachments(fieldValue).map((file) => (
               <Stack
                 key={file.id}
@@ -349,14 +351,16 @@ export default function PortalPage() {
                 >
                   {file.name}
                 </Button>
-                <IconButton
-                  size="small"
-                  onClick={() => removeExistingAttachment(field, file.id)}
-                  aria-label={`Remove ${file.name}`}
-                  sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
-                >
-                  <CloseIcon sx={{ fontSize: 16 }} />
-                </IconButton>
+                {isAdmin && (
+                  <IconButton
+                    size="small"
+                    onClick={() => removeExistingAttachment(field, file.id)}
+                    aria-label={`Remove ${file.name}`}
+                    sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                  >
+                    <CloseIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                )}
               </Stack>
             ))}
             {(pendingFiles[storageKey] || []).length > 0 && (

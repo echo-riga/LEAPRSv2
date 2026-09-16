@@ -470,10 +470,12 @@ export default function Home() {
       >
         {/* Upper Brand Section */}
         <Box sx={{ position: 'relative', zIndex: 2 }}>
-          <Typography variant="h3" sx={{ fontWeight: '900', letterSpacing: '-1px' }}>
-            LEAPRS
+          <Typography variant="h4" sx={{ fontWeight: '900', letterSpacing: '-0.5px', lineHeight: 1.25, maxWidth: 680 }}>
+            Lifelong Education Advancement
+            <br />
+            Program Requisition System
           </Typography>
-          <Typography variant="subtitle1" sx={{ opacity: 0.9, fontWeight: '500' }}>
+          <Typography variant="subtitle1" sx={{ opacity: 0.9, fontWeight: '500', mt: 1 }}>
             Request for Training
           </Typography>
         </Box>
@@ -519,10 +521,12 @@ export default function Home() {
         <Box sx={{ width: '100%', maxWidth: '340px', mx: 'auto' }}>
           {/* Header Mobile Brand */}
           <Box sx={{ display: { xs: 'block', md: 'none' }, mb: 4, textAlign: 'center' }}>
-            <Typography variant="h4" color="primary" sx={{ fontWeight: '900' }}>
-              LEAPRS
+            <Typography variant="h6" color="primary" sx={{ fontWeight: '900', lineHeight: 1.3 }}>
+              Lifelong Education Advancement
+              <br />
+              Program Requisition System
             </Typography>
-            <Typography variant="subtitle2" color="text.secondary">
+            <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 0.5 }}>
               Request for Training
             </Typography>
           </Box>

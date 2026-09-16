@@ -374,6 +374,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const renderDynamicField = (field: DynamicField) => {
     const storageKey = dynamicFieldStorageKey(field);
     const fieldValue = getDynamicFieldValue(form.additionalInfo, field);
+    const canEdit = !editing || role === 'admin' || role === 'employee-department' || (role === 'employee' && editing.userId === session.data?.user?.id);
     return <Grid
       key={field.id}
       size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
@@ -440,11 +441,13 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
         />
       ) : field.type === 'file' ? (
         <Stack spacing={1}>
-          <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
-            {field.name}
-            {field.isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
-            <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
-          </Button>
+          {canEdit && (
+            <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
+              {field.name}
+              {field.isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
+              <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
+            </Button>
+          )}
           {getAttachments(fieldValue).map((file) => (
               <Stack
                 key={file.id}
@@ -481,14 +484,16 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 >
                   {file.name}
                 </Button>
-                <IconButton
-                  size="small"
-                  onClick={() => removeExistingAttachment(field, file.id)}
-                  aria-label={`Remove ${file.name}`}
-                  sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
-                >
-                  <CloseIcon sx={{ fontSize: 16 }} />
-                </IconButton>
+                {canEdit && (
+                  <IconButton
+                    size="small"
+                    onClick={() => removeExistingAttachment(field, file.id)}
+                    aria-label={`Remove ${file.name}`}
+                    sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                  >
+                    <CloseIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                )}
               </Stack>
             ))}
           {(pendingFiles[storageKey] || []).length > 0 && (
