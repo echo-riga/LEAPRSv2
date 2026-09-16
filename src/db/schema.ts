@@ -26,6 +26,21 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// OAuth grants for remote MCP clients. Only hashes of bearer credentials are stored.
+export const mcpOAuthGrants = pgTable('mcp_oauth_grants', {
+  tokenHash: text('token_hash').primaryKey(),
+  kind: varchar('kind', { length: 16 }).notNull(),
+  userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  userName: text('user_name').notNull(),
+  userEmail: text('user_email'),
+  clientId: text('client_id').notNull(),
+  redirectUri: text('redirect_uri'),
+  codeChallenge: text('code_challenge'),
+  resource: text('resource').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [index('mcp_oauth_grants_user_idx').on(table.userId)]);
+
 export const systemSettings = pgTable('system_settings', {
   key: varchar('key', { length: 100 }).primaryKey(),
   enabled: boolean('enabled').default(false).notNull(),

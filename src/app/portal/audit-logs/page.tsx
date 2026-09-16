@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Card, Chip, Container, FormControl, InputAdornment, InputLabel, MenuItem,
+  Box, Card, Container, FormControl, InputAdornment, InputLabel, MenuItem,
   Pagination, Select, Stack, TextField, Typography,
 } from '@mui/material';
 import {
@@ -16,7 +16,6 @@ import {
 } from '@mui/icons-material';
 import { getAuditLogs, type AuditLogItem } from '@/app/actions';
 import { AuditLogsSkeleton } from '@/components/Skeletons';
-import { roleLabel } from '@/lib/role-options';
 
 const PAGE_SIZE = 12;
 
@@ -35,50 +34,64 @@ function getDetails(details: unknown): Record<string, unknown> {
   return details && typeof details === 'object' && !Array.isArray(details) ? details as Record<string, unknown> : {};
 }
 
-function formatCurrency(value: unknown) {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(amount) : null;
+function isInternalId(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
-function requestLabel(details: Record<string, unknown>, fallback: string) {
-  return typeof details.requestId === 'number' ? `Request #${details.requestId}` : fallback;
+function recordLabel(log: AuditLogItem, details: Record<string, unknown>) {
+  if (log.entityType === 'user') {
+    const name = log.entityLabel.trim();
+    if (name && !isInternalId(name)) return name;
+    if (typeof details.email === 'string' && details.email.trim()) return details.email;
+    if (details.source === 'self_registration') return log.actorName;
+    return 'user account';
+  }
+  if (log.entityType === 'capdev') return 'CapDev project';
+  if (log.entityType === 'request') return log.entityLabel || 'request';
+  if (log.entityType === 'status_update') {
+    return typeof details.requestId === 'number' ? `Request #${details.requestId}` : 'a request';
+  }
+  return log.entityLabel;
 }
 
 function activityText(log: AuditLogItem) {
   const details = getDetails(log.details);
-  const label = log.entityLabel;
+  const label = recordLabel(log, details);
   const action = actionLabels[log.action] || log.action;
 
   if (log.entityType === 'status_update') {
-    const status = typeof details.statusMark === 'string' ? details.statusMark : null;
-    return `${action === 'Created' ? 'Added' : action} ${status ? `a ${status} ` : 'a '}update to ${requestLabel(details, label)}`;
+    return `${action === 'Created' ? 'Added' : action} a status update to ${label}`;
   }
   if (log.entityType === 'request' && log.action === 'status_changed') {
-    return `${String(details.status || 'updated').replace(/^./, (letter) => letter.toUpperCase())} ${label}`;
+    const status = typeof details.status === 'string' ? details.status.replace(/_/g, ' ') : 'updated';
+    return `Marked ${label} ${status}`;
   }
   if (log.entityType === 'request' && log.action === 'stopped') return `Stopped progress on ${label}`;
-  if (log.entityType === 'request' && log.action === 'resumed') return `Resumed ${label}`;
-  if (log.entityType === 'capdev_field' || log.entityType === 'request_field') {
-    return `${action} ${label}`;
+  if (log.entityType === 'request' && log.action === 'resumed') return `Resumed progress on ${label}`;
+  if (log.entityType === 'system_setting' && typeof details.enabled === 'boolean') {
+    return `${details.enabled ? 'Enabled' : 'Disabled'} maintenance mode`;
+  }
+  if (log.entityType === 'capdev') return `${action} ${label}`;
+  if (log.entityType === 'user') {
+    if (details.source === 'role_approval') {
+      return `${details.decision === 'accepted' ? 'Approved' : 'Declined'} role request for ${label}`;
+    }
+    return label === 'user account' ? `${action} a user account` : `${action} user account for ${label}`;
   }
   return `${action} ${label}`;
 }
 
-function activityMetadata(log: AuditLogItem) {
+function activityDetail(log: AuditLogItem) {
   const details = getDetails(log.details);
-  const metadata: { label: string; color?: 'default' | 'primary' | 'success' | 'warning' | 'error' }[] = [];
-  if (typeof details.capdevAipCode === 'string') metadata.push({ label: `AIP Code: ${details.capdevAipCode}`, color: 'primary' });
-  if (typeof details.statusMark === 'string') {
-    const mark = details.statusMark;
-    metadata.push({ label: mark.charAt(0).toUpperCase() + mark.slice(1), color: mark === 'denied' ? 'error' : mark === 'pending' ? 'warning' : 'success' });
+  if (log.entityType === 'capdev') return `AIP code: ${log.entityLabel}`;
+  if (log.action === 'stopped' && typeof details.reason === 'string') return `Reason: ${details.reason}`;
+  if (log.entityType === 'status_update' && typeof details.statusMark === 'string') {
+    return `Status: ${details.statusMark.replace(/_/g, ' ')}`;
   }
-  const amount = details.deductedAmount ?? details.requestedBudget ?? details.initialBudget;
-  const formattedAmount = formatCurrency(amount);
-  if (formattedAmount) metadata.push({ label: details.deductedAmount ? `${formattedAmount} deducted` : formattedAmount, color: 'success' });
-  if (typeof details.department === 'string') metadata.push({ label: details.department });
-  if (typeof details.role === 'string') metadata.push({ label: roleLabel(details.role) });
-  if (typeof details.reason === 'string') metadata.push({ label: `Reason: ${details.reason}` });
-  return metadata;
+  if ((log.entityType === 'request' || log.entityType === 'status_update') && typeof details.capdevAipCode === 'string') {
+    return `CapDev AIP code: ${details.capdevAipCode}`;
+  }
+  return null;
 }
 
 function activityIcon(entityType: string) {
@@ -149,8 +162,8 @@ export default function AuditLogsPage() {
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>{log.actorName}</Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>{formatDate(log.createdAt)}</Typography>
                 </Stack>
-                <Typography sx={{ fontWeight: 600, color: 'text.primary', mt: 0.25 }}>{activityText(log)}</Typography>
-                {activityMetadata(log).length > 0 && <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: 'wrap', rowGap: 0.75 }}>{activityMetadata(log).map((item) => <Chip key={item.label} label={item.label} size="small" color={item.color} variant="outlined" sx={{ fontWeight: 600 }} />)}</Stack>}
+                <Typography sx={{ fontWeight: 600, color: 'text.primary', mt: 0.25, overflowWrap: 'anywhere' }}>{activityText(log)}</Typography>
+                {activityDetail(log) && <Typography variant="body2" color="text.secondary" title={activityDetail(log) || undefined} sx={{ mt: 0.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activityDetail(log)}</Typography>}
               </Box>
             </Stack>
           </Box>

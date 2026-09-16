@@ -177,7 +177,8 @@ export default function Home() {
             return;
           }
           if (isMounted) {
-            router.replace('/portal');
+            const next = new URLSearchParams(window.location.search).get('next');
+            router.replace(next?.startsWith('/api/mcp/oauth/authorize?') ? next : '/portal');
           }
         } catch (error) {
           console.error('Failed to get/create user role:', error);
