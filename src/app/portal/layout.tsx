@@ -27,6 +27,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
   const [greeting, setGreeting] = useState(getGreeting);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [role, setRole] = useState<AppRole | null>(null);
+  const [department, setDepartment] = useState<string | null>(null);
 
   useEffect(() => {
     const interval = window.setInterval(() => setGreeting(getGreeting()), 60_000);
@@ -42,6 +43,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
     void getCurrentUserAccess().then(async (access) => {
       if (access.success) {
         setRole(access.role);
+        setDepartment(access.department || null);
         return;
       }
       await authClient.signOut();
@@ -105,9 +107,31 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
     <Box sx={{ minHeight: '100vh', bgcolor: '#fafcfa' }}>
       <AppBar position="fixed" color="inherit" elevation={0} sx={{ bgcolor: '#fafcfa', borderBottom: '1px solid rgba(28, 40, 28, 0.12)' }}>
         <Toolbar sx={{ minHeight: { xs: 64, md: 72 }, px: { xs: 2, md: 3 }, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr) auto', md: 'minmax(180px, 1fr) auto minmax(180px, 1fr)' }, alignItems: 'center', columnGap: 1.5, position: 'relative' }}>
-          <Stack direction="row" spacing={1.5} sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, alignItems: 'center' }}>
+          <Stack direction="row" spacing={1} sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, alignItems: 'center' }}>
             <Typography variant="h6" noWrap sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 700, color: 'text.primary' }}>{greeting}, {userName}</Typography>
             <Chip label={roleLabel} size="small" color="primary" sx={{ flexShrink: 0, fontWeight: 700, height: 24, borderRadius: '6px' }} />
+            {department && department !== 'None' && (
+              <Chip
+                label={department}
+                size="small"
+                variant="outlined"
+                sx={{
+                  flexShrink: 0,
+                  fontWeight: 600,
+                  height: 24,
+                  borderRadius: '6px',
+                  bgcolor: 'rgba(46, 125, 50, 0.05)',
+                  borderColor: 'rgba(46, 125, 50, 0.3)',
+                  color: 'primary.dark',
+                  maxWidth: { xs: 130, sm: 220, md: 'none' },
+                  '& .MuiChip-label': {
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  },
+                }}
+              />
+            )}
           </Stack>
           <Stack direction="row" spacing={0.75} sx={{ gridColumn: { xs: 2, md: 3 }, gridRow: 1, justifySelf: 'end', flexShrink: 0, alignItems: 'center' }}>
             {!isDashboard && <Tooltip title="Back"><IconButton color="primary" onClick={() => router.push(backHref)} aria-label="Back"><ArrowBackIcon /></IconButton></Tooltip>}
