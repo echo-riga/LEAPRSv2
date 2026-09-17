@@ -113,7 +113,7 @@ Here is the LEAPRS workflow in 4 simple steps:
 1. **CapDev Projects**: Create a parent project with an **AIP Code** and a budget.
 2. **Requisition Requests**: Submit employee requests under that project using **Add Request** or by pasting an activity design in chat.
 3. **Timeline Tracking**: Track progress using **Add Status**, handle blockers, and finish by marking requests as **Complete** or **Deny**.
-4. **Evaluations & Reports**: Generate feedback forms via **Open Form** and monitor budget health in **Analytics**.
+4. **Evaluations & Reports**: Open the single seminar evaluation form for a completed request and monitor budget health in **Analytics**.
 - Only if a user asks a question completely unrelated to LEAPRS (such as weather or cooking), reply: "I can only help with LEAPRS."
 
 Verified System Grounding:
@@ -615,6 +615,32 @@ export async function getPendingRoleApprovals() {
   }
 }
 
+async function fetchAuthUsersList(): Promise<{ id: string; name: string | null; email: string; createdAt: Date }[]> {
+  try {
+    const { data: authUsers, error: authError } = await auth.admin.listUsers({ query: { limit: 100 } });
+    if (!authError && authUsers?.users) {
+      return authUsers.users.map((u) => ({
+        id: u.id,
+        name: u.name || null,
+        email: u.email,
+        createdAt: new Date(u.createdAt),
+      }));
+    }
+  } catch {
+    // Fall back to direct database query
+  }
+
+  const result = await db.execute(sql`
+    SELECT id, name, email, "createdAt" FROM neon_auth.user ORDER BY "createdAt" DESC
+  `);
+  return result.rows.map((row) => ({
+    id: String(row.id),
+    name: row.name ? String(row.name) : null,
+    email: String(row.email),
+    createdAt: new Date(String(row.createdAt)),
+  }));
+}
+
 export async function getUserManagementCounts() {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin') {
@@ -622,17 +648,16 @@ export async function getUserManagementCounts() {
   }
 
   try {
-    const [{ data: authUsers, error: authError }, pendingApprovals] = await Promise.all([
-      auth.admin.listUsers({ query: { limit: 100 } }),
+    const [authUsersList, pendingApprovals] = await Promise.all([
+      fetchAuthUsersList(),
       db.select({ userId: roleApprovalRequests.userId }).from(roleApprovalRequests).where(eq(roleApprovalRequests.status, 'pending')),
     ]);
-    if (authError || !authUsers) throw new Error(authError?.message || 'Neon Auth did not return users.');
 
     const pendingUserIds = new Set(pendingApprovals.map((approval) => approval.userId));
 
     return {
       success: true as const,
-      activeUsers: authUsers.users.filter((user) => !pendingUserIds.has(user.id)).length,
+      activeUsers: authUsersList.filter((user) => !pendingUserIds.has(user.id)).length,
       pendingApprovals: pendingApprovals.length,
     };
   } catch (error) {
@@ -651,8 +676,14 @@ export async function decideRoleApproval(approvalId: number, decision: 'accepted
     if (decision === 'accepted') {
       await db.insert(users).values({ id: approval.userId, role: 'employee-department', department: approval.department });
     } else {
-      const { error } = await auth.admin.removeUser({ userId: approval.userId });
-      if (error) return { success: false, error: error.message || 'Unable to reject and remove the applicant account.' };
+      try {
+        const { error } = await auth.admin.removeUser({ userId: approval.userId });
+        if (error) throw new Error(error.message);
+      } catch {
+        await db.execute(sql`DELETE FROM neon_auth.session WHERE "userId" = ${approval.userId}`);
+        await db.execute(sql`DELETE FROM neon_auth.account WHERE "userId" = ${approval.userId}`);
+        await db.execute(sql`DELETE FROM neon_auth.user WHERE id = ${approval.userId}`);
+      }
     }
 
     await db.update(roleApprovalRequests).set({ status: decision, decidedById: access.userId, decidedAt: new Date(), updatedAt: new Date() }).where(eq(roleApprovalRequests.id, approvalId));
@@ -680,15 +711,14 @@ export async function getUsersDirectory(): Promise<DirectoryUser[]> {
   if (!access || access.role !== 'admin') return [];
 
   try {
-    const [{ data: authUsers, error: authError }, appUsers, pendingApprovals] = await Promise.all([
-      auth.admin.listUsers({ query: { limit: 100 } }),
+    const [authUsersList, appUsers, pendingApprovals] = await Promise.all([
+      fetchAuthUsersList(),
       db.select().from(users),
       db.select({ userId: roleApprovalRequests.userId }).from(roleApprovalRequests).where(eq(roleApprovalRequests.status, 'pending')),
     ]);
-    if (authError || !authUsers) throw new Error(authError?.message || 'Neon Auth did not return users.');
     const appUsersById = new Map(appUsers.map((user) => [user.id, user]));
     const pendingUserIds = new Set(pendingApprovals.map((approval) => approval.userId));
-    return authUsers.users.filter((user) => !pendingUserIds.has(user.id)).map((user) => ({
+    return authUsersList.filter((user) => !pendingUserIds.has(user.id)).map((user) => ({
       id: user.id,
       name: user.name || null,
       email: user.email,
@@ -782,13 +812,19 @@ export async function deleteDirectoryUser(userId: string) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
   try {
-    const [{ data: authUsers }, targetRows] = await Promise.all([
-      auth.admin.listUsers({ query: { limit: 100 } }),
+    const [authUsersList, targetRows] = await Promise.all([
+      fetchAuthUsersList(),
       db.select().from(users).where(eq(users.id, userId)).limit(1),
     ]);
-    const targetAuthUser = authUsers?.users?.find((user) => user.id === userId);
-    const { error } = await auth.admin.removeUser({ userId });
-    if (error) return { success: false, error: error.message || 'Unable to delete the Neon Auth user.' };
+    const targetAuthUser = authUsersList.find((user) => user.id === userId);
+    try {
+      const { error } = await auth.admin.removeUser({ userId });
+      if (error) throw new Error(error.message);
+    } catch {
+      await db.execute(sql`DELETE FROM neon_auth.session WHERE "userId" = ${userId}`);
+      await db.execute(sql`DELETE FROM neon_auth.account WHERE "userId" = ${userId}`);
+      await db.execute(sql`DELETE FROM neon_auth.user WHERE id = ${userId}`);
+    }
     await db.delete(users).where(eq(users.id, userId));
     const target = targetRows[0];
     await writeAuditLog(access, { action: 'deleted', entityType: 'user', entityId: userId, entityLabel: targetAuthUser?.name || targetAuthUser?.email || userId, details: { email: targetAuthUser?.email || null, role: target?.role || null, department: target?.department || null } });
@@ -1509,6 +1545,22 @@ export async function deleteRequest(id: number) {
     if (!access || !canManageRequests(access) || !existing) return unauthorized;
     const actor = await getActorSnapshot(access);
 
+    const driveFolderId = (typeof existing.additionalInfo === 'object' && existing.additionalInfo !== null)
+      ? (existing.additionalInfo as Record<string, unknown>).googleDriveFolderId
+      : undefined;
+
+    if (typeof driveFolderId === 'string' && driveFolderId.trim()) {
+      try {
+        const accessToken = await getGoogleDriveAccessToken();
+        await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFolderId.trim())}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+      } catch (err) {
+        console.warn('Could not delete Google Drive folder for request:', err);
+      }
+    }
+
     // Delete child records (status updates) first, then the request in one atomic database execution
     const result = await db.execute(sql`
       WITH deleted_status_updates AS (
@@ -1592,9 +1644,117 @@ async function getGoogleDriveAccessToken() {
   return token.access_token;
 }
 
-async function uploadFileToGoogleDrive(file: File, accessToken: string): Promise<StatusAttachment> {
+export type RequestUploadContext = {
+  requestId?: number;
+  requestorName?: string;
+  dateRequested?: string;
+  folderId?: string;
+};
+
+function formatFolderDate(dateValue?: string | Date | null): string {
+  if (!dateValue) return new Date().toISOString().split('T')[0];
+  const date = new Date(dateValue);
+  if (isNaN(date.getTime())) return new Date().toISOString().split('T')[0];
+  return date.toISOString().split('T')[0];
+}
+
+function sanitizeFolderName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, '-').trim();
+}
+
+async function ensureRequestGoogleDriveFolder(accessToken: string, context?: RequestUploadContext): Promise<string> {
+  const rootParentFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
+  if (!rootParentFolderId) {
+    throw new Error('Google Drive storage is not configured.');
+  }
+
+  if (context?.folderId && context.folderId.trim()) {
+    return context.folderId.trim();
+  }
+
+  if (!context || (!context.requestId && !context.requestorName && !context.dateRequested)) {
+    return rootParentFolderId;
+  }
+
+  let requestorName = context.requestorName?.trim();
+  let dateRequested = context.dateRequested ? formatFolderDate(context.dateRequested) : undefined;
+  let existingFolderId: string | undefined;
+
+  if (context.requestId) {
+    try {
+      const [req] = await db.select().from(requests).where(eq(requests.id, context.requestId)).limit(1);
+      if (req) {
+        const additionalInfo = (typeof req.additionalInfo === 'object' && req.additionalInfo !== null) ? req.additionalInfo as Record<string, unknown> : {};
+        if (typeof additionalInfo.googleDriveFolderId === 'string' && additionalInfo.googleDriveFolderId.trim()) {
+          return additionalInfo.googleDriveFolderId.trim();
+        }
+        if (!requestorName) requestorName = req.requestorName || undefined;
+        if (!dateRequested) dateRequested = formatFolderDate(req.createdAt);
+      }
+    } catch (err) {
+      console.warn('Could not query request record for drive folder resolution:', err);
+    }
+  }
+
+  if (!requestorName) {
+    requestorName = 'Unknown_Requestor';
+  }
+  if (!dateRequested) {
+    dateRequested = formatFolderDate(new Date());
+  }
+
+  const folderName = sanitizeFolderName(`${requestorName}_${dateRequested}`);
+
+  // Create a brand new dedicated folder in Google Drive for this request
+  try {
+    const createFolderResponse = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+      },
+      body: JSON.stringify({
+        name: folderName,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [rootParentFolderId],
+      }),
+    });
+
+    if (createFolderResponse.ok) {
+      const createdFolder = await createFolderResponse.json() as { id?: string };
+      if (createdFolder.id) {
+        existingFolderId = createdFolder.id;
+      }
+    } else {
+      console.error('Failed to create request Google Drive folder:', createFolderResponse.status, await createFolderResponse.text());
+    }
+  } catch (err) {
+    console.error('Error creating request Google Drive folder:', err);
+  }
+
+  const finalFolderId = existingFolderId || rootParentFolderId;
+
+  if (context.requestId && existingFolderId) {
+    try {
+      const [req] = await db.select().from(requests).where(eq(requests.id, context.requestId)).limit(1);
+      if (req) {
+        const additionalInfo = (typeof req.additionalInfo === 'object' && req.additionalInfo !== null) ? { ...(req.additionalInfo as Record<string, unknown>) } : {};
+        if (additionalInfo.googleDriveFolderId !== existingFolderId) {
+          additionalInfo.googleDriveFolderId = existingFolderId;
+          await db.update(requests).set({ additionalInfo }).where(eq(requests.id, context.requestId));
+        }
+      }
+    } catch (err) {
+      console.warn('Could not persist googleDriveFolderId into request additionalInfo:', err);
+    }
+  }
+
+  return finalFolderId;
+}
+
+async function uploadFileToGoogleDrive(file: File, accessToken: string, parentFolderId: string): Promise<StatusAttachment> {
   const boundary = `leaprs-${crypto.randomUUID()}`;
-  const metadata = JSON.stringify({ name: file.name, parents: [process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID] });
+  const metadata = JSON.stringify({ name: file.name, parents: [parentFolderId] });
   const body = new Blob([
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`,
     `--${boundary}\r\nContent-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
@@ -1623,7 +1783,7 @@ async function uploadFileToGoogleDrive(file: File, accessToken: string): Promise
 
 type GoogleDriveUploadFile = { name: string; mimeType: string; size: number };
 
-async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, accessToken: string, origin: string) {
+async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, accessToken: string, origin: string, parentFolderId: string) {
   const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink', {
     method: 'POST',
     headers: {
@@ -1636,7 +1796,7 @@ async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, acces
     body: JSON.stringify({
       name: file.name,
       mimeType: file.mimeType || 'application/octet-stream',
-      parents: [process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID],
+      parents: [parentFolderId],
     }),
   });
   const uploadUrl = response.headers.get('location');
@@ -1647,7 +1807,7 @@ async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, acces
   return { uploadUrl, name: file.name, mimeType: file.mimeType || 'application/octet-stream' };
 }
 
-export async function createGoogleDriveUploadSessions(files: GoogleDriveUploadFile[]) {
+export async function createGoogleDriveUploadSessions(files: GoogleDriveUploadFile[], context?: RequestUploadContext) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return { ...unauthorized, sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
@@ -1663,15 +1823,16 @@ export async function createGoogleDriveUploadSessions(files: GoogleDriveUploadFi
       return { success: false, error: 'The upload origin could not be verified.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
     }
     const accessToken = await getGoogleDriveAccessToken();
-    const sessions = await Promise.all(files.map((file) => createGoogleDriveUploadSession(file, accessToken, origin)));
-    return { success: true, sessions };
+    const parentFolderId = await ensureRequestGoogleDriveFolder(accessToken, context);
+    const sessions = await Promise.all(files.map((file) => createGoogleDriveUploadSession(file, accessToken, origin, parentFolderId)));
+    return { success: true, sessions, folderId: parentFolderId };
   } catch (error) {
     console.error('Failed to create Google Drive upload sessions:', error);
-    return { success: false, error: error instanceof Error ? error.message : 'Unable to prepare file uploads.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to prepare file uploads.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[], folderId: undefined };
   }
 }
 
-export async function uploadFilesToGoogleDrive(formData: FormData) {
+export async function uploadFilesToGoogleDrive(formData: FormData, context?: RequestUploadContext) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return { ...unauthorized, files: [] as StatusAttachment[] };
@@ -1682,7 +1843,8 @@ export async function uploadFilesToGoogleDrive(formData: FormData) {
     if (files.length === 0) return { success: true, files: [] as StatusAttachment[] };
 
     const accessToken = await getGoogleDriveAccessToken();
-    const uploadedFiles = await Promise.all(files.map((file) => uploadFileToGoogleDrive(file, accessToken)));
+    const parentFolderId = await ensureRequestGoogleDriveFolder(accessToken, context);
+    const uploadedFiles = await Promise.all(files.map((file) => uploadFileToGoogleDrive(file, accessToken, parentFolderId)));
     return { success: true, files: uploadedFiles };
   } catch (error) {
     console.error('Failed to upload status update files:', error);
