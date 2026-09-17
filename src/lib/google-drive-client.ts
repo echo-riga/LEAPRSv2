@@ -1,10 +1,13 @@
 'use client';
 
-import { createGoogleDriveUploadSessions, type StatusAttachment } from '@/app/actions';
+import { createGoogleDriveUploadSessions, type StatusAttachment, type RequestUploadContext } from '@/app/actions';
 
-export async function uploadFilesDirectlyToGoogleDrive(files: File[]) {
+export async function uploadFilesDirectlyToGoogleDrive(files: File[], context?: RequestUploadContext) {
   try {
-    const prepared = await createGoogleDriveUploadSessions(files.map((file) => ({ name: file.name, mimeType: file.type, size: file.size })));
+    const prepared = await createGoogleDriveUploadSessions(
+      files.map((file) => ({ name: file.name, mimeType: file.type, size: file.size })),
+      context
+    );
     if (!prepared.success) return { success: false as const, error: prepared.error || 'Unable to prepare file uploads.', files: [] as StatusAttachment[] };
 
     const uploadedFiles = await Promise.all(prepared.sessions.map(async (session, index) => {
@@ -24,9 +27,9 @@ export async function uploadFilesDirectlyToGoogleDrive(files: File[]) {
         url: uploaded.webViewLink || `https://drive.google.com/open?id=${uploaded.id}`,
       };
     }));
-    return { success: true as const, files: uploadedFiles };
+    return { success: true as const, files: uploadedFiles, folderId: prepared.folderId };
   } catch (error) {
     console.error('Direct Google Drive upload failed:', error);
-    return { success: false as const, error: error instanceof Error ? error.message : 'File upload failed.', files: [] as StatusAttachment[] };
+    return { success: false as const, error: error instanceof Error ? error.message : 'File upload failed.', files: [] as StatusAttachment[], folderId: undefined };
   }
 }

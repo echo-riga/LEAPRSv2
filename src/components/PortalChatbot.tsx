@@ -39,6 +39,7 @@ import {
   getCurrentUserAccess,
 } from '@/app/actions';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
+import { authClient } from '@/lib/auth/client';
 import DateField from '@/components/DateField';
 import DynamicTableField from '@/components/DynamicTableField';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
@@ -524,6 +525,7 @@ interface PortalChatbotProps {
 }
 
 export default function PortalChatbot({ userRole }: PortalChatbotProps) {
+  const session = authClient.useSession();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [message, setMessage] = useState('');
   const [currentRole, setCurrentRole] = useState<string | null>(userRole || null);
@@ -687,7 +689,10 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
 
         let attachment: StatusAttachment | undefined;
         try {
-          const uploadResult = await uploadFilesDirectlyToGoogleDrive([primaryFile]);
+          const uploadResult = await uploadFilesDirectlyToGoogleDrive([primaryFile], {
+            requestorName: session.data?.user?.name || undefined,
+            dateRequested: new Date().toISOString().split('T')[0],
+          });
           if (uploadResult.success && uploadResult.files.length > 0) {
             attachment = uploadResult.files[0];
           }

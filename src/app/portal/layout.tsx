@@ -95,8 +95,8 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
         : '/portal';
   const settingsHref = `/portal/settings?from=${encodeURIComponent(pathname)}`;
   const isDashboard = pathname === '/portal';
-  const roleLabel = !role || role.toLowerCase() === 'unassigned'
-    ? null
+  const roleLabel = !role
+    ? '...'
     : role === 'viewer-full'
     ? 'Viewer (All)'
     : role === 'employee-department'
@@ -109,8 +109,8 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
         <Toolbar sx={{ minHeight: { xs: 64, md: 72 }, px: { xs: 2, md: 3 }, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr) auto', md: 'minmax(180px, 1fr) auto minmax(180px, 1fr)' }, alignItems: 'center', columnGap: 1.5, position: 'relative' }}>
           <Stack direction="row" spacing={1} sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, alignItems: 'center' }}>
             <Typography variant="h6" noWrap sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 700, color: 'text.primary' }}>{greeting}, {userName}</Typography>
-            {roleLabel && <Chip label={roleLabel} size="small" color="primary" sx={{ flexShrink: 0, fontWeight: 700, height: 24, borderRadius: '6px' }} />}
-            {department && department !== 'None' && (
+            <Chip label={roleLabel} size="small" color="primary" sx={{ flexShrink: 0, fontWeight: 700, height: 24, borderRadius: '6px' }} />
+            {department && department !== 'None' && department.trim().toLowerCase() !== 'unassigned' && (
               <Chip
                 label={department}
                 size="small"

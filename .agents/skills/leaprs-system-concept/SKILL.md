@@ -2,18 +2,19 @@
 name: leaprs-system-concept
 description: >-
   Use when changing LEAPRS workflows, permissions, entities, notifications, file
-  uploads, authentication rules, or dynamic form behavior.
+  uploads, authentication rules, dynamic forms, AI-assisted request intake, or reporting.
 ---
 
 # LEAPRS System Concept & Core Workflow
 
 This document explains the conceptual architecture and functional flows of the **Lifelong Education Advancement Program Requisition System (LEAPRS)**.
+It describes the current implementation; distinguish live features from sample or placeholder data when using it as a system reference.
 
 ---
 
 ## 1. System Overview
 
-LEAPRS is designed to manage capacity/capital development projects (CapDev), employee requests (requisitions) associated with those projects, and status timelines of individual requests.
+LEAPRS is designed to manage Capacity Development projects (CapDev), employee requests (requisitions) associated with those projects, and status timelines of individual requests.
 
 ```mermaid
 graph TD
@@ -28,17 +29,18 @@ graph TD
 
 ## 2. Core Entities
 
-### A. CapDev (Capital/Capacity Development)
+### A. CapDev (Capacity Development)
 A CapDev is a parent project or educational program.
 * **Fixed Fields (In Codebase)**:
   * `AIP Code` (Unique project code)
   * **UI Identifier**: Always display and reference a CapDev by its `AIP Code`; never expose the internal database ID as the CapDev identifier in user-facing UI, audit history, notifications, or reports.
+  * `Description` (Project description)
   * `Initial Budget` (Original project fund)
   * `Remaining Budget` (Available project fund after deductions)
   * `Department` (Owner department)
-  * Fixed fields remain interactive in the form preview, but their layout is not configurable: they cannot be edited, deleted, or dragged.
+  * Fixed fields shown in the form preview remain interactive, but their layout is not configurable: they cannot be edited, deleted, or dragged.
 * **Dynamic Fields (Configurable by Admin)**:
-  * Custom description, tags, target audience, etc.
+  * Custom tags, target audience, and other configured information.
   * Stored in `additional_info` JSONB column.
   * Fields configured in the `required` section are displayed with the fixed Required Information fields and must be completed before a project can be created or updated. Other configured fields are grouped under the exact section names configured by the admin; do not collapse them into a generic additional-information section.
   * Dynamic fields remain fully configurable—including edit, delete, and drag-and-drop—regardless of whether they are placed in the `required` section or any other section.
@@ -47,8 +49,9 @@ A CapDev is a parent project or educational program.
 Requisitions filed by employees against a specific CapDev.
 * **Fixed Fields (In Codebase)**:
   * `Setting` (Internal or External)
+  * `Description` (Request title or activity description)
   * `Requested Budget` (Cost estimation)
-  * Fixed fields remain interactive in the form preview, but their layout is not configurable: they cannot be edited, deleted, or dragged.
+  * Fixed fields shown in the form preview remain interactive, but their layout is not configurable: they cannot be edited, deleted, or dragged.
 * **Dynamic Fields (Configurable by Admin)**:
   * Attendance sheets (file type), feedback links, etc.
   * Stored in `additional_info` JSONB column.
@@ -59,8 +62,8 @@ Chronological logs track request progression. Status updates are **fixed** (not 
 * Status update text
 * Remarks
 * Multi-file uploads (via Google Drive integration)
-* `status_mark` (required enum: `pending`, `completed`, `denied`). Setting a status mark on an individual status update indicates the status of that specific step and does *not* prematurely close or deny the entire request timeline.
-* `mark_as_complete` (boolean)
+* `status_mark` (`pending`, `completed`, or `denied`) is required by the ordinary **Add Status** form. The database column is nullable because special timeline entries, such as stoppers and resume logs, do not use an ordinary status mark. A mark describes that step and does not by itself close or deny the request.
+* `mark_as_complete` (legacy boolean column; the current Add Status form does not expose it or set it)
 * `subtracts_requested_amount` (boolean with configurable deduction amount modal)
 
 ---
@@ -68,24 +71,24 @@ Chronological logs track request progression. Status updates are **fixed** (not 
 ## 3. Key Business Constraints & Logic
 
 ### A. One-Time Timeline Flags
-* **Timeline Completion**: Once a status update has `mark_as_complete = true` or the request is concluded as Completed via timeline resolution, the request is finished. No further updates are permitted.
+* **Request Completion**: The current UI concludes a request through the explicit **Complete** or **Deny** resolution action, which updates the request's overall status. Ordinary status marks do not conclude it. Once concluded, the server blocks further ordinary status updates. The `mark_as_complete` status-update column is retained for legacy records but is not the current completion control.
 * **Budget Deduction**: Once a status update has `subtracts_requested_amount = true`, the deduction modal opens allowing the user to review/edit the amount deducted before it is subtracted from the parent CapDev's balance. Only one status update per request can trigger this deduction.
 * **Budget Availability**: A request's requested budget cannot exceed its parent CapDev's remaining budget. The same check is enforced again when a deduction status update is saved.
 * **Budget History**: A CapDev stores its initial and remaining budgets. Its details view lists every deducted request amount and the status-update author.
-* *Enforcement*: Enforced via PostgreSQL partial unique indexes to block concurrency race conditions.
+* **Enforcement**: PostgreSQL partial unique indexes prevent duplicate `subtracts_requested_amount` status updates and duplicate legacy `mark_as_complete` status updates. The current explicit Complete/Deny path updates the request's overall status; it is not enforced by the legacy completion index.
 
 ### B. File Uploads (Google Drive)
 Google Drive is the sole durable file store; Vercel and the database do not store attachment bytes.
-* **Folder Naming Structure**: `[Username] - [Date Submitted] - [Request Name]`
+* **Folder Placement**: The current upload code places files directly in the configured `GOOGLE_DRIVE_PARENT_FOLDER_ID`. It does not create a per-request or per-user folder. Do not describe a `[Username] - [Date Submitted] - [Request Name]` folder structure as implemented.
 * **Database Reference**: Persist only Drive metadata (`id`, `name`, `mimeType`, and `url`) in the relevant JSONB value, including the `files` column of a status update.
-* **Upload Path**: The authenticated server creates short-lived Google Drive resumable-upload sessions from file metadata. The browser uploads the file bytes directly to each session URL, bypassing Vercel's request-body limit; the application must not proxy those bytes through a Vercel function.
+* **Upload Path**: The active browser upload workflow requests Google Drive resumable-upload sessions from the authenticated server, then sends file bytes directly to Google Drive. A legacy `uploadFilesToGoogleDrive` server action also exists and uploads bytes through the server; do not describe every code path as direct browser upload.
 * **Limits**: A single attachment selection supports at most 10 files whose combined size is **100 MB or less**.
 * **Execution Model**: Uploads run as part of the active client workflow. LEAPRS does not require Redis, a message queue, or a long-running background worker for Drive uploads.
 * **Failure Handling**: Save only the returned Drive metadata after upload succeeds. Return a specific failure reason when session preparation, Drive authorization, or an individual upload fails.
 
 ### C. Form Configuration & Custom Layouts
 * Admins can configure the forms for CapDev and Requests.
-* Dynamic field types supported: `text` (combobox: dropdown + text entry), `number`, `date` (datepicker), `file` (drag & drop upload).
+* Dynamic field types supported: `text` (combobox: dropdown + text entry), `number`, `date` (datepicker), `file` (drag & drop upload), and `table` (editable grid). Table fields occupy a full row.
 * An unpaired half-width dynamic field can occupy either the left or right column. Drag-and-drop never changes a field's configured width. A half-width field can fill an empty half-slot directly; dropping a full-width field there swaps its position with the adjacent half-width field so the full-width field keeps its whole row. Field order and half-width column position persist in both the configuration preview and operational forms.
 * Adding a field is a client-side draft operation. **Add Field** places the completed draft into the form preview without inserting it into the backend; the fixed bottom-right **Save Configuration** action is the explicit persistence point for staged additions and edits.
 
@@ -94,16 +97,16 @@ Google Drive is the sole durable file store; Vercel and the database do not stor
 
 ### E. Request Status vs. Status Update Marks
 * **Whole Request Statuses**: `in_progress`, `completed`, `denied`.
-* **Individual Status Update Marks**: `pending`, `completed`, `denied`.
+* **Individual Status Update Marks**: The ordinary UI offers `pending`, `completed`, and `denied`. The server and data model also recognize legacy `accepted` marks.
 * Marking a status update as `denied` or `completed` documents that specific milestone without terminating or overriding the overarching request timeline. Only explicit concluding actions (`Complete` or `Deny` resolution) finalize the request.
 
-### F. Post-Completion Training Feedback & Evaluation Google Forms
-* Upon concluding a request as **Completed**, the system dynamically creates and publishes two Google Forms that are unique to that request and accept responses from anyone with the link:
-  1. **Participant Evaluation & Feedback Form**: Ratings for overall satisfaction, content relevance, facilitator effectiveness, and logistics, plus written strengths, improvements, and comments.
-  2. **Supervisor / Post-Activity Evaluation Form**: Ratings for job relevance, knowledge or skill improvement, workplace application, and overall value, plus observed changes, follow-up support, and comments.
-* The generated form IDs and responder links are stored on the request. Retrying completion reuses any forms already stored instead of producing duplicates.
-* Each form is presented in the completion modal and final timeline card with **Open Form**, **Copy Link**, and **See Summary** actions.
-* **See Summary** fetches the latest responses on demand. Rating charts are calculated directly from response data; Gemini produces only the plain-language overview, strengths, improvements, and recommended actions. No webhook is required for this on-demand workflow.
+### F. Post-Completion Seminar Evaluation
+* Upon concluding a request as **Completed**, LEAPRS creates and publishes **one seminar evaluation Google Form** for that request. There is no active supervisor evaluation form. The one form contains sections for Guest Speaker, Learnings and Content, Overall Satisfaction, Comments and Suggestions, and Skills or Training Areas. It includes 1-to-5 ratings and written questions, including a certificate-name field.
+* The form can accept responses from anyone with its responder link. The UI provides an **Edit Form** link for replacing the generated placeholder seminar title (`TITLE`); editing still requires Google Forms access.
+* The form ID and responder link are stored in the existing `participant_feedback_form_id` and `participant_feedback_form_url` request columns. These column names are legacy storage names, not evidence of a separate participant form. The old supervisor form columns remain in the schema for compatibility, but the current flow clears them when replacing a legacy two-form pair.
+* Retrying completion or opening a completed request reuses the current form. When an old two-form or older participant form is detected, the code replaces the visible form once with the current single seminar evaluation.
+* The completion modal and final timeline card show **Open Form**, **Edit Form**, a link-copy action, and **See Summary** for the single form.
+* **See Summary** fetches current responses on demand. Rating distributions and averages are calculated from Google Forms responses. Groq generates strengths, improvements, and recommendations from written answers when configured; rating charts remain available if AI summarization fails. No HDBSCAN, embeddings, clustering, or webhook is involved.
 
 ## 4. Access, Registration, and Departments
 
@@ -156,21 +159,39 @@ Notifications are event records, but they are visible only while their associate
 * Dynamic form values are stored by the field definition's stable database ID, never by its editable display label. Fields with identical labels must remain independent in previews, CRUD forms, saved records, reports, and exports.
 * Readers retain a legacy label-key fallback for records saved before stable field keys were introduced. Because an old label-keyed record cannot distinguish two same-label fields, both may initially show the legacy value until the fields are saved independently with stable keys.
 
+### F. Audit History
+
+* The application records actor and record snapshots for user, CapDev, request, status-update, form-configuration, and maintenance actions. These audit records persist after the related user or business record is deleted.
+* Only Admins can view the searchable, paginated audit log. Its display uses action descriptions and readable record identifiers, especially a CapDev project's AIP Code, rather than exposing internal database IDs as the primary label.
+
 ## 5. Stopper and Resume Workflow
 
-* An **Admin** or **Employee (All Department Requests)** can add a stopper at any time by supplying a reason and optional attachments. A request may be stopped again after it has been resumed.
+* An **Admin** or **Employee (All Department Requests)** can add a stopper to an in-progress request that is not already stopped by supplying a reason and optional attachments. A request may be stopped again after it has been resumed.
 * A stopper is retained as a timeline card with a **Stopped** badge, a pin visual, its reason, and its attachments. It remains in the history after resumption and shows that it was resumed.
 * While a request is stopped, normal Employees cannot add ordinary status updates. Instead, the active stopper card provides them a text and attachment response area so they can submit what the stopper reason asks for.
 * While stopped, Admin and Employee (All Department Requests) see **Resume Progress** in place of adding a status update. Resuming re-enables normal Employee status updates.
 * Server authorization enforces these rules: regular Employees can submit only a response to the active stopper on their own request; only Admin and Employee (All Department Requests) can stop or resume progress.
 
-## 6. Timeline Navigation and Shared Help
+## 6. Timeline Navigation and AI-Assisted Workflows
 
 * The progress summary in the request-status header mirrors timeline events while omitting nested stopper responses and resume-log rows. It includes a final resolution node when the request is Completed or Denied.
 * Every progress node targets its exact timeline update, stopper card, or final-resolution card. Selecting a node smoothly scrolls to and briefly pulses the whole destination card.
-* The portal header exposes a friendly robot help chat to every authenticated role. It currently provides UI-only, deterministic guidance about CapDev projects, requests, attachments, status updates, and settings; it does not call an AI service or perform backend actions.
+* The portal header exposes a help chat to every authenticated role. Gemini answers LEAPRS questions and may call permission-checked, read-only tools for live request, CapDev, and budget information. Answers depend on the configured AI service and current database data.
+* A user may paste or upload an activity-design image or PDF. Gemini extracts a request draft against the current form schema; the user reviews its AIP Code, required fields, budget, and attachments before submission. Extraction alone does not create a request. Submission requires explicit confirmation and repeats server-side access and budget validation.
+* LEAPRS also exposes a configurable OAuth-protected MCP endpoint for external assistants. It provides read tools and a confirmed request-submission tool under the connected user's current role, department, and maintenance restrictions.
 
 ## 7. CapDev Uniqueness
 
 * `AIP Code` is unique across CapDev projects. Creation performs a friendly pre-check, while the database unique constraint remains the concurrency-safe final authority.
 * A duplicate is returned as a specific business error naming the conflicting AIP Code. The UI presents that failed save in an action-error modal instead of a top-of-form banner.
+
+## 8. Analytics and Reports
+
+* Admins and Viewers can view CapDev and request analytics and generate a monitoring workbook from selected projects and fixed or configured form fields. A department Viewer sees only their department; an Admin or Viewer (All Departments) can see all departments. Employees do not have access to these reporting views.
+* The analytics page reads live project, request, and status-update data for its operational metrics. Its monthly **Audit log activity** chart currently uses hardcoded sample values and must not be described as a live audit metric.
+* The monitoring report uses an Excel template and current database records; report selection and generated output are separate from the analytics charts.
+
+## 9. Data and Deployment Boundaries
+
+* Neon Postgres stores LEAPRS application records; Neon Auth stores identities and sessions. The app reads the database connection from `DATABASE_URL` and the matching Auth endpoint from `NEON_AUTH_BASE_URL`.
+* Vercel Production and Preview can use separate Neon projects through environment-specific values for those same variable names. Git merges deploy code; they do not copy application data or schema changes between databases.

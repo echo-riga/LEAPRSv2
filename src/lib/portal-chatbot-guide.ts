@@ -56,8 +56,7 @@ LEAPRS (Lifelong Education Advancement Program Requisition System) Knowledge Bas
 - **How to access**: On any request card, click **Timeline**.
 - **Key actions**: Click **Add Status** -> **Save Status** to log milestones, attach Google Drive files, or deduct budget; authorized roles use **Stop Progress** and **Resume Progress** for blockers; conclude with **Complete** or **Deny**.
 
-9. Post-Completion Evaluation Forms:
-- **What it is**: Automatically created participant and supervisor Google Forms upon concluding a request.
-- **Key actions**: Click **Open Form** to view the form, **Copy Link** to share, and **See Summary** for AI-generated response insights.
+9. Post-Completion Seminar Evaluation:
+- **What it is**: One seminar evaluation Google Form is created when a request is completed.
+- **Key actions**: Click **Open Form** to respond, **Edit Form** to set the seminar title if you have Google Forms access, copy the link to share it, and **See Summary** to review rating charts and an AI-assisted summary of written comments when available.
 `;
-

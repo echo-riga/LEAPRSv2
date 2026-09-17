@@ -98,12 +98,30 @@ export default function PortalPage() {
     }));
     setProjects(normalizedProjects);
     setDepartmentOptions(departmentData);
+    const allKnownDepartments = Array.from(new Set(normalizedProjects.map((project) => (project.department && project.department !== 'None' ? project.department.trim() : '')).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    allKnownDepartments.unshift('None');
+
     if (!filtersInitialized.current) {
-      const initialDepartments = Array.from(new Set(normalizedProjects.map((project) => (project.department && project.department !== 'None' ? project.department.trim() : '')).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-      initialDepartments.unshift('None');
-      setFilters((current) => ({ ...current, departments: initialDepartments }));
-      setDraftFilters((current) => ({ ...current, departments: initialDepartments }));
+      setFilters((current) => ({ ...current, departments: allKnownDepartments }));
+      setDraftFilters((current) => ({ ...current, departments: allKnownDepartments }));
       filtersInitialized.current = true;
+    } else {
+      setFilters((current) => {
+        const prevKnown = Array.from(new Set(projects.map((p) => (p.department && p.department !== 'None' ? p.department.trim() : 'None'))));
+        const hadAllSelected = prevKnown.length > 0 && prevKnown.every((d) => current.departments.includes(d));
+        if (hadAllSelected) {
+          return { ...current, departments: allKnownDepartments };
+        }
+        return current;
+      });
+      setDraftFilters((current) => {
+        const prevKnown = Array.from(new Set(projects.map((p) => (p.department && p.department !== 'None' ? p.department.trim() : 'None'))));
+        const hadAllSelected = prevKnown.length > 0 && prevKnown.every((d) => current.departments.includes(d));
+        if (hadAllSelected) {
+          return { ...current, departments: allKnownDepartments };
+        }
+        return current;
+      });
     }
     setDefinitions(fieldData.map((field) => ({ ...field, options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [] })));
     setLoading(false);
@@ -224,6 +242,12 @@ export default function PortalPage() {
       const result = editing ? await updateCapdev(editing.id, payload) : await createCapdev(payload);
       if (result.success) {
         setEditorOpen(false);
+        const projectDept = payload.department?.trim() || 'None';
+        setFilters((current) => ({
+          ...current,
+          departments: current.departments.includes(projectDept) ? current.departments : [...current.departments, projectDept],
+        }));
+        setPage(1);
         await loadData();
       } else {
         setError(result.error || 'Unable to save this CapDev project.');

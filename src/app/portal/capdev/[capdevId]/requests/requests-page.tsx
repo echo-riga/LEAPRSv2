@@ -339,11 +339,22 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     setSaving(true);
     setError('');
     const additionalInfo = { ...form.additionalInfo };
+    let currentFolderId = typeof additionalInfo.googleDriveFolderId === 'string' ? additionalInfo.googleDriveFolderId : undefined;
+    const requestContext = {
+      requestId: editing?.id,
+      folderId: currentFolderId,
+      requestorName: editing?.requestorName?.trim() || session.data.user.name || undefined,
+      dateRequested: editing?.createdAt ? new Date(editing.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+    };
     for (const [fieldName, files] of Object.entries(pendingFiles)) {
       if (files.length === 0) continue;
       const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
-      const uploaded = await uploadFilesDirectlyToGoogleDrive(files);
+      const uploaded = await uploadFilesDirectlyToGoogleDrive(files, { ...requestContext, folderId: currentFolderId });
       if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
+      if (uploaded.folderId) {
+        currentFolderId = uploaded.folderId;
+        additionalInfo.googleDriveFolderId = uploaded.folderId;
+      }
       const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
       additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
     }

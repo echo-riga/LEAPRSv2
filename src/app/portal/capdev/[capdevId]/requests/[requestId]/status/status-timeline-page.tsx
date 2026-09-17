@@ -310,7 +310,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const submitStopperResponse = async (stopperId: number) => {
     if (!session.data || !stopperResponse.text.trim()) return;
     setRespondingToStopper(true);
-    const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperResponse.files);
+    const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperResponse.files, { requestId });
     if (!uploaded.success) { setError(uploaded.error || 'Unable to upload the selected files.'); setRespondingToStopper(false); return; }
     const result = await createRequestStatusUpdate({ requestId, userId: session.data.user.id, statusUpdate: stopperResponse.text.trim(), files: uploaded.files, isStopperResponse: true, stopperId });
     if (result.success) { setStopperResponse({ text: '', files: [] }); await loadData(); }
@@ -338,7 +338,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const executeStopper = async () => {
     if (!session.data || !form.statusUpdate.trim()) return;
     setSaving(true);
-    const uploaded = await uploadFilesDirectlyToGoogleDrive(form.files);
+    const uploaded = await uploadFilesDirectlyToGoogleDrive(form.files, { requestId });
     if (!uploaded.success) { setError(uploaded.error || 'Unable to upload the selected files.'); setSaving(false); return; }
     const result = await stopRequestProgress({ requestId, reason: form.statusUpdate.trim(), files: uploaded.files });
     if (result.success) { setDialogOpen(false); await loadData(); }
@@ -358,7 +358,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     if (!session.data || !form.statusUpdate.trim()) return;
     setSaving(true);
     setError('');
-    const uploaded = await uploadFilesDirectlyToGoogleDrive(form.files);
+    const uploaded = await uploadFilesDirectlyToGoogleDrive(form.files, { requestId });
     if (!uploaded.success) {
       setError(uploaded.error || 'Unable to upload the selected files.');
       setSaving(false);
