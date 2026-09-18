@@ -1472,7 +1472,7 @@ export async function getStatusUpdateFieldDefinitions() {
       .where(eq(statusUpdateFieldDefinitions.isActive, true))
       .orderBy(statusUpdateFieldDefinitions.sortOrder);
 
-    // If no fields configured yet, seed the default dynamic fields: Status Update (required) and Remarks (optional)
+    // If no fields configured yet, seed the default dynamic fields: Status Update (required), Remarks (optional), Attachments (optional)
     if (fields.length === 0) {
       const seeded = await db.insert(statusUpdateFieldDefinitions).values([
         {
@@ -1495,6 +1495,17 @@ export async function getStatusUpdateFieldDefinitions() {
           columnPosition: 'left',
           sortOrder: 2,
           placeholder: 'Enter remarks or additional context',
+          updatedById: access.userId,
+        },
+        {
+          name: 'Attachments',
+          type: 'file',
+          isRequired: false,
+          section: 'optional',
+          width: 'full',
+          columnPosition: 'left',
+          sortOrder: 3,
+          placeholder: null,
           updatedById: access.userId,
         },
       ]).returning();

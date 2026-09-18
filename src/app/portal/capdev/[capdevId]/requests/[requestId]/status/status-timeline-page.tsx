@@ -1005,14 +1005,23 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             const wasResumed = isStopper && updates.some((item) => item.isResume && item.stopperId === update.id);
             const isActiveStopper = isStopper && request.isStopped && request.activeStopperId === update.id;
 
-            // Extra dynamic fields (beyond statusUpdate and remarks) in additionalInfo
+            // Extra dynamic fields (beyond statusUpdate, remarks, and standard attachments) in additionalInfo
             const extraFields = update.additionalInfo
               ? Object.entries(update.additionalInfo).filter(([key, val]) => {
                   if (!val) return false;
                   const matchingDef = definitions.find((d) => dynamicFieldStorageKey(d) === key || d.name === key);
                   if (matchingDef) {
                     const lower = matchingDef.name.trim().toLowerCase();
-                    if (lower === 'status update' || lower === 'status' || lower === 'remarks' || lower === 'remark') return false;
+                    if (
+                      lower === 'status update' ||
+                      lower === 'status' ||
+                      lower === 'remarks' ||
+                      lower === 'remark' ||
+                      lower === 'attachments' ||
+                      lower === 'attachment' ||
+                      lower === 'files' ||
+                      lower === 'attach files'
+                    ) return false;
                   }
                   return true;
                 })
