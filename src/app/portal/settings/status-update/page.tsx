@@ -22,6 +22,8 @@ import {
   FormControlLabel,
   Checkbox,
   Autocomplete,
+  ToggleButtonGroup,
+  ToggleButton,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -32,30 +34,27 @@ import {
   Edit as EditIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
+import { getCurrentUserAccess } from '@/app/actions';
 import { FormConfigSkeleton } from '@/components/Skeletons';
 import DateField from '@/components/DateField';
 import DynamicTableField from '@/components/DynamicTableField';
-import DepartmentCombobox from '@/components/DepartmentCombobox';
+import ActionErrorDialog from '@/components/ActionErrorDialog';
 import {
   EmptyHalfFieldDropSlot,
   FieldDropIndicator,
   getHalfFieldLayout,
   useFieldReorder,
 } from '@/components/FieldReorder';
-import ActionErrorDialog from '@/components/ActionErrorDialog';
 import {
-  getCurrentUserAccess,
-  getDepartmentOptions,
-  saveDepartmentOptions,
-  getCapdevFieldDefinitions,
-  saveCapdevFieldDefinition,
-  deleteCapdevFieldDefinition,
-  updateCapdevFieldsOrder,
+  getStatusUpdateFieldDefinitions,
+  saveStatusUpdateFieldDefinition,
+  deleteStatusUpdateFieldDefinition,
+  updateStatusUpdateFieldsOrder,
 } from '@/app/actions';
 
 interface Field {
   id?: number;
-  key: string; // stable client-side identity, used for edit/backup tracking (not sent to the server)
+  key: string;
   name: string;
   type: string;
   options: string[] | null;
@@ -68,28 +67,15 @@ interface Field {
   isTemp?: boolean;
 }
 
-const formatAipCode = (value: string) => {
-  const digits = value.replace(/\D/g, '').slice(0, 17);
-  const groupLengths = [4, 3, 1, 1, 2, 3, 3];
-  const groups: string[] = [];
-  let offset = 0;
-  for (const length of groupLengths) {
-    const group = digits.slice(offset, offset + length);
-    if (!group) break;
-    groups.push(group);
-    offset += length;
-  }
-  return groups.join('-');
-};
-
-export default function CapdevConfigPage() {
+export default function StatusUpdateConfigPage() {
   const router = useRouter();
   const session = authClient.useSession();
   const [fields, setFields] = useState<Field[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | string | null>(null);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  // Inline editing state (replaces the old modal)
+  // Inline editing state
   const [editingKeys, setEditingKeys] = useState<Set<string>>(new Set());
   const [backups, setBackups] = useState<Record<string, Field>>({});
   const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
@@ -97,7 +83,6 @@ export default function CapdevConfigPage() {
   const [isSavingConfiguration, setIsSavingConfiguration] = useState(false);
   const [configurationSaved, setConfigurationSaved] = useState(false);
   const [hasPendingDeletion, setHasPendingDeletion] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
   const configurationSaveTimeout = useRef<number | null>(null);
 
   useEffect(() => () => {
@@ -105,24 +90,13 @@ export default function CapdevConfigPage() {
   }, []);
 
   // Interactive preview input states
-  const [previewData, setPreviewData] = useState<Record<string, unknown>>({});
+  const [previewData, setPreviewData] = useState<Record<string, any>>({});
   const [previewFiles, setPreviewFiles] = useState<Record<string, File[]>>({});
 
-  // Fixed/required preview fields (AIP Code, Budget, etc.) — typeable, placeholder only
-  const [fixedPreviewData, setFixedPreviewData] = useState<Record<string, string>>({
-    aipCode: '',
-    budget: '',
-    department: '',
-  });
-  const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
-  const [departmentOptionDraft, setDepartmentOptionDraft] = useState('');
-  const [savingDepartmentOptions, setSavingDepartmentOptions] = useState(false);
-  const [editingDepartment, setEditingDepartment] = useState(false);
-  const [previewDepartmentIsOther, setPreviewDepartmentIsOther] = useState(false);
-
-  const handleFixedPreviewChange = (key: string, value: string) => {
-    setFixedPreviewData((prev) => ({ ...prev, [key]: value }));
-  };
+  // Fixed preview states for Status Update form (top of the section)
+  const [fixedStatusMark, setFixedStatusMark] = useState<'pending' | 'completed' | 'denied'>('pending');
+  const [fixedSubtractBudget, setFixedSubtractBudget] = useState(false);
+  const [fixedIsStopper, setFixedIsStopper] = useState(false);
 
   useEffect(() => {
     if (!session.isPending && !session.data) {
@@ -132,23 +106,24 @@ export default function CapdevConfigPage() {
 
   useEffect(() => {
     if (!session.data) return;
-    void getCurrentUserAccess().then((access) => { if (access.success && access.role !== 'admin') router.replace('/portal'); });
+    void getCurrentUserAccess().then((access) => {
+      if (access.success && access.role !== 'admin') router.replace('/portal');
+    });
   }, [router, session.data]);
 
   useEffect(() => {
     const loadFields = async () => {
       try {
-        const [data, departments] = await Promise.all([getCapdevFieldDefinitions(), getDepartmentOptions()]);
-        const mapped = data.map((f) => ({
+        const data = await getStatusUpdateFieldDefinitions();
+        const mapped: Field[] = data.map((f) => ({
           ...f,
           key: `field-${f.id}`,
           options: Array.isArray(f.options) ? (f.options as string[]) : [],
           placeholder: f.placeholder || '',
           section: f.isRequired ? 'required' : 'optional',
-          columnPosition: f.columnPosition === 'right' ? 'right' as const : 'left' as const,
+          columnPosition: f.columnPosition === 'right' ? 'right' : 'left',
         }));
         setFields(mapped);
-        setDepartmentOptions(departments);
       } catch (error) {
         console.error('Failed to load fields:', error);
       } finally {
@@ -168,7 +143,7 @@ export default function CapdevConfigPage() {
       const fieldLayout = sortedFields
         .filter((field): field is Field & { id: number } => typeof field.id === 'number')
         .map((field) => ({ id: field.id, columnPosition: field.columnPosition }));
-      await updateCapdevFieldsOrder(fieldLayout, currentUserId);
+      await updateStatusUpdateFieldsOrder(fieldLayout, currentUserId);
     },
   });
 
@@ -182,6 +157,9 @@ export default function CapdevConfigPage() {
   const draftFields = fields.filter((field) => field.isTemp || editingKeys.has(field.key));
   const hasInvalidDraft = draftFields.some((field) => !field.name.trim());
   const hasConfigurationChanges = draftFields.length > 0 || hasPendingDeletion;
+
+  // Single unified section config
+  const groups = [{ key: 'all', label: 'Status Update' }] as const;
 
   // ---- Inline add / edit / cancel / save / delete -------------------------------------------
 
@@ -252,48 +230,6 @@ export default function CapdevConfigPage() {
     clearEditingState(field.key);
   };
 
-  const handleDeleteFieldDirect = async (originalIndex: number) => {
-    const fieldToDelete = fields[originalIndex];
-    if (fieldToDelete.isTemp) {
-      setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
-      clearEditingState(fieldToDelete.key);
-      return;
-    }
-    if (!fieldToDelete.id) return;
-    setSavingId(fieldToDelete.id);
-    try {
-      const result = await deleteCapdevFieldDefinition(fieldToDelete.id, currentUserId);
-      if (result.success) {
-        setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
-        clearEditingState(fieldToDelete.key);
-        setHasPendingDeletion(true);
-        setConfigurationSaved(false);
-      }
-    } catch (error) {
-      console.error('Delete failed:', error);
-    } finally {
-      setSavingId(null);
-    }
-  };
-
-  // Options builder (used inside the inline editor for "text" fields)
-  const handleAddOption = (originalIndex: number) => {
-    const f = fields[originalIndex];
-    const text = (optionDrafts[f.key] || '').trim();
-    if (!text) return;
-    const currentOptions = f.options || [];
-    if (!currentOptions.includes(text)) {
-      handleFieldChange(originalIndex, { options: [...currentOptions, text] });
-    }
-    setOptionDrafts((prev) => ({ ...prev, [f.key]: '' }));
-  };
-
-  const handleRemoveOption = (originalIndex: number, optToRemove: string) => {
-    const f = fields[originalIndex];
-    const currentOptions = f.options || [];
-    handleFieldChange(originalIndex, { options: currentOptions.filter((o) => o !== optToRemove) });
-  };
-
   const handleSaveConfiguration = async () => {
     if (hasInvalidDraft) return;
     if (draftFields.length === 0) {
@@ -306,67 +242,122 @@ export default function CapdevConfigPage() {
     setIsSavingConfiguration(true);
     setConfigurationSaved(false);
     try {
-      const savedFields = await Promise.all(draftFields.map(async (field) => {
-        const result = await saveCapdevFieldDefinition({
-          id: field.isTemp ? undefined : field.id,
-          name: field.name,
-          type: field.type,
-          options: field.options,
-          isRequired: field.isRequired,
-          section: field.isRequired ? 'required' : 'optional',
-          width: field.width,
-          columnPosition: field.columnPosition,
-          placeholder: field.placeholder || '',
-          sortOrder: field.sortOrder,
-          updatedById: currentUserId,
-        });
-        return { key: field.key, result };
-      }));
-      if (savedFields.every(({ result }) => result.success && result.id)) {
-        const idsByKey = new Map(savedFields.map(({ key, result }) => [key, result.id!]));
-        setFields((current) => current.map((field) => {
-          const id = idsByKey.get(field.key);
-          return id ? { ...field, id, key: `field-${id}`, isTemp: false } : field;
-        }));
-        setEditingKeys(new Set());
-        setBackups({});
-        setOptionDrafts({});
-        setHasPendingDeletion(false);
-        setConfigurationSaved(true);
-        if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
-        configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
-      }
-    } catch (error) {
-      console.error('Configuration save failed:', error);
+      const savedFields = await Promise.all(
+        draftFields.map(async (field) => {
+          const result = await saveStatusUpdateFieldDefinition({
+            id: field.isTemp ? undefined : field.id,
+            name: field.name,
+            type: field.type,
+            options: field.options,
+            isRequired: field.isRequired,
+            section: field.isRequired ? 'required' : 'optional',
+            width: field.width,
+            columnPosition: field.columnPosition,
+            placeholder: field.placeholder || '',
+            sortOrder: field.sortOrder,
+            updatedById: currentUserId,
+          });
+          if (!result.success || typeof result.id !== 'number') {
+            throw new Error(result.error || 'Failed to save field');
+          }
+          return {
+            ...field,
+            id: result.id,
+            key: `field-${result.id}`,
+            isTemp: false,
+          };
+        })
+      );
+
+      const savedByKey = new Map(savedFields.map((field) => [field.key, field]));
+      const nextFields = fields.map((field) => savedByKey.get(`field-${field.id}`) || savedByKey.get(field.key) || field);
+
+      const fieldLayout = nextFields
+        .filter((field): field is Field & { id: number } => typeof field.id === 'number')
+        .map((field) => ({ id: field.id, columnPosition: field.columnPosition }));
+      await updateStatusUpdateFieldsOrder(fieldLayout, currentUserId);
+
+      setFields(nextFields);
+      setEditingKeys(new Set());
+      setBackups({});
+      setOptionDrafts({});
+      setHasPendingDeletion(false);
+      setConfigurationSaved(true);
+      if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
+      configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
+    } catch (error: any) {
+      console.error('Failed to save status update configuration:', error);
+      setErrorMessage(error?.message || 'Failed to save field configuration.');
     } finally {
       setIsSavingConfiguration(false);
     }
   };
 
-  const groups = [{ key: 'all', label: 'Capacity Development' }] as const;
+  const handleDeleteFieldDirect = async (originalIndex: number) => {
+    const f = fields[originalIndex];
+    if (f.isTemp) {
+      setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
+      clearEditingState(f.key);
+      return;
+    }
+    setSavingId(f.id!);
+    try {
+      const result = await deleteStatusUpdateFieldDefinition(f.id!, currentUserId);
+      if (result.success) {
+        setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
+        clearEditingState(f.key);
+        setHasPendingDeletion(true);
+      } else {
+        setErrorMessage(result.error || 'Unable to delete field.');
+      }
+    } catch (error: any) {
+      console.error('Failed to delete field:', error);
+      setErrorMessage(error?.message || 'Unable to delete field.');
+    } finally {
+      setSavingId(null);
+    }
+  };
 
-  // ---- Interactive Upload Preview --------------------------------------------------------------
+  const handleAddOption = (originalIndex: number) => {
+    const f = fields[originalIndex];
+    const draft = (optionDrafts[f.key] || '').trim();
+    if (!draft) return;
+    const current = f.options || [];
+    if (!current.includes(draft)) {
+      handleFieldChange(originalIndex, { options: [...current, draft] });
+    }
+    setOptionDrafts((prev) => ({ ...prev, [f.key]: '' }));
+  };
 
-  const handleFileChange = (fieldName: string, files: FileList | null) => {
-    if (!files) return;
-    const arr = Array.from(files);
+  const handleRemoveOption = (originalIndex: number, optToRemove: string) => {
+    const f = fields[originalIndex];
+    handleFieldChange(originalIndex, {
+      options: (f.options || []).filter((opt) => opt !== optToRemove),
+    });
+  };
+
+  // File change handlers for preview
+  const handleFileChange = (fieldKey: string, fileList: FileList | null) => {
+    if (!fileList) return;
+    const newFiles = Array.from(fileList);
     setPreviewFiles((prev) => ({
       ...prev,
-      [fieldName]: [...(prev[fieldName] || []), ...arr],
+      [fieldKey]: [...(prev[fieldKey] || []), ...newFiles],
     }));
   };
 
-  const handleRemoveFile = (fieldName: string, fileIdx: number) => {
+  const handleRemoveFile = (fieldKey: string, index: number) => {
     setPreviewFiles((prev) => ({
       ...prev,
-      [fieldName]: (prev[fieldName] || []).filter((_, idx) => idx !== fileIdx),
+      [fieldKey]: (prev[fieldKey] || []).filter((_, i) => i !== index),
     }));
   };
+
+  // ---- Preview Field Renderer -------------------------------------------------------------
 
   function renderPreviewField(field: Field) {
     const isRequired = field.isRequired;
-    const storedValue = previewData[field.key];
-    const value = typeof storedValue === 'string' ? storedValue : '';
+    const value = previewData[field.key] ?? '';
     const files = previewFiles[field.key] || [];
 
     switch (field.type) {
@@ -419,7 +410,7 @@ export default function CapdevConfigPage() {
                 type="file"
                 multiple
                 style={{ display: 'none' }}
-                onChange={(e) => handleFileChange(field.name, e.target.files)}
+                onChange={(e) => handleFileChange(field.key, e.target.files)}
               />
               <UploadIcon sx={{ color: 'primary.main', fontSize: 28, mb: 0.5 }} />
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontWeight: 'bold' }}>
@@ -433,7 +424,7 @@ export default function CapdevConfigPage() {
                     key={`${file.name}-${idx}`}
                     label={file.name}
                     size="small"
-                    onDelete={() => handleRemoveFile(field.name, idx)}
+                    onDelete={() => handleRemoveFile(field.key, idx)}
                   />
                 ))}
               </Stack>
@@ -535,10 +526,7 @@ export default function CapdevConfigPage() {
               <Select
                 value={f.type === 'textarea' ? 'text' : f.type}
                 label="Type"
-                onChange={(e) => {
-                  const val = e.target.value;
-                  handleFieldChange(originalIndex, { type: val });
-                }}
+                onChange={(e) => handleFieldChange(originalIndex, { type: e.target.value })}
               >
                 <MenuItem value="text">Text (Textbox / Combobox)</MenuItem>
                 <MenuItem value="number">Number</MenuItem>
@@ -673,6 +661,7 @@ export default function CapdevConfigPage() {
       </Box>
     );
   }
+
   return (
     <Box
       sx={{
@@ -684,7 +673,7 @@ export default function CapdevConfigPage() {
       {/* Main Single Live Preview Container */}
       <Container maxWidth="md" sx={{ p: 0, width: '100%', mb: 4 }}>
         <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px', mb: 0.5 }}>
-          CapDev Form Layout
+          Status Update Form Layout
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           Configure required and optional fields, then drag to set their order.
@@ -713,81 +702,119 @@ export default function CapdevConfigPage() {
                 const sectionFields = fields;
 
                 return (
-                  <Box
-                    key={secKey}
-                    sx={{ mb: 4.5 }}
-                  >
+                  <Box key={secKey} sx={{ mb: 2 }}>
                     <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5, borderBottom: '2px solid #2e7d32', pb: 0.75 }}>
                       <Typography variant="subtitle2" sx={{ color: 'primary.dark', fontWeight: 'bold', letterSpacing: '0.1px', flexGrow: 1 }}>
                         {label}
                       </Typography>
                     </Stack>
+
                     <Grid container spacing={{ xs: 2.5, sm: 3 }}>
-                      {/* Fixed fields shown inside the Required Section.
-                          Placeholder-only (not defaultValue), not read-only, so admins can
-                          type into them to test the layout — the placeholder is just a hint
-                          of what real data will look like once wired to the AIP record. */}
+                      {/* Fixed System Controls at the top of the Status Update section */}
                       {secKey === 'all' && (
                         <>
+                          {/* Status Mark Toggle */}
                           <Grid size={12}>
-                            <Stack spacing={0.5}>
-                              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                                AIP Code <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
+                            <Stack spacing={1}>
+                              <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                                Status Mark <Box component="span" sx={{ color: 'error.main' }}>*</Box>
                               </Typography>
-                              <TextField
-                                fullWidth
+                              <ToggleButtonGroup
+                                value={fixedStatusMark}
+                                exclusive
+                                onChange={(_, val) => val && setFixedStatusMark(val)}
                                 size="small"
-                                placeholder="0000-000-0-0-00-000-000"
-                                value={fixedPreviewData.aipCode}
-                                onChange={(e) => handleFixedPreviewChange('aipCode', formatAipCode(e.target.value))}
-                                sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
-                              />
+                                fullWidth
+                                sx={{
+                                  '& .MuiToggleButton-root': {
+                                    borderRadius: 2,
+                                    fontWeight: 700,
+                                    textTransform: 'none',
+                                    py: 1,
+                                    borderColor: 'rgba(0, 0, 0, 0.12)',
+                                  },
+                                }}
+                              >
+                                <ToggleButton
+                                  value="pending"
+                                  sx={{
+                                    '&.Mui-selected': {
+                                      bgcolor: 'rgba(237, 108, 2, 0.12)',
+                                      color: 'warning.dark',
+                                      borderColor: 'warning.main',
+                                    },
+                                  }}
+                                >
+                                  Pending
+                                </ToggleButton>
+                                <ToggleButton
+                                  value="completed"
+                                  sx={{
+                                    '&.Mui-selected': {
+                                      bgcolor: 'rgba(46, 125, 50, 0.12)',
+                                      color: 'success.dark',
+                                      borderColor: 'success.main',
+                                    },
+                                  }}
+                                >
+                                  Completed
+                                </ToggleButton>
+                                <ToggleButton
+                                  value="denied"
+                                  sx={{
+                                    '&.Mui-selected': {
+                                      bgcolor: 'rgba(211, 47, 47, 0.12)',
+                                      color: 'error.dark',
+                                      borderColor: 'error.main',
+                                    },
+                                  }}
+                                >
+                                  Denied
+                                </ToggleButton>
+                              </ToggleButtonGroup>
                             </Stack>
                           </Grid>
-                          <Grid size={{ xs: 12, sm: 6 }}>
-                            <Stack spacing={0.5}>
-                              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>Balance <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
-                              </Typography>
-                              <TextField
-                                fullWidth
-                                size="small"
-                                placeholder="e.g. 150000.00"
-                                value={fixedPreviewData.budget}
-                                onChange={(e) => handleFixedPreviewChange('budget', e.target.value)}
-                                sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
-                              />
-                            </Stack>
+
+                          {/* Fixed Checkbox Options: Subtract & Stopper */}
+                          <Grid size={12}>
+                            <FormControlLabel
+                              control={
+                                <Checkbox
+                                  checked={fixedSubtractBudget}
+                                  onChange={(e) => setFixedSubtractBudget(e.target.checked)}
+                                  color="primary"
+                                />
+                              }
+                              label={
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                  Subtract requested amount from CapDev balance
+                                </Typography>
+                              }
+                            />
                           </Grid>
-                          <Grid size={{ xs: 12, sm: 6 }}>
-                            <Box sx={{ position: 'relative' }}>
-                              <IconButton size="small" color="primary" onClick={() => setEditingDepartment((current) => !current)} title="Edit Department options" sx={{ position: 'absolute', top: -6, right: -6, zIndex: 1, bgcolor: '#fafcfa', border: '1px solid rgba(46, 125, 50, 0.18)', '&:hover': { bgcolor: '#ffffff' } }}>
-                                <EditIcon sx={{ fontSize: 16 }} />
-                              </IconButton>
-                              {editingDepartment ? <Box sx={{ p: 2, border: '2px solid', borderColor: 'primary.main', borderRadius: 2.5, bgcolor: '#ffffff' }}><Stack spacing={1.25}>
-                                <Typography variant="subtitle2" sx={{ color: 'primary.main', fontWeight: 800 }}>Department Options</Typography>
-                                <Stack direction="row" spacing={1}>
-                                  <TextField size="small" label="Option" value={departmentOptionDraft} onChange={(event) => setDepartmentOptionDraft(event.target.value)} fullWidth />
-                                  <Button variant="outlined" size="small" onClick={() => { const option = departmentOptionDraft.trim(); if (option && !departmentOptions.includes(option)) setDepartmentOptions((current) => [...current, option]); setDepartmentOptionDraft(''); }}>Add</Button>
-                                </Stack>
-                                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                                  {departmentOptions.map((option) => <Chip key={option} label={option} size="small" onDelete={() => setDepartmentOptions((current) => current.filter((item) => item !== option))} />)}
-                                </Stack>
-                                <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
-                                  <Button size="small" onClick={() => setEditingDepartment(false)}>Cancel</Button>
-                                  <Button size="small" variant="contained" disabled={savingDepartmentOptions} onClick={async () => { setSavingDepartmentOptions(true); const result = await saveDepartmentOptions(departmentOptions, currentUserId); if (result.success) { setDepartmentOptions(await getDepartmentOptions()); setEditingDepartment(false); } setSavingDepartmentOptions(false); }}>{savingDepartmentOptions ? 'Saving...' : 'Save'}</Button>
-                                </Stack>
-                              </Stack></Box> : <Stack spacing={0.5}>
-                                <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>Department</Typography>
-                                <DepartmentCombobox options={departmentOptions} value={fixedPreviewData.department} onChange={(value) => handleFixedPreviewChange('department', value)} otherSelected={previewDepartmentIsOther} onOtherSelectedChange={setPreviewDepartmentIsOther} size="small" />
-                              </Stack>}
-                            </Box>
+                          <Grid size={12}>
+                            <FormControlLabel
+                              control={
+                                <Checkbox
+                                  checked={fixedIsStopper}
+                                  onChange={(e) => setFixedIsStopper(e.target.checked)}
+                                  color="error"
+                                />
+                              }
+                              label={
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                  Add stopper
+                                </Typography>
+                              }
+                            />
                           </Grid>
                         </>
                       )}
 
+                      {/* Dynamic Fields within the same section */}
                       {(() => {
                         const halfFieldLayout = getHalfFieldLayout(
-                          sectionFields.map((field) => editingKeys.has(field.key) ? { ...field, width: 'full' } : field)
+                          sectionFields.map((field) => (editingKeys.has(field.key) ? { ...field, width: 'full' } : field))
                         );
 
                         return sectionFields.map((f) => {
@@ -902,7 +929,7 @@ export default function CapdevConfigPage() {
                         });
                       })()}
 
-                      {/* Add Field, scoped to this section */}
+                      {/* Add Field Button */}
                       <Grid size={12}>
                         <Box
                           onClick={() => handleAddField()}
@@ -930,24 +957,34 @@ export default function CapdevConfigPage() {
                   </Box>
                 );
               })}
-
-              {/* Add Section — right-aligned to match the rest of the toolbar actions */}
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
-              </Box>
             </Box>
           </CardContent>
         </Card>
       </Container>
+
+      {/* Floating Save Configuration Button */}
       <Button
         variant="contained"
         size="large"
         startIcon={isSavingConfiguration ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
         onClick={() => void handleSaveConfiguration()}
         disabled={isSavingConfiguration || !hasConfigurationChanges || hasInvalidDraft}
-        sx={{ position: 'fixed', right: { xs: 16, md: 24 }, bottom: { xs: 16, md: 24 }, zIndex: (theme) => theme.zIndex.appBar - 1 }}
+        sx={{
+          position: 'fixed',
+          right: { xs: 16, md: 24 },
+          bottom: { xs: 16, md: 24 },
+          zIndex: (theme) => theme.zIndex.appBar - 1,
+        }}
       >
         {isSavingConfiguration ? 'Saving...' : configurationSaved ? 'Saved' : 'Save Configuration'}
       </Button>
+
+      <ActionErrorDialog
+        open={Boolean(errorMessage)}
+        title="Configuration Error"
+        message={errorMessage}
+        onClose={() => setErrorMessage('')}
+      />
     </Box>
   );
 }
