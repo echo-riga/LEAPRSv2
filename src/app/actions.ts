@@ -1473,7 +1473,7 @@ export async function getStatusUpdateFieldDefinitions() {
       .orderBy(statusUpdateFieldDefinitions.sortOrder);
 
     // If no fields configured yet, seed the default dynamic fields: Status Update (required) and Remarks (optional)
-    if (fields.length === 0 && access.role === 'admin') {
+    if (fields.length === 0) {
       const seeded = await db.insert(statusUpdateFieldDefinitions).values([
         {
           name: 'Status Update',
@@ -1773,6 +1773,7 @@ export type StatusUpdateInput = {
   deductedAmount?: string;
   isStopperResponse?: boolean;
   stopperId?: number;
+  additionalInfo?: Record<string, unknown>;
 };
 
 export type StopRequestInput = { requestId: number; reason: string; files: StatusAttachment[] };
@@ -2280,6 +2281,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
       subtractsRequestedAmount: Boolean(data.subtractsRequestedAmount),
       isStopperResponse,
       stopperId: isStopperResponse ? data.stopperId : null,
+      additionalInfo: data.additionalInfo || {},
     }).returning({ id: requestStatusUpdates.id });
 
     await writeAuditLog(access, {

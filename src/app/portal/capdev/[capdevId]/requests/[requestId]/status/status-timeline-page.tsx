@@ -8,6 +8,7 @@ import {
   Cancel as CancelIcon,
   Check as CheckIcon,
   CheckCircle as CheckCircleIcon,
+  Close as CloseIcon,
   ContentCopy as ContentCopyIcon,
   Description as FormIcon,
   Edit as EditIcon,
@@ -19,6 +20,7 @@ import {
 } from '@mui/icons-material';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Card,
@@ -30,10 +32,12 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   Fab,
   FormControlLabel,
+  Grid,
+  IconButton,
   InputAdornment,
-  Divider,
   Stack,
   TextField,
   ToggleButton,
@@ -51,15 +55,32 @@ import {
   getRequestById,
   getRequestEvaluationSummary,
   getRequestStatusUpdates,
+  getStatusUpdateFieldDefinitions,
   resumeRequestProgress,
   stopRequestProgress,
   updateRequestStatus,
   type AppRole,
   type StatusAttachment,
 } from '@/app/actions';
+import DateField from '@/components/DateField';
+import DynamicTableField from '@/components/DynamicTableField';
+import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
+import { getHalfFieldLayout } from '@/components/FieldReorder';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import ActionErrorDialog from '@/components/ActionErrorDialog';
 import type { EvaluationSummary } from '@/lib/google-forms';
+
+type DynamicField = {
+  id: number;
+  name: string;
+  type: string;
+  options: string[] | null;
+  isRequired: boolean;
+  section: string;
+  width: string;
+  columnPosition: string;
+  placeholder: string | null;
+};
 
 type RequestSummary = {
   id: number;
@@ -72,6 +93,7 @@ type RequestSummary = {
   participantFeedbackFormId: string | null;
   participantFeedbackFormUrl: string | null;
 };
+
 type StatusUpdate = {
   id: number;
   requestId: number;
@@ -86,12 +108,15 @@ type StatusUpdate = {
   isStopperResponse: boolean;
   isResume: boolean;
   stopperId: number | null;
+  additionalInfo?: Record<string, unknown>;
   createdAt: Date | string;
 };
+
 type StatusForm = {
   statusUpdate: string;
   remarks: string;
   files: File[];
+  additionalInfo: Record<string, unknown>;
   statusMark: 'pending' | 'denied' | 'completed' | 'accepted' | null;
   subtractsRequestedAmount: boolean;
   addStopper: boolean;
@@ -102,18 +127,78 @@ type TimelineFocusRequest = {
   nonce: number;
 };
 
-const EMPTY_FORM: StatusForm = { statusUpdate: '', remarks: '', files: [], statusMark: 'pending', subtractsRequestedAmount: false, addStopper: false };
+const EMPTY_FORM: StatusForm = {
+  statusUpdate: '',
+  remarks: '',
+  files: [],
+  additionalInfo: {},
+  statusMark: 'pending',
+  subtractsRequestedAmount: false,
+  addStopper: false,
+};
+
 const formatDateTime = (value: Date | string) =>
-  new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
+  new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value));
+
 const formatCurrency = (value: string | number) =>
-  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
+  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(
+    Number(value) || 0
+  );
+
+const getAttachments = (value: unknown): StatusAttachment[] =>
+  Array.isArray(value)
+    ? value.filter(
+        (file): file is StatusAttachment =>
+          typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file
+      )
+    : [];
 
 function ConnectorDown({ toResolution = false }: { toResolution?: boolean }) {
   const height = toResolution ? 88 : 40;
   return (
-    <Box sx={{ display: { xs: 'none', md: 'block' }, position: 'absolute', bottom: `-${height}px`, left: '50%', width: 22, height, transform: 'translateX(-50%)', color: 'primary.main', zIndex: 1, pointerEvents: 'none' }}>
-      <Box sx={{ position: 'absolute', top: 0, bottom: 13, left: 8.5, width: 5, bgcolor: 'currentColor', borderRadius: 2 }} />
-      <Box sx={{ position: 'absolute', bottom: 0, left: 1, width: 0, height: 0, borderLeft: '10px solid transparent', borderRight: '10px solid transparent', borderTop: '13px solid currentColor' }} />
+    <Box
+      sx={{
+        display: { xs: 'none', md: 'block' },
+        position: 'absolute',
+        bottom: `-${height}px`,
+        left: '50%',
+        width: 22,
+        height,
+        transform: 'translateX(-50%)',
+        color: 'primary.main',
+        zIndex: 1,
+        pointerEvents: 'none',
+      }}
+    >
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 0,
+          bottom: 13,
+          left: 8.5,
+          width: 5,
+          bgcolor: 'currentColor',
+          borderRadius: 2,
+        }}
+      />
+      <Box
+        sx={{
+          position: 'absolute',
+          bottom: 0,
+          left: 1,
+          width: 0,
+          height: 0,
+          borderLeft: '10px solid transparent',
+          borderRight: '10px solid transparent',
+          borderTop: '13px solid currentColor',
+        }}
+      />
     </Box>
   );
 }
@@ -121,9 +206,43 @@ function ConnectorDown({ toResolution = false }: { toResolution?: boolean }) {
 function ConnectorRight({ toResolution = false }: { toResolution?: boolean }) {
   const width = toResolution ? 112 : 56;
   return (
-    <Box sx={{ display: { xs: 'none', md: 'block' }, position: 'absolute', top: '50%', right: `-${width}px`, width, height: 22, transform: 'translateY(-50%)', color: 'primary.main', zIndex: 1, pointerEvents: 'none' }}>
-      <Box sx={{ position: 'absolute', left: 0, right: 13, top: 8.5, height: 5, bgcolor: 'currentColor', borderRadius: 2 }} />
-      <Box sx={{ position: 'absolute', right: 0, top: 1, width: 0, height: 0, borderTop: '10px solid transparent', borderBottom: '10px solid transparent', borderLeft: '13px solid currentColor' }} />
+    <Box
+      sx={{
+        display: { xs: 'none', md: 'block' },
+        position: 'absolute',
+        top: '50%',
+        right: `-${width}px`,
+        width,
+        height: 22,
+        transform: 'translateY(-50%)',
+        color: 'primary.main',
+        zIndex: 1,
+        pointerEvents: 'none',
+      }}
+    >
+      <Box
+        sx={{
+          position: 'absolute',
+          left: 0,
+          right: 13,
+          top: 8.5,
+          height: 5,
+          bgcolor: 'currentColor',
+          borderRadius: 2,
+        }}
+      />
+      <Box
+        sx={{
+          position: 'absolute',
+          right: 0,
+          top: 1,
+          width: 0,
+          height: 0,
+          borderTop: '10px solid transparent',
+          borderBottom: '10px solid transparent',
+          borderLeft: '13px solid currentColor',
+        }}
+      />
     </Box>
   );
 }
@@ -131,9 +250,43 @@ function ConnectorRight({ toResolution = false }: { toResolution?: boolean }) {
 function ConnectorLeft({ toResolution = false }: { toResolution?: boolean }) {
   const width = toResolution ? 112 : 56;
   return (
-    <Box sx={{ display: { xs: 'none', md: 'block' }, position: 'absolute', top: '50%', left: `-${width}px`, width, height: 22, transform: 'translateY(-50%)', color: 'primary.main', zIndex: 1, pointerEvents: 'none' }}>
-      <Box sx={{ position: 'absolute', left: 13, right: 0, top: 8.5, height: 5, bgcolor: 'currentColor', borderRadius: 2 }} />
-      <Box sx={{ position: 'absolute', left: 0, top: 1, width: 0, height: 0, borderTop: '10px solid transparent', borderBottom: '10px solid transparent', borderRight: '13px solid currentColor' }} />
+    <Box
+      sx={{
+        display: { xs: 'none', md: 'block' },
+        position: 'absolute',
+        top: '50%',
+        left: `-${width}px`,
+        width,
+        height: 22,
+        transform: 'translateY(-50%)',
+        color: 'primary.main',
+        zIndex: 1,
+        pointerEvents: 'none',
+      }}
+    >
+      <Box
+        sx={{
+          position: 'absolute',
+          left: 13,
+          right: 0,
+          top: 8.5,
+          height: 5,
+          bgcolor: 'currentColor',
+          borderRadius: 2,
+        }}
+      />
+      <Box
+        sx={{
+          position: 'absolute',
+          left: 0,
+          top: 1,
+          width: 0,
+          height: 0,
+          borderTop: '10px solid transparent',
+          borderBottom: '10px solid transparent',
+          borderRight: '13px solid currentColor',
+        }}
+      />
     </Box>
   );
 }
@@ -142,6 +295,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const session = authClient.useSession();
   const [request, setRequest] = useState<RequestSummary | null>(null);
   const [updates, setUpdates] = useState<StatusUpdate[]>([]);
+  const [definitions, setDefinitions] = useState<DynamicField[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [concludeDialogOpen, setConcludeDialogOpen] = useState(false);
@@ -154,6 +308,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
   const [form, setForm] = useState<StatusForm>(EMPTY_FORM);
+  const [pendingFiles, setPendingFiles] = useState<Record<string, File[]>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [capdev, setCapdev] = useState<{ id: number; aipCode: string; budget: string } | null>(null);
@@ -207,7 +362,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const timeoutId = window.setTimeout(() => {
-      setTimelineFocus((current) => current?.nonce === timelineFocus.nonce ? null : current);
+      setTimelineFocus((current) => (current?.nonce === timelineFocus.nonce ? null : current));
     }, 1400);
 
     return () => window.clearTimeout(timeoutId);
@@ -222,11 +377,22 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   }, [session.data]);
 
   const loadData = useCallback(async () => {
-    const [requestData, updateData, capdevData] = await Promise.all([
+    const [requestData, updateData, capdevData, fieldDefs] = await Promise.all([
       getRequestById(requestId),
       getRequestStatusUpdates(requestId),
       getCapdevById(capdevId),
+      getStatusUpdateFieldDefinitions(),
     ]);
+
+    setDefinitions(
+      fieldDefs.map((field) => ({
+        ...field,
+        options: Array.isArray(field.options)
+          ? field.options.filter((option): option is string => typeof option === 'string')
+          : [],
+      }))
+    );
+
     if (capdevData) {
       setCapdev({
         id: capdevData.id,
@@ -234,6 +400,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         budget: String(capdevData.budget),
       });
     }
+
     if (requestData?.capdevId === capdevId) {
       let formFields = {
         participantFeedbackFormId: requestData.participantFeedbackFormId,
@@ -254,7 +421,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         activeStopperId: requestData.activeStopperId ?? null,
         ...formFields,
       });
-      setUpdates(updateData.map((update) => ({ ...update, files: Array.isArray(update.files) ? update.files : [] })));
+      setUpdates(
+        updateData.map((update) => ({
+          ...update,
+          files: Array.isArray(update.files) ? update.files : [],
+          additionalInfo: (update.additionalInfo && typeof update.additionalInfo === 'object'
+            ? update.additionalInfo
+            : {}) as Record<string, unknown>,
+        }))
+      );
       window.dispatchEvent(new CustomEvent('leaprs:request-timeline-changed', { detail: requestId }));
     }
     setLoading(false);
@@ -264,46 +439,121 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     void Promise.resolve().then(loadData);
   }, [loadData]);
 
-  const hasDeductedBudget = useMemo(() => updates.some((update) => update.subtractsRequestedAmount), [updates]);
+  const hasDeductedBudget = useMemo(
+    () => updates.some((update) => update.subtractsRequestedAmount),
+    [updates]
+  );
   const isCompleted = request?.status === 'completed';
   const isDenied = request?.status === 'denied';
   const isConcluded = isCompleted || isDenied;
   const canControlStopper = role === 'admin' || role === 'employee-department';
-  const canConcludeRequest = (role === 'admin' || role === 'employee' || role === 'employee-department') && !(request?.isStopped && role === 'employee');
-  const visibleUpdates = useMemo(() => updates.filter((update) => !update.isStopperResponse && !update.isResume), [updates]);
+  const canConcludeRequest =
+    (role === 'admin' || role === 'employee' || role === 'employee-department') &&
+    !(request?.isStopped && role === 'employee');
+  const visibleUpdates = useMemo(
+    () => updates.filter((update) => !update.isStopperResponse && !update.isResume),
+    [updates]
+  );
+
+  const rightAlignedFieldIds = useMemo(() => {
+    return getHalfFieldLayout(definitions.map((field) => ({ ...field, key: field.id }))).before;
+  }, [definitions]);
 
   const openAdd = () => {
     setError('');
+    setPendingFiles({});
     setForm(EMPTY_FORM);
     setDialogOpen(true);
   };
 
-  const addSelectedFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const addSelectedFiles = (fieldName: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
-    setForm((current) => {
-      const files = [...current.files, ...selectedFiles];
-      return {
-        ...current,
-        files: files.filter(
-          (file, index) =>
-            files.findIndex(
-              (candidate) =>
-                candidate.name === file.name &&
-                candidate.size === file.size &&
-                candidate.lastModified === file.lastModified
-            ) === index
-        ),
-      };
-    });
+    setPendingFiles((current) => ({
+      ...current,
+      [fieldName]: [...(current[fieldName] || []), ...selectedFiles].filter(
+        (file, index, files) =>
+          files.findIndex(
+            (candidate) =>
+              candidate.name === file.name &&
+              candidate.size === file.size &&
+              candidate.lastModified === file.lastModified
+          ) === index
+      ),
+    }));
     event.target.value = '';
   };
 
-  const removeSelectedFile = (file: File) =>
-    setForm((current) => ({ ...current, files: current.files.filter((candidate) => candidate !== file) }));
+  const removeSelectedFile = (fieldName: string, file: File) => {
+    setPendingFiles((current) => ({
+      ...current,
+      [fieldName]: (current[fieldName] || []).filter((candidate) => candidate !== file),
+    }));
+  };
+
+  const removeExistingAttachment = (field: DynamicField, fileId: string) => {
+    const current = getDynamicFieldValue(form.additionalInfo, field);
+    const updated = Array.isArray(current)
+      ? current.filter((item: unknown) =>
+          typeof item === 'object' && item && 'id' in item
+            ? (item as { id: string }).id !== fileId
+            : true
+        )
+      : [];
+    setDynamicValue(field, updated);
+  };
+
+  const setDynamicValue = (field: DynamicField, value: unknown) => {
+    const key = dynamicFieldStorageKey(field);
+    setForm((current) => {
+      const nextInfo = { ...current.additionalInfo, [key]: value };
+      let su = current.statusUpdate;
+      let rem = current.remarks;
+      const lower = field.name.trim().toLowerCase();
+      if (lower === 'status update' || lower === 'status') {
+        su = String(value || '');
+      } else if (lower === 'remarks' || lower === 'remark') {
+        rem = String(value || '');
+      }
+      return {
+        ...current,
+        statusUpdate: su,
+        remarks: rem,
+        additionalInfo: nextInfo,
+      };
+    });
+  };
+
+  const hasDynamicValue = (field: DynamicField) => {
+    const storageKey = dynamicFieldStorageKey(field);
+    const value = getDynamicFieldValue(form.additionalInfo, field);
+    if (field.type === 'file') {
+      return (
+        getAttachments(value).length > 0 || (pendingFiles[storageKey] || []).length > 0
+      );
+    }
+    if (field.type === 'table') {
+      if (Array.isArray(value) && value.length > 0) {
+        return value.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
+      }
+      return false;
+    }
+    return value !== undefined && value !== null && String(value).trim().length > 0;
+  };
 
   const addStopperResponseFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(event.target.files ?? []);
-    setStopperResponse((current) => ({ ...current, files: [...current.files, ...selected].filter((file, index, files) => files.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index) }));
+    setStopperResponse((current) => ({
+      ...current,
+      files: [...current.files, ...selected].filter(
+        (file, index, files) =>
+          files.findIndex(
+            (candidate) =>
+              candidate.name === file.name &&
+              candidate.size === file.size &&
+              candidate.lastModified === file.lastModified
+          ) === index
+      ),
+    }));
     event.target.value = '';
   };
 
@@ -311,22 +561,59 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     if (!session.data || !stopperResponse.text.trim()) return;
     setRespondingToStopper(true);
     const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperResponse.files, { requestId });
-    if (!uploaded.success) { setError(uploaded.error || 'Unable to upload the selected files.'); setRespondingToStopper(false); return; }
-    const result = await createRequestStatusUpdate({ requestId, userId: session.data.user.id, statusUpdate: stopperResponse.text.trim(), files: uploaded.files, isStopperResponse: true, stopperId });
-    if (result.success) { setStopperResponse({ text: '', files: [] }); await loadData(); }
-    else setError(result.error || 'Unable to save the stopper response.');
+    if (!uploaded.success) {
+      setError(uploaded.error || 'Unable to upload the selected files.');
+      setRespondingToStopper(false);
+      return;
+    }
+    const result = await createRequestStatusUpdate({
+      requestId,
+      userId: session.data.user.id,
+      statusUpdate: stopperResponse.text.trim(),
+      files: uploaded.files,
+      isStopperResponse: true,
+      stopperId,
+    });
+    if (result.success) {
+      setStopperResponse({ text: '', files: [] });
+      await loadData();
+    } else {
+      setError(result.error || 'Unable to save the stopper response.');
+    }
     setRespondingToStopper(false);
   };
 
   const handleInitiateSave = () => {
-    if (!session.data || !form.statusUpdate.trim()) return;
-    if (form.addStopper) { void executeStopper(); return; }
+    if (!session.data) return;
+
+    if (form.addStopper) {
+      if (!form.statusUpdate.trim()) {
+        setError('Please enter a stopper reason.');
+        return;
+      }
+      void executeStopper();
+      return;
+    }
+
     if (!form.statusMark) {
       setError('Please select a Status Mark (Pending, Completed, or Denied).');
       return;
     }
+
+    // Check required dynamic fields
+    const missing = definitions.filter((f) => f.isRequired).filter((f) => !hasDynamicValue(f));
+    if (missing.length > 0) {
+      setError(`Complete the required field${missing.length === 1 ? '' : 's'}: ${missing.map((f) => f.name).join(', ')}.`);
+      return;
+    }
+
+    // Fallback check if definitions are empty
+    if (definitions.length === 0 && !form.statusUpdate.trim()) {
+      setError('Please enter a status update.');
+      return;
+    }
+
     setError('');
-    // If budget deduction is checked and hasn't been deducted yet, prompt the deduction adjustment modal
     if (form.subtractsRequestedAmount && !hasDeductedBudget) {
       setEditableDeductedAmount(request?.requestedBudget || '');
       setDeductModalOpen(true);
@@ -338,11 +625,24 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const executeStopper = async () => {
     if (!session.data || !form.statusUpdate.trim()) return;
     setSaving(true);
-    const uploaded = await uploadFilesDirectlyToGoogleDrive(form.files, { requestId });
-    if (!uploaded.success) { setError(uploaded.error || 'Unable to upload the selected files.'); setSaving(false); return; }
-    const result = await stopRequestProgress({ requestId, reason: form.statusUpdate.trim(), files: uploaded.files });
-    if (result.success) { setDialogOpen(false); await loadData(); }
-    else setError(result.error || 'Unable to stop request progress.');
+    const stopperFiles = pendingFiles['stopper'] || form.files || [];
+    const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperFiles, { requestId });
+    if (!uploaded.success) {
+      setError(uploaded.error || 'Unable to upload the selected files.');
+      setSaving(false);
+      return;
+    }
+    const result = await stopRequestProgress({
+      requestId,
+      reason: form.statusUpdate.trim(),
+      files: uploaded.files,
+    });
+    if (result.success) {
+      setDialogOpen(false);
+      await loadData();
+    } else {
+      setError(result.error || 'Unable to stop request progress.');
+    }
     setSaving(false);
   };
 
@@ -355,25 +655,71 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   };
 
   const executeSaveUpdate = async (deductedAmountOverride?: string) => {
-    if (!session.data || !form.statusUpdate.trim()) return;
+    if (!session.data) return;
     setSaving(true);
     setError('');
-    const uploaded = await uploadFilesDirectlyToGoogleDrive(form.files, { requestId });
-    if (!uploaded.success) {
-      setError(uploaded.error || 'Unable to upload the selected files.');
-      setSaving(false);
-      return;
+
+    const additionalInfo = { ...form.additionalInfo };
+    const allUploadedFiles: StatusAttachment[] = [];
+
+    // Upload pending files for any dynamic file fields
+    for (const [fieldName, files] of Object.entries(pendingFiles)) {
+      if (files.length === 0) continue;
+      const field = definitions.find((d) => dynamicFieldStorageKey(d) === fieldName);
+      const uploaded = await uploadFilesDirectlyToGoogleDrive(files, { requestId });
+      if (!uploaded.success) {
+        setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`);
+        setSaving(false);
+        return;
+      }
+      const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
+      const combined = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
+      additionalInfo[fieldName] = combined;
+      allUploadedFiles.push(...uploaded.files);
     }
+
+    // Resolve primary statusUpdate and remarks strings
+    let primaryStatusUpdate = form.statusUpdate.trim();
+    let primaryRemarks = form.remarks.trim();
+
+    // If dynamic fields were used, find corresponding values
+    for (const field of definitions) {
+      const val = getDynamicFieldValue(additionalInfo, field);
+      const lower = field.name.trim().toLowerCase();
+      if ((lower === 'status update' || lower === 'status') && typeof val === 'string' && val.trim()) {
+        primaryStatusUpdate = val.trim();
+      } else if ((lower === 'remarks' || lower === 'remark') && typeof val === 'string' && val.trim()) {
+        primaryRemarks = val.trim();
+      }
+    }
+
+    if (!primaryStatusUpdate && definitions.length > 0) {
+      // Find first non-empty text value or default to first field
+      const firstTextField = definitions.find((d) => d.type === 'text' || d.type === 'textarea');
+      if (firstTextField) {
+        const val = getDynamicFieldValue(additionalInfo, firstTextField);
+        if (typeof val === 'string' && val.trim()) {
+          primaryStatusUpdate = val.trim();
+        }
+      }
+    }
+
+    if (!primaryStatusUpdate) {
+      primaryStatusUpdate = 'Status updated';
+    }
+
     const result = await createRequestStatusUpdate({
       requestId,
       userId: session.data.user.id,
-      statusUpdate: form.statusUpdate.trim(),
-      remarks: form.remarks.trim(),
-      files: uploaded.files,
+      statusUpdate: primaryStatusUpdate,
+      remarks: primaryRemarks || undefined,
+      files: allUploadedFiles,
       statusMark: form.statusMark,
       subtractsRequestedAmount: hasDeductedBudget ? false : form.subtractsRequestedAmount,
       deductedAmount: deductedAmountOverride,
+      additionalInfo,
     });
+
     if (result.success) {
       setDialogOpen(false);
       setDeductModalOpen(false);
@@ -419,6 +765,165 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       setError(result.error || 'Unable to update request status.');
     }
     setConcluding(false);
+  };
+
+  const renderDynamicInput = (field: DynamicField) => {
+    const storageKey = dynamicFieldStorageKey(field);
+    const fieldValue = getDynamicFieldValue(form.additionalInfo, field);
+    const isStandardStatusUpdate = field.name.trim().toLowerCase() === 'status update' || field.name.trim().toLowerCase() === 'status';
+    const isStandardRemarks = field.name.trim().toLowerCase() === 'remarks' || field.name.trim().toLowerCase() === 'remark';
+
+    return (
+      <Grid
+        key={field.id}
+        size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
+        offset={rightAlignedFieldIds.has(field.id) ? { xs: 0, sm: 6 } : undefined}
+      >
+        {((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
+          <Autocomplete
+            freeSolo
+            options={field.options}
+            value={String(fieldValue ?? (isStandardStatusUpdate ? form.statusUpdate : isStandardRemarks ? form.remarks : ''))}
+            inputValue={String(fieldValue ?? (isStandardStatusUpdate ? form.statusUpdate : isStandardRemarks ? form.remarks : ''))}
+            onChange={(_, value, reason) => {
+              if (reason === 'selectOption' && typeof value === 'string') {
+                const current = String(fieldValue || '').trim();
+                const concatenated = current ? `${current} ${value.trim()}` : value.trim();
+                setDynamicValue(field, concatenated);
+              } else if (reason === 'clear') {
+                setDynamicValue(field, '');
+              } else if (typeof value === 'string') {
+                setDynamicValue(field, value);
+              }
+            }}
+            onInputChange={(_, value, reason) => {
+              if (reason === 'input') {
+                setDynamicValue(field, value);
+              }
+            }}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                required={field.isRequired}
+                fullWidth
+                multiline={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea'}
+                minRows={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea' ? 2 : 1}
+                label={field.name}
+                placeholder={field.placeholder || 'Select or type...'}
+              />
+            )}
+          />
+        ) : (field.type === 'text' || field.type === 'textarea') ? (
+          <TextField
+            required={field.isRequired}
+            fullWidth
+            multiline={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea'}
+            minRows={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea' ? 2 : 1}
+            label={field.name}
+            placeholder={field.placeholder || ''}
+            value={String(fieldValue ?? (isStandardStatusUpdate ? form.statusUpdate : isStandardRemarks ? form.remarks : ''))}
+            onChange={(event) => setDynamicValue(field, event.target.value)}
+          />
+        ) : field.type === 'table' ? (
+          <DynamicTableField
+            label={field.name}
+            required={field.isRequired}
+            value={fieldValue}
+            template={field.options?.[0]}
+            showDimensionControls={false}
+            onChange={(val) => setDynamicValue(field, val)}
+          />
+        ) : field.type === 'date' ? (
+          <DateField
+            label={field.name}
+            required={field.isRequired}
+            value={String(fieldValue || '')}
+            onChange={(value) => setDynamicValue(field, value)}
+          />
+        ) : field.type === 'file' ? (
+          <Stack spacing={1}>
+            <Button
+              component="label"
+              variant="outlined"
+              startIcon={<AttachFileIcon />}
+              sx={{ borderRadius: 2, fontWeight: 700, width: 'fit-content' }}
+            >
+              {field.name}
+              {field.isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
+              <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
+            </Button>
+            {getAttachments(fieldValue).map((file) => (
+              <Stack
+                key={file.id}
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'center',
+                  bgcolor: 'rgba(0,0,0,0.03)',
+                  px: 1.5,
+                  py: 0.5,
+                  borderRadius: 1.5,
+                  width: 'fit-content',
+                  maxWidth: '100%',
+                }}
+              >
+                <Button
+                  component="a"
+                  href={file.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  size="small"
+                  startIcon={<AttachFileIcon />}
+                  sx={{
+                    textTransform: 'none',
+                    p: 0,
+                    minWidth: 0,
+                    fontWeight: 600,
+                    color: 'primary.main',
+                    textAlign: 'left',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {file.name}
+                </Button>
+                <IconButton
+                  size="small"
+                  onClick={() => removeExistingAttachment(field, file.id)}
+                  aria-label={`Remove ${file.name}`}
+                  sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                >
+                  <CloseIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Stack>
+            ))}
+            {(pendingFiles[storageKey] || []).length > 0 && (
+              <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                {pendingFiles[storageKey].map((file) => (
+                  <Chip
+                    key={`${file.name}-${file.lastModified}-${file.size}`}
+                    label={file.name}
+                    size="small"
+                    onDelete={() => removeSelectedFile(storageKey, file)}
+                  />
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        ) : (
+          <TextField
+            required={field.isRequired}
+            fullWidth
+            label={field.name}
+            type={field.type === 'number' ? 'number' : 'text'}
+            value={String(fieldValue || '')}
+            placeholder={field.placeholder || ''}
+            onChange={(event) => setDynamicValue(field, event.target.value)}
+          />
+        )}
+      </Grid>
+    );
   };
 
   if (session.isPending || loading) {
@@ -489,14 +994,29 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             const isLastToResolution = index === visibleUpdates.length - 1;
             const files = Array.isArray(update.files)
               ? update.files.filter(
-                (file): file is StatusAttachment =>
-                  typeof file === 'object' && file !== null && 'name' in file && 'url' in file
-              )
+                  (file): file is StatusAttachment =>
+                    typeof file === 'object' && file !== null && 'name' in file && 'url' in file
+                )
               : [];
             const isStopper = update.isStopper;
-            const stopperResponses = isStopper ? updates.filter((item) => item.isStopperResponse && item.stopperId === update.id) : [];
+            const stopperResponses = isStopper
+              ? updates.filter((item) => item.isStopperResponse && item.stopperId === update.id)
+              : [];
             const wasResumed = isStopper && updates.some((item) => item.isResume && item.stopperId === update.id);
             const isActiveStopper = isStopper && request.isStopped && request.activeStopperId === update.id;
+
+            // Extra dynamic fields (beyond statusUpdate and remarks) in additionalInfo
+            const extraFields = update.additionalInfo
+              ? Object.entries(update.additionalInfo).filter(([key, val]) => {
+                  if (!val) return false;
+                  const matchingDef = definitions.find((d) => dynamicFieldStorageKey(d) === key || d.name === key);
+                  if (matchingDef) {
+                    const lower = matchingDef.name.trim().toLowerCase();
+                    if (lower === 'status update' || lower === 'status' || lower === 'remarks' || lower === 'remark') return false;
+                  }
+                  return true;
+                })
+              : [];
 
             return (
               <Box
@@ -519,16 +1039,20 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     flexDirection: 'column',
                     transition: 'all 0.2s',
                     borderColor: isStopper ? 'error.main' : undefined,
-                    animation: timelineFocus?.targetId === `request-status-update-${update.id}`
-                      ? 'timelineCardFocus 900ms ease-in-out'
-                      : 'none',
+                    animation:
+                      timelineFocus?.targetId === `request-status-update-${update.id}`
+                        ? 'timelineCardFocus 900ms ease-in-out'
+                        : 'none',
                     '@keyframes timelineCardFocus': {
                       '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
                       '30%': { transform: 'scale(0.975)', boxShadow: '0 0 0 3px rgba(46, 125, 50, 0.22)' },
                       '65%': { transform: 'scale(1.025)', boxShadow: '0 8px 24px rgba(46, 125, 50, 0.2)' },
                       '100%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
                     },
-                    '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: isStopper ? 'error.dark' : 'primary.main' },
+                    '&:hover': {
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.04)',
+                      borderColor: isStopper ? 'error.dark' : 'primary.main',
+                    },
                   }}
                 >
                   <CardContent sx={{ p: 2.75, flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
@@ -543,7 +1067,11 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                           justifyContent: 'center',
                         }}
                       >
-                        {isStopper ? <StopperIcon color="error" sx={{ transform: 'rotate(35deg)' }} /> : <RequestIcon color="primary" />}
+                        {isStopper ? (
+                          <StopperIcon color="error" sx={{ transform: 'rotate(35deg)' }} />
+                        ) : (
+                          <RequestIcon color="primary" />
+                        )}
                       </Box>
                       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                         <Typography variant="h6" sx={{ fontWeight: '700', lineHeight: 1.2 }}>
@@ -555,37 +1083,51 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       </Box>
                       {isStopper ? (
                         <Chip
-                          icon={wasResumed
-                            ? <ResumeIcon sx={{ fontSize: '17px !important' }} />
-                            : <StopperIcon sx={{ fontSize: '15px !important' }} />}
+                          icon={
+                            wasResumed ? (
+                              <ResumeIcon sx={{ fontSize: '17px !important' }} />
+                            ) : (
+                              <StopperIcon sx={{ fontSize: '15px !important' }} />
+                            )
+                          }
                           label={wasResumed ? 'Resumed' : 'Stopped'}
                           color={wasResumed ? 'success' : 'error'}
                           size="small"
                           sx={{ fontWeight: 700 }}
                         />
-                      ) : update.statusMark && (
-                        <Chip
-                          label={
-                            update.statusMark === 'pending'
-                              ? 'Pending'
-                              : update.statusMark === 'completed' || update.statusMark === 'accepted'
+                      ) : (
+                        update.statusMark && (
+                          <Chip
+                            label={
+                              update.statusMark === 'pending'
+                                ? 'Pending'
+                                : update.statusMark === 'completed' || update.statusMark === 'accepted'
                                 ? 'Completed'
                                 : 'Denied'
-                          }
-                          color={
-                            update.statusMark === 'pending'
-                              ? 'warning'
-                              : update.statusMark === 'completed' || update.statusMark === 'accepted'
+                            }
+                            color={
+                              update.statusMark === 'pending'
+                                ? 'warning'
+                                : update.statusMark === 'completed' || update.statusMark === 'accepted'
                                 ? 'success'
                                 : 'error'
-                          }
-                          size="small"
-                          sx={{ fontWeight: 700 }}
-                        />
+                            }
+                            size="small"
+                            sx={{ fontWeight: 700 }}
+                          />
+                        )
                       )}
                     </Stack>
-                    {isStopper && <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Reason</Typography>}
-                    <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary', mb: update.remarks ? 0.75 : 0 }}>
+
+                    {isStopper && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                        Reason
+                      </Typography>
+                    )}
+                    <Typography
+                      variant="body1"
+                      sx={{ fontWeight: 600, color: 'text.primary', mb: update.remarks ? 0.75 : 0 }}
+                    >
                       {update.statusUpdate}
                     </Typography>
                     {update.remarks && (
@@ -593,6 +1135,54 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         {update.remarks}
                       </Typography>
                     )}
+
+                    {/* Extra dynamic fields if present */}
+                    {extraFields.length > 0 && (
+                      <Stack spacing={0.75} sx={{ mt: 1, mb: 1 }}>
+                        {extraFields.map(([k, v]) => {
+                          const matchingDef = definitions.find(
+                            (d) => dynamicFieldStorageKey(d) === k || d.name === k
+                          );
+                          const label = matchingDef?.name || k;
+                          if (Array.isArray(v)) {
+                            const files = getAttachments(v);
+                            if (files.length > 0) {
+                              return (
+                                <Box key={k}>
+                                  <Typography variant="caption" color="text.secondary">
+                                    {label}:
+                                  </Typography>
+                                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+                                    {files.map((f) => (
+                                      <Button
+                                        key={f.id}
+                                        component="a"
+                                        href={f.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        size="small"
+                                        sx={{ minWidth: 0, px: 0.5, textTransform: 'none', fontWeight: 600 }}
+                                      >
+                                        {f.name}
+                                      </Button>
+                                    ))}
+                                  </Stack>
+                                </Box>
+                              );
+                            }
+                          }
+                          return (
+                            <Typography key={k} variant="body2" color="text.secondary">
+                              <Box component="span" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                                {label}:
+                              </Box>{' '}
+                              {String(v)}
+                            </Typography>
+                          );
+                        })}
+                      </Stack>
+                    )}
+
                     {files.length > 0 && (
                       <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', mt: 1, flexWrap: 'wrap' }}>
                         <AttachFileIcon fontSize="small" color="action" />
@@ -611,11 +1201,107 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         ))}
                       </Stack>
                     )}
-                    {isStopper && stopperResponses.length > 0 && <Stack spacing={1} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>{stopperResponses.map((response) => <Box key={response.id}><Typography variant="caption" color="text.secondary">{response.authorName || 'Employee'} · {formatDateTime(response.createdAt)}</Typography><Typography variant="body2" sx={{ fontWeight: 600 }}>{response.statusUpdate}</Typography>{Array.isArray(response.files) && response.files.length > 0 && <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>{response.files.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'name' in file && 'url' in file).map((file) => <Button key={file.id} component="a" href={file.url} target="_blank" rel="noreferrer" size="small" sx={{ minWidth: 0, px: 0.5, textTransform: 'none' }}>{file.name}</Button>)}</Stack>}</Box>)}</Stack>}
-                    {isActiveStopper && role === 'employee' && <Stack spacing={1.25} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}><TextField fullWidth multiline minRows={2} label="Status Update" value={stopperResponse.text} onChange={(event) => setStopperResponse((current) => ({ ...current, text: event.target.value }))} /><Button component="label" variant="outlined" size="small" startIcon={<AttachFileIcon />}>Attach Files<input hidden type="file" multiple onChange={addStopperResponseFiles} /></Button>{stopperResponse.files.length > 0 && <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>{stopperResponse.files.map((file) => <Chip key={`${file.name}-${file.lastModified}-${file.size}`} label={file.name} size="small" onDelete={() => setStopperResponse((current) => ({ ...current, files: current.files.filter((item) => item !== file) }))} />)}</Stack>}<Button variant="contained" size="small" onClick={() => void submitStopperResponse(update.id)} disabled={respondingToStopper || !stopperResponse.text.trim()}>{respondingToStopper ? 'Saving...' : 'Submit Update'}</Button></Stack>}
+
+                    {isStopper && stopperResponses.length > 0 && (
+                      <Stack spacing={1} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+                        {stopperResponses.map((response) => (
+                          <Box key={response.id}>
+                            <Typography variant="caption" color="text.secondary">
+                              {response.authorName || 'Employee'} · {formatDateTime(response.createdAt)}
+                            </Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                              {response.statusUpdate}
+                            </Typography>
+                            {Array.isArray(response.files) && response.files.length > 0 && (
+                              <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+                                {response.files
+                                  .filter(
+                                    (file): file is StatusAttachment =>
+                                      typeof file === 'object' &&
+                                      file !== null &&
+                                      'name' in file &&
+                                      'url' in file
+                                  )
+                                  .map((file) => (
+                                    <Button
+                                      key={file.id}
+                                      component="a"
+                                      href={file.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      size="small"
+                                      sx={{ minWidth: 0, px: 0.5, textTransform: 'none' }}
+                                    >
+                                      {file.name}
+                                    </Button>
+                                  ))}
+                              </Stack>
+                            )}
+                          </Box>
+                        ))}
+                      </Stack>
+                    )}
+
+                    {isActiveStopper && role === 'employee' && (
+                      <Stack spacing={1.25} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+                        <TextField
+                          fullWidth
+                          multiline
+                          minRows={2}
+                          label="Status Update"
+                          value={stopperResponse.text}
+                          onChange={(event) =>
+                            setStopperResponse((current) => ({ ...current, text: event.target.value }))
+                          }
+                        />
+                        <Button
+                          component="label"
+                          variant="outlined"
+                          size="small"
+                          startIcon={<AttachFileIcon />}
+                          sx={{ borderRadius: 2, fontWeight: 700 }}
+                        >
+                          Attach Files
+                          <input hidden type="file" multiple onChange={addStopperResponseFiles} />
+                        </Button>
+                        {stopperResponse.files.length > 0 && (
+                          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+                            {stopperResponse.files.map((file) => (
+                              <Chip
+                                key={`${file.name}-${file.lastModified}-${file.size}`}
+                                label={file.name}
+                                size="small"
+                                onDelete={() =>
+                                  setStopperResponse((current) => ({
+                                    ...current,
+                                    files: current.files.filter((item) => item !== file),
+                                  }))
+                                }
+                              />
+                            ))}
+                          </Stack>
+                        )}
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={() => void submitStopperResponse(update.id)}
+                          disabled={respondingToStopper || !stopperResponse.text.trim()}
+                          sx={{ borderRadius: 2, fontWeight: 700 }}
+                        >
+                          {respondingToStopper ? 'Saving...' : 'Submit Update'}
+                        </Button>
+                      </Stack>
+                    )}
+
                     <Stack direction="row" spacing={1} sx={{ mt: 'auto', pt: 2, flexWrap: 'wrap', rowGap: 0.5 }}>
                       {update.markAsComplete && (
-                        <Chip icon={<CheckCircleIcon />} label="Completed" color="success" size="small" sx={{ fontWeight: 700 }} />
+                        <Chip
+                          icon={<CheckCircleIcon />}
+                          label="Completed"
+                          color="success"
+                          size="small"
+                          sx={{ fontWeight: 700 }}
+                        />
                       )}
                       {update.subtractsRequestedAmount && (
                         <Chip
@@ -665,9 +1351,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   pr: isFromRight ? { md: 7, xs: 0 } : 0,
                   pt: isFromRowEnd ? { md: 6, xs: 0 } : 0,
                   scrollMarginTop: 96,
-                  animation: timelineFocus?.targetId === 'request-status-resolution'
-                    ? 'timelineResolutionFocus 900ms ease-in-out'
-                    : 'none',
+                  animation:
+                    timelineFocus?.targetId === 'request-status-resolution'
+                      ? 'timelineResolutionFocus 900ms ease-in-out'
+                      : 'none',
                   '@keyframes timelineResolutionFocus': {
                     '0%': { transform: 'scale(1)' },
                     '30%': { transform: 'scale(0.975)' },
@@ -750,7 +1437,11 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
                       <Stack spacing={1}>
                         <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: '#fafcfa', border: '1px solid rgba(0,0,0,0.06)' }}>
-                          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1 }}>
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1 }}
+                          >
                             <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
                               Seminar Evaluation
                             </Typography>
@@ -765,7 +1456,14 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 target="_blank"
                                 rel="noreferrer"
                                 disabled={!request.participantFeedbackFormUrl}
-                                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
+                                sx={{
+                                  textTransform: 'none',
+                                  fontWeight: 700,
+                                  fontSize: '0.75rem',
+                                  py: 0.3,
+                                  px: 1,
+                                  whiteSpace: 'nowrap',
+                                }}
                               >
                                 Open
                               </Button>
@@ -774,11 +1472,22 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 variant="outlined"
                                 startIcon={<EditIcon sx={{ fontSize: 13 }} />}
                                 component="a"
-                                href={request.participantFeedbackFormId ? `https://docs.google.com/forms/d/${request.participantFeedbackFormId}/edit` : undefined}
+                                href={
+                                  request.participantFeedbackFormId
+                                    ? `https://docs.google.com/forms/d/${request.participantFeedbackFormId}/edit`
+                                    : undefined
+                                }
                                 target="_blank"
                                 rel="noreferrer"
                                 disabled={!request.participantFeedbackFormId}
-                                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
+                                sx={{
+                                  textTransform: 'none',
+                                  fontWeight: 700,
+                                  fontSize: '0.75rem',
+                                  py: 0.3,
+                                  px: 1,
+                                  whiteSpace: 'nowrap',
+                                }}
                               >
                                 Edit
                               </Button>
@@ -786,10 +1495,23 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 size="small"
                                 variant="outlined"
                                 color="inherit"
-                                startIcon={copiedLink === 'Participant Form' ? <CheckIcon sx={{ fontSize: 13, color: 'success.main' }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
+                                startIcon={
+                                  copiedLink === 'Participant Form' ? (
+                                    <CheckIcon sx={{ fontSize: 13, color: 'success.main' }} />
+                                  ) : (
+                                    <ContentCopyIcon sx={{ fontSize: 13 }} />
+                                  )
+                                }
                                 onClick={() => handleCopyFormLink('Participant Form', request.participantFeedbackFormUrl)}
                                 disabled={!request.participantFeedbackFormUrl}
-                                sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
+                                sx={{
+                                  textTransform: 'none',
+                                  fontWeight: 600,
+                                  fontSize: '0.75rem',
+                                  py: 0.3,
+                                  px: 1,
+                                  whiteSpace: 'nowrap',
+                                }}
                               >
                                 {copiedLink === 'Participant Form' ? 'Copied!' : 'Copy'}
                               </Button>
@@ -799,14 +1521,20 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 startIcon={<SummaryIcon sx={{ fontSize: 13 }} />}
                                 onClick={() => void loadEvaluationSummary()}
                                 disabled={!request.participantFeedbackFormId}
-                                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', py: 0.3, px: 1, whiteSpace: 'nowrap' }}
+                                sx={{
+                                  textTransform: 'none',
+                                  fontWeight: 700,
+                                  fontSize: '0.75rem',
+                                  py: 0.3,
+                                  px: 1,
+                                  whiteSpace: 'nowrap',
+                                }}
                               >
                                 Summary
                               </Button>
                             </Stack>
                           </Stack>
                         </Box>
-
                       </Stack>
                     </CardContent>
                   </Card>
@@ -830,150 +1558,203 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         </Box>
       </Container>
 
-      {!isConcluded && (request.isStopped ? canControlStopper : (role === 'admin' || role === 'employee' || role === 'employee-department')) && (
-        <Fab
-          variant="extended"
-          color="primary"
-          onClick={request.isStopped ? () => void handleResumeProgress() : openAdd}
-          disabled={saving}
-          sx={{
-            position: 'fixed',
-            right: 24,
-            bottom: 24,
-            zIndex: 1100,
-            px: 2.5,
-            fontWeight: 700,
-            boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)',
-          }}
-        >
-          {request.isStopped ? <ResumeIcon sx={{ mr: 1 }} /> : <AddIcon sx={{ mr: 1 }} />}
-          {request.isStopped ? 'Resume Progress' : 'Add Status'}
-        </Fab>
-      )}
+      {!isConcluded &&
+        (request.isStopped
+          ? canControlStopper
+          : role === 'admin' || role === 'employee' || role === 'employee-department') && (
+          <Fab
+            variant="extended"
+            color="primary"
+            onClick={request.isStopped ? () => void handleResumeProgress() : openAdd}
+            disabled={saving}
+            sx={{
+              position: 'fixed',
+              right: 24,
+              bottom: 24,
+              zIndex: 1100,
+              px: 2.5,
+              fontWeight: 700,
+              boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)',
+            }}
+          >
+            {request.isStopped ? <ResumeIcon sx={{ mr: 1 }} /> : <AddIcon sx={{ mr: 1 }} />}
+            {request.isStopped ? 'Resume Progress' : 'Add Status'}
+          </Fab>
+        )}
 
       {/* Add Status Update Dialog */}
       <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle sx={{ fontWeight: 800 }}>Add Status Update</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5} sx={{ pt: 0.5 }}>
-            <TextField
-              required
-              autoFocus
-              fullWidth
-              multiline
-              minRows={2}
-              label={form.addStopper ? 'Stopper Reason' : 'Status Update'}
-              value={form.statusUpdate}
-              onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
-            />
-            <TextField
-              fullWidth
-              multiline
-              minRows={2}
-              label="Remarks"
-              value={form.remarks}
-              onChange={(event) => setForm((current) => ({ ...current, remarks: event.target.value }))}
-            />
-            <Button component="label" variant="outlined" startIcon={<AttachFileIcon />} sx={{ borderRadius: 2, fontWeight: 700 }}>
-              Attach Files
-              <input hidden type="file" multiple onChange={addSelectedFiles} />
-            </Button>
-            {form.files.length > 0 && (
-              <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                {form.files.map((file) => (
-                  <Chip
-                    key={`${file.name}-${file.lastModified}-${file.size}`}
-                    label={file.name}
-                    size="small"
-                    onDelete={() => removeSelectedFile(file)}
-                  />
-                ))}
+            {/* Fixed Form Controls at Top */}
+            {!form.addStopper && (
+              <Stack spacing={1}>
+                <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                  Status Mark <Box component="span" sx={{ color: 'error.main' }}>*</Box>
+                </Typography>
+                <ToggleButtonGroup
+                  value={form.statusMark || 'pending'}
+                  exclusive
+                  onChange={(_, val) => {
+                    if (val) {
+                      setForm((curr) => ({ ...curr, statusMark: val as StatusForm['statusMark'] }));
+                    }
+                  }}
+                  size="small"
+                  fullWidth
+                  sx={{
+                    '& .MuiToggleButton-root': {
+                      borderRadius: 2,
+                      fontWeight: 700,
+                      textTransform: 'none',
+                      py: 1,
+                      borderColor: 'rgba(0, 0, 0, 0.12)',
+                    },
+                  }}
+                >
+                  <ToggleButton
+                    value="pending"
+                    sx={{
+                      '&.Mui-selected': {
+                        bgcolor: 'rgba(237, 108, 2, 0.12)',
+                        color: 'warning.dark',
+                        borderColor: 'warning.main',
+                      },
+                    }}
+                  >
+                    Pending
+                  </ToggleButton>
+                  <ToggleButton
+                    value="completed"
+                    sx={{
+                      '&.Mui-selected': {
+                        bgcolor: 'rgba(46, 125, 50, 0.12)',
+                        color: 'success.dark',
+                        borderColor: 'success.main',
+                      },
+                    }}
+                  >
+                    Completed
+                  </ToggleButton>
+                  <ToggleButton
+                    value="denied"
+                    sx={{
+                      '&.Mui-selected': {
+                        bgcolor: 'rgba(211, 47, 47, 0.12)',
+                        color: 'error.dark',
+                        borderColor: 'error.main',
+                      },
+                    }}
+                  >
+                    Denied
+                  </ToggleButton>
+                </ToggleButtonGroup>
               </Stack>
             )}
 
-            {!form.addStopper && <Stack spacing={1}>
-              <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
-                Status Mark <Box component="span" sx={{ color: 'error.main' }}>*</Box>
-              </Typography>
-              <ToggleButtonGroup
-                value={form.statusMark || 'pending'}
-                exclusive
-                onChange={(_, val) => {
-                  if (val) {
-                    setForm((curr) => ({ ...curr, statusMark: val as StatusForm['statusMark'] }));
-                  }
-                }}
-                size="small"
-                fullWidth
-                sx={{
-                  '& .MuiToggleButton-root': {
-                    borderRadius: 2,
-                    fontWeight: 700,
-                    textTransform: 'none',
-                    py: 1,
-                    borderColor: 'rgba(0, 0, 0, 0.12)',
-                  },
-                }}
-              >
-                <ToggleButton
-                  value="pending"
-                  sx={{
-                    '&.Mui-selected': {
-                      bgcolor: 'rgba(237, 108, 2, 0.12)',
-                      color: 'warning.dark',
-                      borderColor: 'warning.main',
-                    },
-                  }}
-                >
-                  Pending
-                </ToggleButton>
-                <ToggleButton
-                  value="completed"
-                  sx={{
-                    '&.Mui-selected': {
-                      bgcolor: 'rgba(46, 125, 50, 0.12)',
-                      color: 'success.dark',
-                      borderColor: 'success.main',
-                    },
-                  }}
-                >
-                  Completed
-                </ToggleButton>
-                <ToggleButton
-                  value="denied"
-                  sx={{
-                    '&.Mui-selected': {
-                      bgcolor: 'rgba(211, 47, 47, 0.12)',
-                      color: 'error.dark',
-                      borderColor: 'error.main',
-                    },
-                  }}
-                >
-                  Denied
-                </ToggleButton>
-              </ToggleButtonGroup>
-            </Stack>}
+            {!form.addStopper && (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={hasDeductedBudget ? false : form.subtractsRequestedAmount}
+                    disabled={hasDeductedBudget}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, subtractsRequestedAmount: event.target.checked }))
+                    }
+                    color="primary"
+                  />
+                }
+                label={
+                  <Typography
+                    variant="body2"
+                    sx={{ color: hasDeductedBudget ? 'text.disabled' : 'text.primary', fontWeight: 500 }}
+                  >
+                    Subtract requested amount from CapDev balance
+                    {hasDeductedBudget && ' (Already deducted)'}
+                  </Typography>
+                }
+              />
+            )}
 
-            {!form.addStopper && <FormControlLabel
-              control={
-                <Checkbox
-                  checked={hasDeductedBudget ? false : form.subtractsRequestedAmount}
-                  disabled={hasDeductedBudget}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, subtractsRequestedAmount: event.target.checked }))
-                  }
-                  color="primary"
+            {canControlStopper && (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={form.addStopper}
+                    onChange={(event) => setForm((current) => ({ ...current, addStopper: event.target.checked }))}
+                    color="error"
+                  />
+                }
+                label={<Typography variant="body2" sx={{ fontWeight: 500 }}>Add stopper</Typography>}
+              />
+            )}
+
+            {/* Dynamic Fields Section */}
+            {form.addStopper ? (
+              <Stack spacing={2} sx={{ pt: 1 }}>
+                <TextField
+                  required
+                  autoFocus
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  label="Stopper Reason"
+                  value={form.statusUpdate}
+                  onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
                 />
-              }
-              label={
-                <Typography variant="body2" sx={{ color: hasDeductedBudget ? 'text.disabled' : 'text.primary', fontWeight: 500 }}>
-                  Subtract requested amount from CapDev balance
-                  {hasDeductedBudget && ' (Already deducted)'}
-                </Typography>
-              }
-            />}
-
-            {canControlStopper && <FormControlLabel control={<Checkbox checked={form.addStopper} onChange={(event) => setForm((current) => ({ ...current, addStopper: event.target.checked }))} color="error" />} label={<Typography variant="body2" sx={{ fontWeight: 500 }}>Add stopper</Typography>} />}
+                <Button
+                  component="label"
+                  variant="outlined"
+                  startIcon={<AttachFileIcon />}
+                  sx={{ borderRadius: 2, fontWeight: 700, width: 'fit-content' }}
+                >
+                  Attach Files
+                  <input hidden type="file" multiple onChange={(event) => addSelectedFiles('stopper', event)} />
+                </Button>
+                {(pendingFiles['stopper'] || []).length > 0 && (
+                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                    {pendingFiles['stopper'].map((file) => (
+                      <Chip
+                        key={`${file.name}-${file.lastModified}-${file.size}`}
+                        label={file.name}
+                        size="small"
+                        onDelete={() => removeSelectedFile('stopper', file)}
+                      />
+                    ))}
+                  </Stack>
+                )}
+              </Stack>
+            ) : (
+              <Box sx={{ pt: 1 }}>
+                {definitions.length > 0 ? (
+                  <Grid container spacing={2}>
+                    {definitions.map((field) => renderDynamicInput(field))}
+                  </Grid>
+                ) : (
+                  <Stack spacing={2}>
+                    <TextField
+                      required
+                      autoFocus
+                      fullWidth
+                      multiline
+                      minRows={2}
+                      label="Status Update"
+                      value={form.statusUpdate}
+                      onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
+                    />
+                    <TextField
+                      fullWidth
+                      multiline
+                      minRows={2}
+                      label="Remarks"
+                      value={form.remarks}
+                      onChange={(event) => setForm((current) => ({ ...current, remarks: event.target.value }))}
+                    />
+                  </Stack>
+                )}
+              </Box>
+            )}
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
@@ -983,7 +1764,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           <Button
             variant="contained"
             onClick={handleInitiateSave}
-            disabled={saving || !form.statusUpdate.trim() || (!form.addStopper && !form.statusMark)}
+            disabled={
+              saving ||
+              (form.addStopper ? !form.statusUpdate.trim() : !form.statusMark)
+            }
             sx={{ fontWeight: 700, borderRadius: 2 }}
           >
             {saving ? 'Saving...' : form.addStopper ? 'Stop Progress' : 'Save Status'}
@@ -1006,7 +1790,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5} sx={{ py: 1 }}>
-
             <TextField
               label="Deducted Amount"
               type="number"
@@ -1025,28 +1808,39 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
                 <Stack spacing={1.5}>
                   <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" color="text.secondary">Original Requested Amount</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Original Requested Amount
+                    </Typography>
                     <Typography variant="body2" sx={{ fontWeight: 700 }}>
                       {formatCurrency(request.requestedBudget)}
                     </Typography>
                   </Stack>
                   <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" color="text.secondary">CapDev Available Balance</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      CapDev Available Balance
+                    </Typography>
                     <Typography variant="body2" sx={{ fontWeight: 700, color: 'primary.dark' }}>
                       {formatCurrency(capdev?.budget || '0')}
                     </Typography>
                   </Stack>
                   <Divider />
                   <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" sx={{ fontWeight: 700 }}>Est. Remaining CapDev Balance</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                      Est. Remaining CapDev Balance
+                    </Typography>
                     <Typography
                       variant="body2"
                       sx={{
                         fontWeight: 800,
-                        color: (Number(capdev?.budget || 0) - (Number(editableDeductedAmount) || 0)) < 0 ? 'error.main' : 'primary.dark',
+                        color:
+                          Number(capdev?.budget || 0) - (Number(editableDeductedAmount) || 0) < 0
+                            ? 'error.main'
+                            : 'primary.dark',
                       }}
                     >
-                      {formatCurrency(Number(capdev?.budget || 0) - (Number(editableDeductedAmount) || 0))}
+                      {formatCurrency(
+                        Number(capdev?.budget || 0) - (Number(editableDeductedAmount) || 0)
+                      )}
                     </Typography>
                   </Stack>
                 </Stack>
@@ -1057,7 +1851,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               <Alert severity="warning">Please enter a valid deduction amount greater than ₱0.00.</Alert>
             )}
             {capdev && Number(editableDeductedAmount) > Number(capdev.budget) && (
-              <Alert severity="error">The entered amount exceeds the remaining CapDev balance ({formatCurrency(capdev.budget)}).</Alert>
+              <Alert severity="error">
+                The entered amount exceeds the remaining CapDev balance ({formatCurrency(capdev.budget)}).
+              </Alert>
             )}
           </Stack>
         </DialogContent>
@@ -1069,7 +1865,11 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             variant="contained"
             color="primary"
             onClick={() => void executeSaveUpdate(editableDeductedAmount)}
-            disabled={saving || Number(editableDeductedAmount) <= 0 || (capdev !== null && Number(editableDeductedAmount) > Number(capdev.budget))}
+            disabled={
+              saving ||
+              Number(editableDeductedAmount) <= 0 ||
+              (capdev !== null && Number(editableDeductedAmount) > Number(capdev.budget))
+            }
             sx={{ fontWeight: 700, borderRadius: 2 }}
           >
             {saving ? 'Deducting & Saving...' : 'Confirm & Deduct'}
@@ -1118,19 +1918,14 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             {concluding
               ? 'Updating...'
               : concludeAction === 'completed'
-                ? 'Confirm Complete'
-                : 'Confirm Deny'}
+              ? 'Confirm Complete'
+              : 'Confirm Deny'}
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* Generated Google Forms Completion Modal */}
-      <Dialog
-        open={formsModalOpen}
-        onClose={() => setFormsModalOpen(false)}
-        maxWidth="sm"
-        fullWidth
-      >
+      <Dialog open={formsModalOpen} onClose={() => setFormsModalOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: 'rgba(46, 125, 50, 0.12)', display: 'flex' }}>
             <CheckCircleIcon color="success" />
@@ -1141,9 +1936,21 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           <Stack spacing={1.5} sx={{ py: 1 }}>
             <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#fafcfa' }}>
               <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1.5 }}>
+                <Stack
+                  direction="row"
+                  spacing={2}
+                  sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 1.5 }}
+                >
                   <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', minWidth: 0 }}>
-                    <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: 'rgba(21, 101, 192, 0.1)', color: '#1565c0', display: 'flex' }}>
+                    <Box
+                      sx={{
+                        p: 1,
+                        borderRadius: 1.5,
+                        bgcolor: 'rgba(21, 101, 192, 0.1)',
+                        color: '#1565c0',
+                        display: 'flex',
+                      }}
+                    >
                       <FormIcon fontSize="small" />
                     </Box>
                     <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
@@ -1170,7 +1977,11 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       size="small"
                       startIcon={<EditIcon fontSize="small" />}
                       component="a"
-                      href={request.participantFeedbackFormId ? `https://docs.google.com/forms/d/${request.participantFeedbackFormId}/edit` : undefined}
+                      href={
+                        request.participantFeedbackFormId
+                          ? `https://docs.google.com/forms/d/${request.participantFeedbackFormId}/edit`
+                          : undefined
+                      }
                       target="_blank"
                       rel="noreferrer"
                       disabled={!request.participantFeedbackFormId}
@@ -1182,7 +1993,13 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       variant="outlined"
                       color="inherit"
                       size="small"
-                      startIcon={copiedLink === 'Modal Participant' ? <CheckIcon color="success" fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
+                      startIcon={
+                        copiedLink === 'Modal Participant' ? (
+                          <CheckIcon color="success" fontSize="small" />
+                        ) : (
+                          <ContentCopyIcon fontSize="small" />
+                        )
+                      }
                       onClick={() => handleCopyFormLink('Modal Participant', request.participantFeedbackFormUrl)}
                       disabled={!request.participantFeedbackFormUrl}
                       sx={{ fontWeight: 600, borderRadius: 1.5, textTransform: 'none', whiteSpace: 'nowrap' }}
@@ -1225,7 +2042,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         onClose={() => setSummaryModalOpen(false)}
         onRefresh={() => void loadEvaluationSummary()}
       />
-      <ActionErrorDialog open={Boolean(error)} title="Unable to Complete Action" message={error} onClose={() => setError('')} />
+      <ActionErrorDialog
+        open={Boolean(error)}
+        title="Unable to Complete Action"
+        message={error}
+        onClose={() => setError('')}
+      />
     </Box>
   );
 }
