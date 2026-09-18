@@ -23,7 +23,9 @@ export default function ActionErrorDialog({ open, title, message, onClose }: Act
         </Stack>
       </DialogContent>
       <DialogActions sx={{ p: 2 }}>
-        <Button variant="contained" onClick={onClose}>Understood</Button>
+        <Button variant="contained" onClick={onClose} sx={{ fontWeight: 700, borderRadius: 2, px: 2.5 }}>
+          Understood
+        </Button>
       </DialogActions>
     </Dialog>
   );

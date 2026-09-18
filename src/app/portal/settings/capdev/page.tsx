@@ -42,6 +42,7 @@ import {
   getHalfFieldLayout,
   useFieldReorder,
 } from '@/components/FieldReorder';
+import ActionErrorDialog from '@/components/ActionErrorDialog';
 import {
   getCurrentUserAccess,
   getDepartmentOptions,
@@ -96,6 +97,7 @@ export default function CapdevConfigPage() {
   const [isSavingConfiguration, setIsSavingConfiguration] = useState(false);
   const [configurationSaved, setConfigurationSaved] = useState(false);
   const [hasPendingDeletion, setHasPendingDeletion] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   const configurationSaveTimeout = useRef<number | null>(null);
 
   useEffect(() => () => {

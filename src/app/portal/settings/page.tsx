@@ -19,12 +19,12 @@ import {
 import { SettingsGridSkeleton } from '@/components/Skeletons';
 import {
   People as PeopleIcon,
-  Assessment as ReportsIcon,
   Build as MaintenanceIcon,
   School as CapDevIcon,
   Assignment as RequestIcon,
   ChevronRight as ChevronRightIcon,
   Analytics as AnalyticsIcon,
+  Timeline as TimelineIcon,
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess, getDynamicFieldCounts, getMaintenanceMode, getUserManagementCounts, setMaintenanceMode as saveMaintenanceMode, type AppRole } from '@/app/actions';
@@ -35,7 +35,7 @@ export default function SettingsPage() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceSaving, setMaintenanceSaving] = useState(false);
   const [maintenanceError, setMaintenanceError] = useState('');
-  const [counts, setCounts] = useState({ capdevFieldsCount: 0, requestFieldsCount: 0 });
+  const [counts, setCounts] = useState({ capdevFieldsCount: 0, requestFieldsCount: 0, statusUpdateFieldsCount: 0 });
   const [userCounts, setUserCounts] = useState({ activeUsers: 0, pendingApprovals: 0 });
   const [role, setRole] = useState<AppRole | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
@@ -102,30 +102,22 @@ export default function SettingsPage() {
       ),
     },
     {
-      title: 'Reports',
-      icon: <ReportsIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'Generate and download the monitoring sheet.',
-      control: (
-        <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
-          <Chip label="Excel" size="small" variant="outlined" color="success" />
-          <Chip label="1 Template" size="small" variant="outlined" />
-        </Stack>
-      ),
-      actionText: 'Export Reports',
-      route: '/portal/reports',
-    },
-    {
-      title: 'Analytics',
+      title: 'Reports & Analytics',
       icon: <AnalyticsIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'View live request and budget metrics.',
+      description: 'Generate Excel monitoring sheets and view live request and budget metrics.',
       control: (
-        <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
+        <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+          <Chip label="Excel Export" size="small" variant="outlined" color="success" />
           <Chip label="3 KPI Cards" size="small" variant="outlined" color="primary" />
           <Chip label="4 Charts" size="small" variant="outlined" />
         </Stack>
       ),
-      actionText: 'Configure Analytics',
-      route: '/portal/analytics',
+      footer: (
+        <Stack direction="row" spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/reports')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Export Reports</Button>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/analytics')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>View Analytics</Button>
+        </Stack>
+      ),
     },
     {
       title: 'Maintenance Mode',
@@ -182,7 +174,19 @@ export default function SettingsPage() {
       actionText: 'Configure Fields',
       route: '/portal/settings/request',
     },
-  ].filter((item) => role === 'admin' || item.title === 'Reports' || item.title === 'Analytics');
+    {
+      title: 'Status Update Configuration',
+      icon: <TimelineIcon color="primary" sx={{ fontSize: 32 }} />,
+      description: 'Configure custom dynamic fields, form layout, and status update options.',
+      control: (
+        <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
+          <Chip label={`${counts.statusUpdateFieldsCount} Dynamic Fields`} size="small" variant="outlined" color="primary" />
+        </Stack>
+      ),
+      actionText: 'Configure Fields',
+      route: '/portal/settings/status-update',
+    },
+  ].filter((item) => role === 'admin' || item.title === 'Reports & Analytics');
 
   if (role === 'employee' || role === 'employee-department') {
     return <Box sx={{ display: 'grid', minHeight: 'calc(100vh - 72px)', placeItems: 'center' }}><Typography color="text.secondary">Settings are available to administrators and viewers only.</Typography></Box>;

@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/db';
-import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
+import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, statusUpdateFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
 import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail, sendSignupVerificationEmail } from '@/lib/email';
@@ -236,7 +236,7 @@ async function getActorSnapshot(access: UserAccess) {
 
 async function writeAuditLog(access: UserAccess, entry: {
   action: 'created' | 'updated' | 'deleted' | 'status_changed' | 'stopped' | 'resumed';
-  entityType: 'capdev' | 'request' | 'status_update' | 'user' | 'capdev_field' | 'request_field' | 'system_setting';
+  entityType: 'capdev' | 'request' | 'status_update' | 'user' | 'capdev_field' | 'request_field' | 'status_update_field' | 'system_setting';
   entityId?: string | number | null;
   entityLabel: string;
   details?: Record<string, unknown>;
@@ -1185,7 +1185,7 @@ export async function deleteCapdev(id: number) {
 export async function getDynamicFieldCounts() {
   try {
     const access = await getCurrentAccess();
-    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevFieldsCount: 0, requestFieldsCount: 0 };
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevFieldsCount: 0, requestFieldsCount: 0, statusUpdateFieldsCount: 0 };
     const capdevCount = await db
       .select({ value: count() })
       .from(capdevFieldDefinitions)
@@ -1196,13 +1196,19 @@ export async function getDynamicFieldCounts() {
       .from(requestFieldDefinitions)
       .where(eq(requestFieldDefinitions.isActive, true));
 
+    const statusUpdateCount = await db
+      .select({ value: count() })
+      .from(statusUpdateFieldDefinitions)
+      .where(eq(statusUpdateFieldDefinitions.isActive, true));
+
     return {
       capdevFieldsCount: capdevCount[0]?.value || 0,
       requestFieldsCount: requestCount[0]?.value || 0,
+      statusUpdateFieldsCount: statusUpdateCount[0]?.value || 0,
     };
   } catch (error) {
     console.error('Failed to get dynamic field counts:', error);
-    return { capdevFieldsCount: 0, requestFieldsCount: 0 };
+    return { capdevFieldsCount: 0, requestFieldsCount: 0, statusUpdateFieldsCount: 0 };
   }
 }
 
@@ -1452,6 +1458,163 @@ export async function updateRequestFieldsOrder(
     return { success: true };
   } catch (error) {
     console.error('Failed to reorder Request fields:', error);
+    return { success: false, error: 'Database update failed' };
+  }
+}
+
+export async function getStatusUpdateFieldDefinitions() {
+  try {
+    const access = await getCurrentAccess();
+    if (!access) return [];
+    const fields = await db
+      .select()
+      .from(statusUpdateFieldDefinitions)
+      .where(eq(statusUpdateFieldDefinitions.isActive, true))
+      .orderBy(statusUpdateFieldDefinitions.sortOrder);
+
+    // If no fields configured yet, seed the default dynamic fields: Status Update (required) and Remarks (optional)
+    if (fields.length === 0 && access.role === 'admin') {
+      const seeded = await db.insert(statusUpdateFieldDefinitions).values([
+        {
+          name: 'Status Update',
+          type: 'text',
+          isRequired: true,
+          section: 'required',
+          width: 'full',
+          columnPosition: 'left',
+          sortOrder: 1,
+          placeholder: 'Enter status update details',
+          updatedById: access.userId,
+        },
+        {
+          name: 'Remarks',
+          type: 'text',
+          isRequired: false,
+          section: 'optional',
+          width: 'full',
+          columnPosition: 'left',
+          sortOrder: 2,
+          placeholder: 'Enter remarks or additional context',
+          updatedById: access.userId,
+        },
+      ]).returning();
+      return seeded;
+    }
+
+    return fields;
+  } catch (error) {
+    console.error('Failed to get Status Update fields:', error);
+    return [];
+  }
+}
+
+export async function saveStatusUpdateFieldDefinition(data: {
+  id?: number;
+  name: string;
+  type: string;
+  options?: unknown[] | null;
+  isRequired: boolean;
+  section: string;
+  width: string;
+  columnPosition?: 'left' | 'right';
+  placeholder?: string | null;
+  sortOrder?: number;
+  updatedById: string;
+}) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    if (data.id) {
+      await db
+        .update(statusUpdateFieldDefinitions)
+        .set({
+          name: data.name,
+          type: data.type,
+          options: data.options || null,
+          isRequired: data.isRequired,
+          section: data.isRequired ? 'required' : 'optional',
+          width: data.width,
+          columnPosition: data.columnPosition || 'left',
+          placeholder: data.placeholder || null,
+          updatedById: data.updatedById,
+          updatedAt: new Date(),
+        })
+        .where(eq(statusUpdateFieldDefinitions.id, data.id));
+      await writeAuditLog(access, { action: 'updated', entityType: 'status_update_field', entityId: data.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
+      return { success: true, id: data.id };
+    } else {
+      const existing = await db
+        .select({ maxOrder: sql<number>`COALESCE(MAX(${statusUpdateFieldDefinitions.sortOrder}), 0)` })
+        .from(statusUpdateFieldDefinitions);
+      const nextOrder = (existing[0]?.maxOrder || 0) + 1;
+
+      const [inserted] = await db
+        .insert(statusUpdateFieldDefinitions)
+        .values({
+          name: data.name,
+          type: data.type,
+          options: data.options || null,
+          isRequired: data.isRequired,
+          section: data.isRequired ? 'required' : 'optional',
+          width: data.width,
+          columnPosition: data.columnPosition || 'left',
+          placeholder: data.placeholder || null,
+          sortOrder: data.sortOrder !== undefined ? data.sortOrder : nextOrder,
+          updatedById: data.updatedById,
+        })
+        .returning({ id: statusUpdateFieldDefinitions.id });
+      await writeAuditLog(access, { action: 'created', entityType: 'status_update_field', entityId: inserted.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
+      return { success: true, id: inserted.id };
+    }
+  } catch (error) {
+    console.error('Failed to save Status Update field:', error);
+    return { success: false, error: 'Database save failed' };
+  }
+}
+
+export async function deleteStatusUpdateFieldDefinition(id: number, updatedById: string) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    const [field] = await db.select({ name: statusUpdateFieldDefinitions.name }).from(statusUpdateFieldDefinitions).where(eq(statusUpdateFieldDefinitions.id, id)).limit(1);
+    await db
+      .update(statusUpdateFieldDefinitions)
+      .set({
+        isActive: false,
+        updatedById: updatedById,
+        updatedAt: new Date(),
+      })
+      .where(eq(statusUpdateFieldDefinitions.id, id));
+    await writeAuditLog(access, { action: 'deleted', entityType: 'status_update_field', entityId: id, entityLabel: field?.name || `Status Update field #${id}` });
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to delete Status Update field:', error);
+    return { success: false, error: 'Database delete failed' };
+  }
+}
+
+export async function updateStatusUpdateFieldsOrder(
+  fieldLayout: Array<{ id: number; columnPosition: 'left' | 'right' }>,
+  updatedById: string,
+) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    if (fieldLayout.length === 0) return { success: true };
+    const orderRows = fieldLayout.map((field, index) => sql`(${field.id}::integer, ${index + 1}::integer, ${field.columnPosition}::varchar)`);
+    await db.execute(sql`
+      UPDATE status_update_field_definitions AS field
+      SET sort_order = ordered.sort_order,
+          column_position = ordered.column_position,
+          updated_by_id = ${updatedById},
+          updated_at = NOW()
+      FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order, column_position)
+      WHERE field.id = ordered.id
+    `);
+    await writeAuditLog(access, { action: 'updated', entityType: 'status_update_field', entityLabel: 'Status Update field layout', details: { fieldLayout } });
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to reorder Status Update fields:', error);
     return { success: false, error: 'Database update failed' };
   }
 }

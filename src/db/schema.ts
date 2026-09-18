@@ -115,6 +115,24 @@ export const requestFieldDefinitions = pgTable('request_field_definitions', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+// Status update dynamic fields definitions configuration
+export const statusUpdateFieldDefinitions = pgTable('status_update_field_definitions', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  type: varchar('type', { length: 50 }).notNull(),
+  options: jsonb('options'),
+  isRequired: boolean('is_required').default(false).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  section: varchar('section', { length: 100 }).default('optional').notNull(),
+  width: varchar('width', { length: 50 }).default('full').notNull(),
+  columnPosition: varchar('column_position', { length: 10 }).default('left').notNull(),
+  sortOrder: integer('sort_order').default(0).notNull(),
+  placeholder: varchar('placeholder', { length: 255 }),
+  updatedById: text('updated_by_id').references(() => users.id).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 // Requests
 export const requests = pgTable('requests', {
   id: serial('id').primaryKey(),
@@ -153,6 +171,7 @@ export const requestStatusUpdates = pgTable('request_status_updates', {
   isStopperResponse: boolean('is_stopper_response').default(false).notNull(),
   isResume: boolean('is_resume').default(false).notNull(),
   stopperId: integer('stopper_id'),
+  additionalInfo: jsonb('additional_info').default({}).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
   uniqueIndex('unique_request_complete_idx')
