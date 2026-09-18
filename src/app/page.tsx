@@ -32,7 +32,7 @@ import {
   ArrowBack as ArrowBackIcon,
   Key as KeyIcon,
 } from '@mui/icons-material';
-import { checkDrizzleConnection, completeSelfRegistration, DbStatus, getDepartmentOptions, getMaintenanceMode, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword } from './actions';
+import { checkDrizzleConnection, completeSelfRegistration, DbStatus, getDepartmentOptions, getMaintenanceMode, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword, requestSignupVerificationCode, verifySignupCode } from './actions';
 import { authClient } from '@/lib/auth/client';
 import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
@@ -58,6 +58,9 @@ export default function Home() {
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [isSignUpMode, setIsSignUpMode] = useState(false);
+  const [signUpStep, setSignUpStep] = useState<1 | 2>(1);
+  const [signUpCode, setSignUpCode] = useState('');
+  const [resendingSignUpCode, setResendingSignUpCode] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [fullName, setFullName] = useState('');
   const [signUpEmail, setSignUpEmail] = useState('');
@@ -225,7 +228,7 @@ export default function Home() {
     }
   };
 
-  const handleSignUp = async (e: React.FormEvent) => {
+  const handleRequestSignUpCode = async (e: React.FormEvent) => {
     e.preventDefault();
     const passwordError = getPasswordValidationError(signUpPassword);
     if (passwordError) {
@@ -233,12 +236,80 @@ export default function Home() {
       setAuthSuccess(null);
       return;
     }
+    if (!fullName.trim()) {
+      setAuthError('Please enter your full name.');
+      return;
+    }
+    if (!signUpEmail.trim()) {
+      setAuthError('Please enter your email address.');
+      return;
+    }
+    if (!signUpDepartment.trim()) {
+      setAuthError('Please select or specify your department.');
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    try {
+      const res = await requestSignupVerificationCode(signUpEmail);
+      if (!res.success) {
+        setAuthError(res.error || 'Failed to send verification code.');
+      } else {
+        setAuthSuccess(res.message || 'Verification code sent to your email.');
+        setSignUpStep(2);
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'An unexpected error occurred.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleResendSignUpCode = async () => {
+    if (!signUpEmail.trim()) return;
+    setResendingSignUpCode(true);
+    setAuthError(null);
+    setAuthSuccess(null);
+    try {
+      const res = await requestSignupVerificationCode(signUpEmail);
+      if (!res.success) {
+        setAuthError(res.error || 'Failed to resend verification code.');
+      } else {
+        setAuthSuccess(res.message || 'A new verification code has been sent to your email.');
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'An unexpected error occurred.');
+    } finally {
+      setResendingSignUpCode(false);
+    }
+  };
+
+  const handleVerifyAndSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!signUpCode.trim()) {
+      setAuthError('Please enter the 6-digit verification code.');
+      return;
+    }
+
     setAuthLoading(true);
     setIsRegistering(true);
     setAuthError(null);
     setAuthSuccess(null);
 
     try {
+      // 1. Verify verification code
+      const verifyRes = await verifySignupCode(signUpEmail, signUpCode);
+      if (!verifyRes.success) {
+        setAuthError(verifyRes.error || 'Invalid or expired verification code.');
+        setAuthLoading(false);
+        setIsRegistering(false);
+        return;
+      }
+
+      // 2. Create the account with Neon Auth
       const result = await authClient.signUp.email({
         name: fullName.trim(),
         email: signUpEmail.trim(),
@@ -247,14 +318,17 @@ export default function Home() {
       if (result?.error) {
         setAuthError(getFriendlyPasswordError(result.error.message, signUpPassword));
         setIsRegistering(false);
+        setAuthLoading(false);
         return;
       }
 
+      // 3. Complete user profile in database
       const profile = await completeSelfRegistration({ role: signUpRole, department: signUpDepartment });
       if (!profile.success) {
         await authClient.signOut();
         setAuthError(profile.error || 'Unable to complete registration.');
         setIsRegistering(false);
+        setAuthLoading(false);
         return;
       }
 
@@ -265,6 +339,8 @@ export default function Home() {
         setSignUpPassword('');
         setSignUpDepartment('');
         setSignUpDepartmentIsOther(false);
+        setSignUpCode('');
+        setSignUpStep(1);
         setIsSignUpMode(false);
         setIsRegistering(false);
         await authClient.signOut();
@@ -281,6 +357,8 @@ export default function Home() {
         setSignUpPassword('');
         setSignUpDepartment('');
         setSignUpDepartmentIsOther(false);
+        setSignUpCode('');
+        setSignUpStep(1);
         setIsSignUpMode(false);
         setIsRegistering(false);
         return;
@@ -292,6 +370,8 @@ export default function Home() {
       setSignUpPassword('');
       setSignUpDepartment('');
       setSignUpDepartmentIsOther(false);
+      setSignUpCode('');
+      setSignUpStep(1);
       router.replace('/portal');
     } catch (err: any) {
       setAuthError(err.message || 'An unexpected server error occurred.');
@@ -373,6 +453,8 @@ export default function Home() {
     setAuthSuccess(null);
     setIsForgotPasswordMode(false);
     setSignUpDepartmentIsOther(false);
+    setSignUpStep(1);
+    setSignUpCode('');
     setIsSignUpMode(true);
   };
 
@@ -380,9 +462,13 @@ export default function Home() {
     setIsForgotPasswordMode(false);
     setIsSignUpMode(false);
     setSignUpDepartmentIsOther(false);
+    setSignUpStep(1);
+    setSignUpCode('');
     setForgotStep(1);
     setForgotError(null);
     setForgotSuccess(null);
+    setAuthError(null);
+    setAuthSuccess(null);
   };
 
 
@@ -535,7 +621,7 @@ export default function Home() {
           {/* Form Header */}
           <Box sx={{ mb: 4 }}>
             <Typography variant="h4" color="text.primary" sx={{ fontWeight: '800', letterSpacing: '-0.5px' }}>
-              {isForgotPasswordMode ? 'Reset Password' : isSignUpMode ? 'Sign Up' : 'Sign In'}
+              {isForgotPasswordMode ? 'Reset Password' : isSignUpMode ? (signUpStep === 2 ? 'Verify Email' : 'Sign Up') : 'Sign In'}
             </Typography>
           </Box>
 
@@ -543,30 +629,113 @@ export default function Home() {
             <>
               {authError && <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>{authError}</Alert>}
               {authSuccess && <Alert severity="success" sx={{ mb: 3, borderRadius: 2 }}>{authSuccess}</Alert>}
-              <form onSubmit={handleSignUp}>
-                <Stack spacing={2.5}>
-                  <TextField label="Full Name" required fullWidth value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><PersonIcon color="action" /></InputAdornment> } }} />
-                  <TextField label="Email Address" type="email" required fullWidth value={signUpEmail} onChange={(e) => setSignUpEmail(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><EmailIcon color="action" /></InputAdornment> } }} />
-                  <TextField label="Password" type="password" required fullWidth value={signUpPassword} onChange={(e) => setSignUpPassword(e.target.value)} disabled={authLoading} helperText={PASSWORD_REQUIREMENTS} slotProps={{ input: { startAdornment: <InputAdornment position="start"><LockIcon color="action" /></InputAdornment> } }} />
-                  <TextField select label="Role" required fullWidth value={signUpRole} onChange={(e) => setSignUpRole(e.target.value as 'employee' | 'employee-department' | 'viewer' | 'viewer-full')} disabled={authLoading} slotProps={{ select: { renderValue: (value) => roleLabel(String(value)) } }}>
-                    {SELF_REGISTRATION_ROLE_OPTIONS.map((option) => (
-                      <MenuItem key={option.value} value={option.value} sx={{ py: 1.25, whiteSpace: 'normal' }}>
-                        <Box>
-                          <Typography variant="body1">{option.label}</Typography>
-                          <Typography variant="caption" color="text.secondary">{option.description}</Typography>
-                        </Box>
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  <DepartmentCombobox options={departmentOptions} value={signUpDepartment} onChange={setSignUpDepartment} otherSelected={signUpDepartmentIsOther} onOtherSelectedChange={setSignUpDepartmentIsOther} required disabled={authLoading} />
-                  <Button type="submit" variant="contained" color="primary" fullWidth size="large" disabled={authLoading || !fullName.trim() || !signUpDepartment.trim()} sx={{ py: 1.7, fontSize: '1.05rem', boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)' }}>
-                    {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Create Account'}
-                  </Button>
-                  <Button variant="text" color="secondary" fullWidth onClick={handleBackToSignIn} disabled={authLoading} startIcon={<ArrowBackIcon />} sx={{ textTransform: 'none', fontWeight: 600 }}>
-                    Back to Sign In
-                  </Button>
-                </Stack>
-              </form>
+              
+              {signUpStep === 1 ? (
+                <form onSubmit={handleRequestSignUpCode}>
+                  <Stack spacing={2.5}>
+                    <TextField label="Full Name" required fullWidth value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><PersonIcon color="action" /></InputAdornment> } }} />
+                    <TextField label="Email Address" type="email" required fullWidth value={signUpEmail} onChange={(e) => setSignUpEmail(e.target.value)} disabled={authLoading} slotProps={{ input: { startAdornment: <InputAdornment position="start"><EmailIcon color="action" /></InputAdornment> } }} />
+                    <TextField label="Password" type="password" required fullWidth value={signUpPassword} onChange={(e) => setSignUpPassword(e.target.value)} disabled={authLoading} helperText={PASSWORD_REQUIREMENTS} slotProps={{ input: { startAdornment: <InputAdornment position="start"><LockIcon color="action" /></InputAdornment> } }} />
+                    <TextField select label="Role" required fullWidth value={signUpRole} onChange={(e) => setSignUpRole(e.target.value as 'employee' | 'employee-department' | 'viewer' | 'viewer-full')} disabled={authLoading} slotProps={{ select: { renderValue: (value) => roleLabel(String(value)) } }}>
+                      {SELF_REGISTRATION_ROLE_OPTIONS.map((option) => (
+                        <MenuItem key={option.value} value={option.value} sx={{ py: 1.25, whiteSpace: 'normal' }}>
+                          <Box>
+                            <Typography variant="body1">{option.label}</Typography>
+                            <Typography variant="caption" color="text.secondary">{option.description}</Typography>
+                          </Box>
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                    <DepartmentCombobox options={departmentOptions} value={signUpDepartment} onChange={setSignUpDepartment} otherSelected={signUpDepartmentIsOther} onOtherSelectedChange={setSignUpDepartmentIsOther} required disabled={authLoading} />
+                    <Button type="submit" variant="contained" color="primary" fullWidth size="large" disabled={authLoading || !fullName.trim() || !signUpEmail.trim() || !signUpDepartment.trim()} sx={{ py: 1.7, fontSize: '1.05rem', boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)' }}>
+                      {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Continue'}
+                    </Button>
+                    <Button variant="text" color="secondary" fullWidth onClick={handleBackToSignIn} disabled={authLoading} startIcon={<ArrowBackIcon />} sx={{ textTransform: 'none', fontWeight: 600 }}>
+                      Back to Sign In
+                    </Button>
+                  </Stack>
+                </form>
+              ) : (
+                <form onSubmit={handleVerifyAndSignUp}>
+                  <Stack spacing={2.5}>
+                    <Box sx={{ p: 2, bgcolor: 'background.default', borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontWeight: 600 }}>
+                        Verification code sent to:
+                      </Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary', mt: 0.5, wordBreak: 'break-all' }}>
+                        {signUpEmail}
+                      </Typography>
+                    </Box>
+
+                    <TextField
+                      label="6-Digit Code"
+                      placeholder="Enter verification code"
+                      required
+                      fullWidth
+                      value={signUpCode}
+                      onChange={(e) => setSignUpCode(e.target.value)}
+                      disabled={authLoading}
+                      slotProps={{
+                        input: {
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <KeyIcon color="action" />
+                            </InputAdornment>
+                          ),
+                        },
+                      }}
+                    />
+
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      color="primary"
+                      fullWidth
+                      size="large"
+                      disabled={authLoading || !signUpCode.trim()}
+                      sx={{
+                        py: 1.7,
+                        fontSize: '1.05rem',
+                        boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)',
+                        '&:hover': {
+                          boxShadow: '0 6px 16px rgba(46, 125, 50, 0.35)',
+                        },
+                      }}
+                    >
+                      {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Verify & Create Account'}
+                    </Button>
+
+                    <Stack direction="row" spacing={1} sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Button
+                        variant="text"
+                        color="primary"
+                        size="small"
+                        onClick={handleResendSignUpCode}
+                        disabled={authLoading || resendingSignUpCode}
+                        sx={{ textTransform: 'none', fontWeight: 600 }}
+                      >
+                        {resendingSignUpCode ? 'Sending...' : 'Resend Code'}
+                      </Button>
+
+                      <Button
+                        variant="text"
+                        color="secondary"
+                        size="small"
+                        onClick={() => {
+                          setSignUpStep(1);
+                          setAuthError(null);
+                          setAuthSuccess(null);
+                        }}
+                        disabled={authLoading}
+                        startIcon={<ArrowBackIcon />}
+                        sx={{ textTransform: 'none', fontWeight: 600 }}
+                      >
+                        Edit Details
+                      </Button>
+                    </Stack>
+                  </Stack>
+                </form>
+              )}
             </>
           ) : !isForgotPasswordMode ? (
             <>

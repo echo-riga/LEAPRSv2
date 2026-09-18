@@ -34,3 +34,38 @@ LEAPRS Portal`;
 
   return data;
 }
+
+export async function sendSignupVerificationEmail(toEmail: string, verificationCode: string) {
+  if (!resendApiKey) {
+    throw new Error('Resend API key is not configured in environment variables');
+  }
+
+  const client = new Resend(resendApiKey);
+  const fromEmail = process.env.RESEND_FROM || 'LEAPRS <onboarding@resend.dev>';
+
+  const plainTextContent = `Hello,
+
+Thank you for registering for the LEAPRS Portal.
+
+Your email verification code is: ${verificationCode}
+
+This code will expire in 15 minutes. Please enter this code on the registration page to verify your email address and complete account creation.
+
+If you did not request this registration, you can safely ignore this email.
+
+LEAPRS Portal`;
+
+  const { data, error } = await client.emails.send({
+    from: fromEmail,
+    to: [toEmail],
+    subject: 'LEAPRS Email Verification Code',
+    text: plainTextContent,
+  });
+
+  if (error) {
+    console.error('Failed to send verification email via Resend:', error);
+    throw new Error(error.message || 'Failed to send verification email');
+  }
+
+  return data;
+}

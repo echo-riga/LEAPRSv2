@@ -1,10 +1,10 @@
 'use server';
 
 import { db } from '@/db';
-import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, notifications, notificationReads, auditLogs } from '@/db/schema';
+import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
 import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
-import { sendPasswordResetEmail } from '@/lib/email';
+import { sendPasswordResetEmail, sendSignupVerificationEmail } from '@/lib/email';
 import {
   createRequestEvaluationForm,
   getEvaluationSummary,
@@ -581,6 +581,12 @@ export async function completeSelfRegistration(input: { role: string; department
     const access: UserAccess = { userId: session.user.id, role, department };
     await db.insert(users).values({ id: access.userId, role, department });
     await writeAuditLog(access, { action: 'created', entityType: 'user', entityId: access.userId, entityLabel: access.userId, details: { role, department, source: 'self_registration' } });
+    
+    // Clean up signup verification record for this user's email if present
+    if (session.user.email) {
+      await db.delete(signupVerifications).where(eq(signupVerifications.email, session.user.email.toLowerCase().trim()));
+    }
+
     return { success: true, pendingApproval: false as const };
   } catch (error) {
     console.error('Failed to complete self-registration:', error);
@@ -2366,6 +2372,96 @@ export async function requestPasswordReset(rawEmail: string) {
     return {
       success: false,
       error: error.message || 'Failed to send password reset email. Please try again.',
+    };
+  }
+}
+
+export async function requestSignupVerificationCode(rawEmail: string) {
+  try {
+    const email = rawEmail.trim().toLowerCase();
+    if (!email) {
+      return { success: false, error: 'Please enter your email address.' };
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return { success: false, error: 'Please enter a valid email address.' };
+    }
+
+    // Check if user already exists in neon_auth.user
+    const existingAuth = await db.execute(sql`
+      SELECT id FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1
+    `);
+
+    if (existingAuth.rows.length > 0) {
+      return { success: false, error: 'An account with this email address already exists. Please sign in.' };
+    }
+
+    // Generate 6-digit numeric verification code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes validity
+
+    // Remove any previous active signup verification codes for this email
+    await db.delete(signupVerifications).where(eq(signupVerifications.email, email));
+
+    // Save signup verification code
+    await db.insert(signupVerifications).values({
+      email,
+      code,
+      expiresAt,
+      isVerified: false,
+    });
+
+    // Send plain text email via Resend
+    await sendSignupVerificationEmail(email, code);
+
+    return {
+      success: true,
+      message: 'A 6-digit verification code has been sent to your email address.',
+    };
+  } catch (error: any) {
+    console.error('Signup verification request failed:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to send verification code. Please try again.',
+    };
+  }
+}
+
+export async function verifySignupCode(rawEmail: string, rawCode: string) {
+  try {
+    const email = rawEmail.trim().toLowerCase();
+    const code = rawCode.trim();
+
+    if (!email || !code) {
+      return { success: false, error: 'Please provide both email and verification code.' };
+    }
+
+    // Check code in database
+    const [record] = await db
+      .select()
+      .from(signupVerifications)
+      .where(and(eq(signupVerifications.email, email), eq(signupVerifications.code, code)))
+      .limit(1);
+
+    if (!record) {
+      return { success: false, error: 'Invalid verification code. Please check your email and try again.' };
+    }
+
+    if (new Date() > record.expiresAt) {
+      await db.delete(signupVerifications).where(eq(signupVerifications.id, record.id));
+      return { success: false, error: 'Verification code has expired. Please request a new code.' };
+    }
+
+    // Mark as verified
+    await db.update(signupVerifications).set({ isVerified: true }).where(eq(signupVerifications.id, record.id));
+
+    return { success: true, message: 'Email verified successfully.' };
+  } catch (error: any) {
+    console.error('Signup code verification failed:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to verify code. Please try again.',
     };
   }
 }

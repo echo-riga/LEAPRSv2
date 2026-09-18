@@ -172,6 +172,18 @@ export const passwordResets = pgTable('password_resets', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// Signup Email Verifications table
+export const signupVerifications = pgTable('signup_verifications', {
+  id: serial('id').primaryKey(),
+  email: varchar('email', { length: 255 }).notNull(),
+  code: varchar('code', { length: 10 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  isVerified: boolean('is_verified').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('signup_verifications_email_idx').on(table.email),
+]);
+
 // Notifications table
 export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
