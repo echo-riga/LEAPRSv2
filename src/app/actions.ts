@@ -1499,8 +1499,17 @@ export async function getStatusUpdateFieldDefinitions() {
       .where(eq(statusUpdateFieldDefinitions.isActive, true))
       .orderBy(statusUpdateFieldDefinitions.sortOrder);
 
-    // If no fields configured yet, seed the default dynamic fields: Status Update (required), Remarks (optional), Attachments (optional)
+    // Seed defaults only for a genuinely new configuration. If definitions
+    // exist but are inactive, the admin intentionally deleted every field and
+    // an empty configuration must remain empty.
     if (fields.length === 0) {
+      const [existingDefinition] = await db
+        .select({ id: statusUpdateFieldDefinitions.id })
+        .from(statusUpdateFieldDefinitions)
+        .limit(1);
+
+      if (existingDefinition) return [];
+
       const seeded = await db.insert(statusUpdateFieldDefinitions).values([
         {
           name: 'Status Update',
@@ -1787,25 +1796,53 @@ export async function deleteRequest(id: number) {
       }
     }
 
-    // Delete child records (status updates) first, then the request in one atomic database execution
+    // Delete child records first, restore any amount previously deducted by this
+    // request, then delete the request in one atomic database execution.
     const result = await db.execute(sql`
       WITH deleted_status_updates AS (
         DELETE FROM request_status_updates
         WHERE request_id = ${id}
-        RETURNING id
+        RETURNING id, subtracts_requested_amount
       ),
       deleted_request AS (
         DELETE FROM requests
         WHERE id = ${id}
           AND (SELECT COUNT(*) FROM deleted_status_updates) >= 0
-        RETURNING id, capdev_id, setting, requestor_name
+        RETURNING id, capdev_id, setting, requestor_name, requested_budget
+      ),
+      restored_capdev AS (
+        UPDATE capdevs
+        SET budget = capdevs.budget + deleted_request.requested_budget,
+            updated_at = NOW()
+        FROM deleted_request
+        WHERE capdevs.id = deleted_request.capdev_id
+          AND EXISTS (
+            SELECT 1
+            FROM deleted_status_updates
+            WHERE subtracts_requested_amount = true
+          )
+        RETURNING capdevs.id
       ),
       inserted_audit AS (
         INSERT INTO audit_logs (actor_id, actor_name, actor_email, action, entity_type, entity_id, entity_label, details)
         SELECT ${actor.actorId}, ${actor.actorName}, ${actor.actorEmail}, 'deleted', 'request', deleted_request.id::text, 'Request #' || deleted_request.id,
-          jsonb_build_object('capdevId', deleted_request.capdev_id, 'capdevAipCode', capdev.aip_code, 'setting', deleted_request.setting, 'requestorName', deleted_request.requestor_name)
+          jsonb_build_object(
+            'capdevId', deleted_request.capdev_id,
+            'capdevAipCode', capdev.aip_code,
+            'setting', deleted_request.setting,
+            'requestorName', deleted_request.requestor_name,
+            'restoredBudget', CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM deleted_status_updates
+                WHERE subtracts_requested_amount = true
+              ) THEN deleted_request.requested_budget
+              ELSE 0
+            END
+          )
         FROM deleted_request
         INNER JOIN capdevs AS capdev ON capdev.id = deleted_request.capdev_id
+        WHERE (SELECT COUNT(*) FROM restored_capdev) >= 0
         RETURNING id
       )
       SELECT id FROM inserted_audit
