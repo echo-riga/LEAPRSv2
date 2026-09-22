@@ -1027,6 +1027,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   return true;
                 })
               : [];
+            const primaryStatusIsDynamicDuplicate = !isStopper && extraFields.some(([, value]) =>
+              typeof value === 'string' && value.trim() === update.statusUpdate.trim()
+            );
 
             return (
               <Box
@@ -1134,12 +1137,14 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         Reason
                       </Typography>
                     )}
-                    <Typography
-                      variant="body1"
-                      sx={{ fontWeight: 600, color: 'text.primary', mb: update.remarks ? 0.75 : 0 }}
-                    >
-                      {update.statusUpdate}
-                    </Typography>
+                    {!primaryStatusIsDynamicDuplicate && (
+                      <Typography
+                        variant="body1"
+                        sx={{ fontWeight: 600, color: 'text.primary', mb: update.remarks ? 0.75 : 0 }}
+                      >
+                        {update.statusUpdate}
+                      </Typography>
+                    )}
                     {update.remarks && (
                       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                         {update.remarks}
