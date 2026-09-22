@@ -845,8 +845,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             <Button
               component="label"
               variant="outlined"
+              fullWidth
               startIcon={<AttachFileIcon />}
-              sx={{ borderRadius: 2, fontWeight: 700, width: 'fit-content' }}
+              sx={{ borderRadius: 2, fontWeight: 700, py: 1.25 }}
             >
               {field.name}
               {field.isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
@@ -1596,7 +1597,74 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         <DialogTitle sx={{ fontWeight: 800 }}>Add Status Update</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5} sx={{ pt: 0.5 }}>
-            {/* Fixed Form Controls at Top */}
+            {/* Dynamic Fields Section (at top) */}
+            {form.addStopper ? (
+              <Stack spacing={2} sx={{ pt: 1 }}>
+                <TextField
+                  required
+                  autoFocus
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  label="Stopper Reason"
+                  value={form.statusUpdate}
+                  onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
+                />
+                <Button
+                  component="label"
+                  variant="outlined"
+                  fullWidth
+                  startIcon={<AttachFileIcon />}
+                  sx={{ borderRadius: 2, fontWeight: 700, py: 1.25 }}
+                >
+                  Attach Files
+                  <input hidden type="file" multiple onChange={(event) => addSelectedFiles('stopper', event)} />
+                </Button>
+                {(pendingFiles['stopper'] || []).length > 0 && (
+                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                    {pendingFiles['stopper'].map((file) => (
+                      <Chip
+                        key={`${file.name}-${file.lastModified}-${file.size}`}
+                        label={file.name}
+                        size="small"
+                        onDelete={() => removeSelectedFile('stopper', file)}
+                      />
+                    ))}
+                  </Stack>
+                )}
+              </Stack>
+            ) : (
+              <Box sx={{ pt: 1 }}>
+                {definitions.length > 0 ? (
+                  <Grid container spacing={2}>
+                    {definitions.map((field) => renderDynamicInput(field))}
+                  </Grid>
+                ) : (
+                  <Stack spacing={2}>
+                    <TextField
+                      required
+                      autoFocus
+                      fullWidth
+                      multiline
+                      minRows={2}
+                      label="Status Update"
+                      value={form.statusUpdate}
+                      onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
+                    />
+                    <TextField
+                      fullWidth
+                      multiline
+                      minRows={2}
+                      label="Remarks"
+                      value={form.remarks}
+                      onChange={(event) => setForm((current) => ({ ...current, remarks: event.target.value }))}
+                    />
+                  </Stack>
+                )}
+              </Box>
+            )}
+
+            {/* Fixed Form Controls at Bottom */}
             {!form.addStopper && (
               <Stack spacing={1}>
                 <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
@@ -1697,72 +1765,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                 }
                 label={<Typography variant="body2" sx={{ fontWeight: 500 }}>Add stopper</Typography>}
               />
-            )}
-
-            {/* Dynamic Fields Section */}
-            {form.addStopper ? (
-              <Stack spacing={2} sx={{ pt: 1 }}>
-                <TextField
-                  required
-                  autoFocus
-                  fullWidth
-                  multiline
-                  minRows={2}
-                  label="Stopper Reason"
-                  value={form.statusUpdate}
-                  onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
-                />
-                <Button
-                  component="label"
-                  variant="outlined"
-                  startIcon={<AttachFileIcon />}
-                  sx={{ borderRadius: 2, fontWeight: 700, width: 'fit-content' }}
-                >
-                  Attach Files
-                  <input hidden type="file" multiple onChange={(event) => addSelectedFiles('stopper', event)} />
-                </Button>
-                {(pendingFiles['stopper'] || []).length > 0 && (
-                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                    {pendingFiles['stopper'].map((file) => (
-                      <Chip
-                        key={`${file.name}-${file.lastModified}-${file.size}`}
-                        label={file.name}
-                        size="small"
-                        onDelete={() => removeSelectedFile('stopper', file)}
-                      />
-                    ))}
-                  </Stack>
-                )}
-              </Stack>
-            ) : (
-              <Box sx={{ pt: 1 }}>
-                {definitions.length > 0 ? (
-                  <Grid container spacing={2}>
-                    {definitions.map((field) => renderDynamicInput(field))}
-                  </Grid>
-                ) : (
-                  <Stack spacing={2}>
-                    <TextField
-                      required
-                      autoFocus
-                      fullWidth
-                      multiline
-                      minRows={2}
-                      label="Status Update"
-                      value={form.statusUpdate}
-                      onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
-                    />
-                    <TextField
-                      fullWidth
-                      multiline
-                      minRows={2}
-                      label="Remarks"
-                      value={form.remarks}
-                      onChange={(event) => setForm((current) => ({ ...current, remarks: event.target.value }))}
-                    />
-                  </Stack>
-                )}
-              </Box>
             )}
           </Stack>
         </DialogContent>

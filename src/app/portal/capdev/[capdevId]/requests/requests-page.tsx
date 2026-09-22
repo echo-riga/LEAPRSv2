@@ -50,7 +50,6 @@ import {
   getCapdevFieldDefinitions,
   getCurrentUserAccess,
   getRequestFieldDefinitions,
-  getRequestStatusUpdates,
   getRequestsByCapdev,
   updateRequest,
   type AppRole,
@@ -177,7 +176,6 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       getRequestFieldDefinitions(),
       getCapdevFieldDefinitions(),
     ]);
-    const statusUpdatesByRequest = await Promise.all(requestData.map((request) => getRequestStatusUpdates(request.id)));
     setCapdev(
       projectData
         ? {
@@ -199,14 +197,14 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       }))
     );
     setRequests(
-      requestData.map((request, index) => {
-        const isComplete = (request.status === 'completed') || statusUpdatesByRequest[index].some((update) => update.markAsComplete);
+      requestData.map((request) => {
+        const isComplete = Boolean(request.isComplete || request.status === 'completed');
         const reqStatus = request.status || (isComplete ? 'completed' : 'in_progress');
         return {
           ...request,
           status: reqStatus,
           isComplete,
-          hasDeductedBudget: statusUpdatesByRequest[index].some((update) => update.subtractsRequestedAmount),
+          hasDeductedBudget: Boolean(request.hasDeductedBudget),
           requestedBudget: String(request.requestedBudget),
           additionalInfo: (request.additionalInfo && typeof request.additionalInfo === 'object' ? request.additionalInfo : {}) as Record<string, unknown>,
         };

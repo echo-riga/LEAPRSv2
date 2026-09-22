@@ -244,8 +244,8 @@ export default function Home() {
       setAuthError('Please enter your email address.');
       return;
     }
-    if (!signUpDepartment.trim()) {
-      setAuthError('Please select or specify your department.');
+    if (signUpRole === 'viewer' && !signUpDepartment.trim()) {
+      setAuthError('Please select or specify your department for the Department Viewer role.');
       return;
     }
 
@@ -646,8 +646,8 @@ export default function Home() {
                         </MenuItem>
                       ))}
                     </TextField>
-                    <DepartmentCombobox options={departmentOptions} value={signUpDepartment} onChange={setSignUpDepartment} otherSelected={signUpDepartmentIsOther} onOtherSelectedChange={setSignUpDepartmentIsOther} required disabled={authLoading} />
-                    <Button type="submit" variant="contained" color="primary" fullWidth size="large" disabled={authLoading || !fullName.trim() || !signUpEmail.trim() || !signUpDepartment.trim()} sx={{ py: 1.7, fontSize: '1.05rem', boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)' }}>
+                    <DepartmentCombobox options={departmentOptions} value={signUpDepartment} onChange={setSignUpDepartment} otherSelected={signUpDepartmentIsOther} onOtherSelectedChange={setSignUpDepartmentIsOther} required={signUpRole === 'viewer'} disabled={authLoading} />
+                    <Button type="submit" variant="contained" color="primary" fullWidth size="large" disabled={authLoading || !fullName.trim() || !signUpEmail.trim() || (signUpRole === 'viewer' && !signUpDepartment.trim())} sx={{ py: 1.7, fontSize: '1.05rem', boxShadow: '0 4px 12px rgba(46, 125, 50, 0.25)' }}>
                       {authLoading ? <CircularProgress size={24} color="inherit" /> : 'Continue'}
                     </Button>
                     <Button variant="text" color="secondary" fullWidth onClick={handleBackToSignIn} disabled={authLoading} startIcon={<ArrowBackIcon />} sx={{ textTransform: 'none', fontWeight: 600 }}>

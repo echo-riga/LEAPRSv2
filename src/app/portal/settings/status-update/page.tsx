@@ -710,108 +710,7 @@ export default function StatusUpdateConfigPage() {
                     </Stack>
 
                     <Grid container spacing={{ xs: 2.5, sm: 3 }}>
-                      {/* Fixed System Controls at the top of the Status Update section */}
-                      {secKey === 'all' && (
-                        <>
-                          {/* Status Mark Toggle */}
-                          <Grid size={12}>
-                            <Stack spacing={1}>
-                              <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
-                                Status Mark <Box component="span" sx={{ color: 'error.main' }}>*</Box>
-                              </Typography>
-                              <ToggleButtonGroup
-                                value={fixedStatusMark}
-                                exclusive
-                                onChange={(_, val) => val && setFixedStatusMark(val)}
-                                size="small"
-                                fullWidth
-                                sx={{
-                                  '& .MuiToggleButton-root': {
-                                    borderRadius: 2,
-                                    fontWeight: 700,
-                                    textTransform: 'none',
-                                    py: 1,
-                                    borderColor: 'rgba(0, 0, 0, 0.12)',
-                                  },
-                                }}
-                              >
-                                <ToggleButton
-                                  value="pending"
-                                  sx={{
-                                    '&.Mui-selected': {
-                                      bgcolor: 'rgba(237, 108, 2, 0.12)',
-                                      color: 'warning.dark',
-                                      borderColor: 'warning.main',
-                                    },
-                                  }}
-                                >
-                                  Pending
-                                </ToggleButton>
-                                <ToggleButton
-                                  value="completed"
-                                  sx={{
-                                    '&.Mui-selected': {
-                                      bgcolor: 'rgba(46, 125, 50, 0.12)',
-                                      color: 'success.dark',
-                                      borderColor: 'success.main',
-                                    },
-                                  }}
-                                >
-                                  Completed
-                                </ToggleButton>
-                                <ToggleButton
-                                  value="denied"
-                                  sx={{
-                                    '&.Mui-selected': {
-                                      bgcolor: 'rgba(211, 47, 47, 0.12)',
-                                      color: 'error.dark',
-                                      borderColor: 'error.main',
-                                    },
-                                  }}
-                                >
-                                  Denied
-                                </ToggleButton>
-                              </ToggleButtonGroup>
-                            </Stack>
-                          </Grid>
-
-                          {/* Fixed Checkbox Options: Subtract & Stopper */}
-                          <Grid size={12}>
-                            <FormControlLabel
-                              control={
-                                <Checkbox
-                                  checked={fixedSubtractBudget}
-                                  onChange={(e) => setFixedSubtractBudget(e.target.checked)}
-                                  color="primary"
-                                />
-                              }
-                              label={
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                  Subtract requested amount from CapDev balance
-                                </Typography>
-                              }
-                            />
-                          </Grid>
-                          <Grid size={12}>
-                            <FormControlLabel
-                              control={
-                                <Checkbox
-                                  checked={fixedIsStopper}
-                                  onChange={(e) => setFixedIsStopper(e.target.checked)}
-                                  color="error"
-                                />
-                              }
-                              label={
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                  Add stopper
-                                </Typography>
-                              }
-                            />
-                          </Grid>
-                        </>
-                      )}
-
-                      {/* Dynamic Fields within the same section */}
+                      {/* Dynamic Fields within the same section (at top) */}
                       {(() => {
                         const halfFieldLayout = getHalfFieldLayout(
                           sectionFields.map((field) => (editingKeys.has(field.key) ? { ...field, width: 'full' } : field))
@@ -953,6 +852,107 @@ export default function StatusUpdateConfigPage() {
                           </Stack>
                         </Box>
                       </Grid>
+
+                      {/* Fixed System Controls at the bottom of the Status Update section */}
+                      {secKey === 'all' && (
+                        <>
+                          {/* Status Mark Toggle (2nd bottom) */}
+                          <Grid size={12}>
+                            <Stack spacing={1}>
+                              <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                                Status Mark <Box component="span" sx={{ color: 'error.main' }}>*</Box>
+                              </Typography>
+                              <ToggleButtonGroup
+                                value={fixedStatusMark}
+                                exclusive
+                                onChange={(_, val) => val && setFixedStatusMark(val)}
+                                size="small"
+                                fullWidth
+                                sx={{
+                                  '& .MuiToggleButton-root': {
+                                    borderRadius: 2,
+                                    fontWeight: 700,
+                                    textTransform: 'none',
+                                    py: 1,
+                                    borderColor: 'rgba(0, 0, 0, 0.12)',
+                                  },
+                                }}
+                              >
+                                <ToggleButton
+                                  value="pending"
+                                  sx={{
+                                    '&.Mui-selected': {
+                                      bgcolor: 'rgba(237, 108, 2, 0.12)',
+                                      color: 'warning.dark',
+                                      borderColor: 'warning.main',
+                                    },
+                                  }}
+                                >
+                                  Pending
+                                </ToggleButton>
+                                <ToggleButton
+                                  value="completed"
+                                  sx={{
+                                    '&.Mui-selected': {
+                                      bgcolor: 'rgba(46, 125, 50, 0.12)',
+                                      color: 'success.dark',
+                                      borderColor: 'success.main',
+                                    },
+                                  }}
+                                >
+                                  Completed
+                                </ToggleButton>
+                                <ToggleButton
+                                  value="denied"
+                                  sx={{
+                                    '&.Mui-selected': {
+                                      bgcolor: 'rgba(211, 47, 47, 0.12)',
+                                      color: 'error.dark',
+                                      borderColor: 'error.main',
+                                    },
+                                  }}
+                                >
+                                  Denied
+                                </ToggleButton>
+                              </ToggleButtonGroup>
+                            </Stack>
+                          </Grid>
+
+                          {/* Fixed Checkbox Options: Subtract & Stopper (most bottom) */}
+                          <Grid size={12}>
+                            <FormControlLabel
+                              control={
+                                <Checkbox
+                                  checked={fixedSubtractBudget}
+                                  onChange={(e) => setFixedSubtractBudget(e.target.checked)}
+                                  color="primary"
+                                />
+                              }
+                              label={
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                  Subtract requested amount from CapDev balance
+                                </Typography>
+                              }
+                            />
+                          </Grid>
+                          <Grid size={12}>
+                            <FormControlLabel
+                              control={
+                                <Checkbox
+                                  checked={fixedIsStopper}
+                                  onChange={(e) => setFixedIsStopper(e.target.checked)}
+                                  color="error"
+                                />
+                              }
+                              label={
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                  Add stopper
+                                </Typography>
+                              }
+                            />
+                          </Grid>
+                        </>
+                      )}
                     </Grid>
                   </Box>
                 );

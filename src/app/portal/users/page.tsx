@@ -235,6 +235,7 @@ export default function UsersManagementPage() {
   // Save Add / Edit Form
   const handleSaveUser = async () => {
     if (!formName || !formEmail) return;
+    if (formRole === 'viewer' && !formDepartment.trim()) return;
 
     if (editingUser) {
       // EDIT OPERATION
@@ -253,7 +254,7 @@ export default function UsersManagementPage() {
         if (!result.success) { console.error('Error updating user:', result.error); return; }
       }
       setUsersList(prev => prev.map(u => u.id === editingUser.id ? updatedUser : u));
-      if (formDepartment.trim()) setDepartmentOptions((current) => Array.from(new Set([...current, formDepartment.trim()])).sort((a, b) => a.localeCompare(b)));
+      setDialogOpen(false);
     } else {
       // ADD OPERATION
       if (!formPassword) return;
@@ -269,8 +270,7 @@ export default function UsersManagementPage() {
         console.error('Error creating user:', created.error);
         return;
       }
-      setUsersList((current) => [{ id: created.user.id, name: created.user.name || formName, email: created.user.email, role: formRole, password: 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢', createdAt: created.user.createdAt, department: formDepartment || 'Unassigned' }, ...current]);
-      if (formDepartment.trim()) setDepartmentOptions((current) => Array.from(new Set([...current, formDepartment.trim()])).sort((a, b) => a.localeCompare(b)));
+      setUsersList((current) => [{ id: created.user.id, name: created.user.name || formName, email: created.user.email, role: formRole, password: '••••••••', createdAt: created.user.createdAt, department: formDepartment || 'Unassigned' }, ...current]);
       setDialogOpen(false);
       return;
       const newId = `user-${Math.random().toString(36).substr(2, 9)}`;
@@ -664,14 +664,14 @@ export default function UsersManagementPage() {
                 </MenuItem>
               ))}
             </TextField>
-            <DepartmentCombobox options={departmentOptions} value={formDepartment} onChange={setFormDepartment} otherSelected={formDepartmentIsOther} onOtherSelectedChange={setFormDepartmentIsOther} />
+            <DepartmentCombobox options={departmentOptions} value={formDepartment} onChange={setFormDepartment} otherSelected={formDepartmentIsOther} onOtherSelectedChange={setFormDepartmentIsOther} required={formRole === 'viewer'} />
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
           <Button onClick={() => setDialogOpen(false)} color="inherit" sx={{ fontWeight: '700' }}>
             Cancel
           </Button>
-          <Button onClick={handleSaveUser} variant="contained" color="primary" sx={{ fontWeight: '700' }}>
+          <Button onClick={handleSaveUser} variant="contained" color="primary" disabled={!formName.trim() || !formEmail.trim() || (formRole === 'viewer' && !formDepartment.trim())} sx={{ fontWeight: '700' }}>
             Save User
           </Button>
         </DialogActions>

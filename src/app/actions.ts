@@ -489,26 +489,43 @@ function cleanDepartmentOptions(options: string[]) {
   return Array.from(byNormalizedName.values()).slice(0, 100);
 }
 
+const DEFAULT_DEPARTMENT_OPTIONS = [
+  'College of Arts and Sciences',
+  'College of Business and Accountancy',
+  'College of Computer Studies',
+  'College of Education',
+  'College of Engineering',
+  'College of Nursing',
+  'General Administration',
+  'Human Resources Department',
+  'Finance and Accounting Office',
+  'Information Technology Office',
+  'Student Affairs Office',
+];
+
 export async function getDepartmentOptions() {
   try {
-    const [userDepartments, capdevDepartments, configuredOptions] = await Promise.all([
-      db.select({ department: users.department }).from(users),
-      db.select({ department: capdevs.department }).from(capdevs),
-      db.select({ options: capdevFieldDefinitions.options }).from(capdevFieldDefinitions).where(and(eq(capdevFieldDefinitions.name, '__department_options__'), eq(capdevFieldDefinitions.isActive, false))),
-    ]);
+    const configuredOptions = await db
+      .select({ options: capdevFieldDefinitions.options })
+      .from(capdevFieldDefinitions)
+      .where(and(eq(capdevFieldDefinitions.name, '__department_options__'), eq(capdevFieldDefinitions.isActive, false)));
+
+    if (configuredOptions.length === 0) {
+      return cleanDepartmentOptions(DEFAULT_DEPARTMENT_OPTIONS).sort((a, b) => a.localeCompare(b));
+    }
+
     const configs = configuredOptions.map((record) => parseDepartmentOptionsConfig(record.options));
     const included = configs.flatMap((config) => config.included);
     const excluded = new Set(configs.flatMap((config) => config.excluded).map((option) => option.trim().toLocaleLowerCase()));
-    return cleanDepartmentOptions([
-      ...userDepartments.map((record) => record.department),
-      ...capdevDepartments.map((record) => record.department),
-      ...included,
-    ])
+
+    const baseList = included.length > 0 ? included : DEFAULT_DEPARTMENT_OPTIONS;
+
+    return cleanDepartmentOptions(baseList)
       .filter((department) => !excluded.has(department.toLocaleLowerCase()))
       .sort((a, b) => a.localeCompare(b));
   } catch (error) {
     console.error('Failed to load department options:', error);
-    return [];
+    return cleanDepartmentOptions(DEFAULT_DEPARTMENT_OPTIONS).sort((a, b) => a.localeCompare(b));
   }
 }
 
@@ -516,43 +533,45 @@ export async function saveDepartmentOptions(options: string[], updatedById: stri
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin') return unauthorized;
   const cleaned = cleanDepartmentOptions(options);
-  const [userDepartments, capdevDepartments, existingRows] = await Promise.all([
-    db.select({ department: users.department }).from(users),
-    db.select({ department: capdevs.department }).from(capdevs),
-    db.select({ id: capdevFieldDefinitions.id, options: capdevFieldDefinitions.options })
-      .from(capdevFieldDefinitions)
-      .where(eq(capdevFieldDefinitions.name, '__department_options__'))
-      .limit(1),
-  ]);
-  const existing = existingRows[0];
-  const previous = parseDepartmentOptionsConfig(existing?.options);
-  const submitted = new Set(cleaned.map((option) => option.toLocaleLowerCase()));
-  const previouslyVisible = cleanDepartmentOptions([
-    ...userDepartments.map((record) => record.department),
-    ...capdevDepartments.map((record) => record.department),
-    ...previous.included,
-  ]).filter((department) => !previous.excluded.some((excluded) => excluded.toLocaleLowerCase() === department.toLocaleLowerCase()));
-  const excluded = cleanDepartmentOptions([
-    ...previous.excluded,
-    ...previouslyVisible.filter((department) => !submitted.has(department.toLocaleLowerCase())),
-  ]).filter((department) => !submitted.has(department.toLocaleLowerCase()));
-  const config: DepartmentOptionsConfig = { included: cleaned, excluded };
+  const [existing] = await db
+    .select({ id: capdevFieldDefinitions.id })
+    .from(capdevFieldDefinitions)
+    .where(eq(capdevFieldDefinitions.name, '__department_options__'))
+    .limit(1);
+
+  const config: DepartmentOptionsConfig = { included: cleaned, excluded: [] };
   if (existing) {
-    await db.update(capdevFieldDefinitions).set({ options: config, isActive: false, updatedById, updatedAt: new Date() }).where(eq(capdevFieldDefinitions.id, existing.id));
+    await db
+      .update(capdevFieldDefinitions)
+      .set({ options: config, isActive: false, updatedById, updatedAt: new Date() })
+      .where(eq(capdevFieldDefinitions.id, existing.id));
   } else {
-    await db.insert(capdevFieldDefinitions).values({ name: '__department_options__', type: 'text', options: config, isRequired: false, isActive: false, section: 'optional', width: 'full', sortOrder: 0, updatedById });
+    await db.insert(capdevFieldDefinitions).values({
+      name: '__department_options__',
+      type: 'text',
+      options: config,
+      isRequired: false,
+      isActive: false,
+      section: 'optional',
+      width: 'full',
+      sortOrder: 0,
+      updatedById,
+    });
   }
   await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'Department options', details: config });
   return { success: true };
 }
 
-export async function completeSelfRegistration(input: { role: string; department: string }) {
+export async function completeSelfRegistration(input: { role: string; department?: string }) {
   const { data: session } = await auth.getSession();
   const role = input.role as (typeof SELF_REGISTRATION_ROLES)[number];
-  const department = input.department.trim();
+  const department = (input.department || '').trim() || 'Unassigned';
   if (!session?.user) return unauthorized;
-  if (!SELF_REGISTRATION_ROLES.includes(role) || !department || department.length > 255) {
-    return { success: false, error: 'Provide a valid role and department.' };
+  if (!SELF_REGISTRATION_ROLES.includes(role) || department.length > 255) {
+    return { success: false, error: 'Provide a valid role.' };
+  }
+  if (role === 'viewer' && department === 'Unassigned') {
+    return { success: false, error: 'Department is required for the Department Viewer role.' };
   }
 
   try {
@@ -751,14 +770,18 @@ export async function updateUserRole(userId: string, newRole: string, department
   }
 }
 
-export async function updateDirectoryUser(userId: string, input: { name: string; email: string; role: string; department: string }) {
+export async function updateDirectoryUser(userId: string, input: { name: string; email: string; role: string; department?: string }) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin' || !VALID_ROLES.includes(input.role as AppRole)) return unauthorized;
+  const department = (input.department || '').trim() || 'Unassigned';
+  if (input.role === 'viewer' && department === 'Unassigned') {
+    return { success: false, error: 'Department is required for the Department Viewer role.' };
+  }
   try {
     const { error } = await auth.admin.updateUser({ userId, data: { name: input.name, email: input.email } });
     if (error) return { success: false, error: error.message || 'Unable to update the Neon Auth user.' };
-    await db.update(users).set({ role: input.role, department: input.department }).where(eq(users.id, userId));
-    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department: input.department } });
+    await db.update(users).set({ role: input.role, department }).where(eq(users.id, userId));
+    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department } });
     return { success: true };
   } catch (error) {
     console.error('Failed to update user directory record:', error);
@@ -783,16 +806,20 @@ export async function createUser(userId: string, role: string, department = 'Una
   }
 }
 
-export async function createDirectoryUser(input: { name: string; email: string; password: string; role: string; department: string }) {
+export async function createDirectoryUser(input: { name: string; email: string; password: string; role: string; department?: string }) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin' || !VALID_ROLES.includes(input.role as AppRole)) return unauthorized;
+  const department = (input.department || '').trim() || 'Unassigned';
+  if (input.role === 'viewer' && department === 'Unassigned') {
+    return { success: false, error: 'Department is required for the Department Viewer role.' };
+  }
   const passwordError = getPasswordValidationError(input.password);
   if (passwordError) return { success: false, error: passwordError };
   try {
     const { data, error } = await auth.admin.createUser({ email: input.email, password: input.password, name: input.name });
     if (error || !data?.user) return { success: false, error: error?.message || 'Unable to create the Neon Auth user.' };
-    await db.insert(users).values({ id: data.user.id, role: input.role, department: input.department });
-    await writeAuditLog(access, { action: 'created', entityType: 'user', entityId: data.user.id, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department: input.department } });
+    await db.insert(users).values({ id: data.user.id, role: input.role, department });
+    await writeAuditLog(access, { action: 'created', entityType: 'user', entityId: data.user.id, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department } });
     return { success: true, user: data.user };
   } catch (error) {
     console.error('Failed to create user directory record:', error);
@@ -1649,7 +1676,26 @@ export async function getRequestsByCapdev(capdevId: number) {
       .from(requests)
       .where(eq(requests.capdevId, capdevId))
       .orderBy(requests.createdAt);
-    return access.role === 'employee' ? records.filter((request) => request.userId === access.userId) : records;
+    const filtered = access.role === 'employee' ? records.filter((request) => request.userId === access.userId) : records;
+    if (filtered.length === 0) return [];
+
+    const allUpdates = await db
+      .select({
+        requestId: requestStatusUpdates.requestId,
+        markAsComplete: requestStatusUpdates.markAsComplete,
+        subtractsRequestedAmount: requestStatusUpdates.subtractsRequestedAmount,
+      })
+      .from(requestStatusUpdates)
+      .where(inArray(requestStatusUpdates.requestId, filtered.map((r) => r.id)));
+
+    const deductedIds = new Set(allUpdates.filter((u) => u.subtractsRequestedAmount).map((u) => u.requestId));
+    const completedIds = new Set(allUpdates.filter((u) => u.markAsComplete).map((u) => u.requestId));
+
+    return filtered.map((req) => ({
+      ...req,
+      hasDeductedBudget: deductedIds.has(req.id),
+      isComplete: req.status === 'completed' || completedIds.has(req.id),
+    }));
   } catch (error) {
     console.error('Failed to fetch requests:', error);
     return [];
