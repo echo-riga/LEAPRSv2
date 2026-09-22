@@ -1027,9 +1027,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   return true;
                 })
               : [];
-            const primaryStatusIsDynamicDuplicate = !isStopper && extraFields.some(([, value]) =>
-              typeof value === 'string' && value.trim() === update.statusUpdate.trim()
+            const hidePrimaryStatus = !isStopper && (
+              extraFields.some(([, value]) =>
+                typeof value === 'string' && value.trim() === update.statusUpdate.trim()
+              ) || (extraFields.length > 0 && update.statusUpdate === 'Status updated')
             );
+            const dynamicAttachmentIds = new Set(
+              extraFields.flatMap(([, value]) => getAttachments(value).map((file) => file.id))
+            );
+            const standaloneFiles = files.filter((file) => !dynamicAttachmentIds.has(file.id));
 
             return (
               <Box
@@ -1137,7 +1143,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         Reason
                       </Typography>
                     )}
-                    {!primaryStatusIsDynamicDuplicate && (
+                    {!hidePrimaryStatus && (
                       <Typography
                         variant="body1"
                         sx={{ fontWeight: 600, color: 'text.primary', mb: update.remarks ? 0.75 : 0 }}
@@ -1159,6 +1165,18 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                             (d) => dynamicFieldStorageKey(d) === k || d.name === k
                           );
                           const label = matchingDef?.name || k;
+                          if (matchingDef?.type === 'table') {
+                            return (
+                              <DynamicTableField
+                                key={k}
+                                label={label}
+                                value={v}
+                                template={matchingDef.options?.[0]}
+                                disabled
+                                showDimensionControls={false}
+                              />
+                            );
+                          }
                           if (Array.isArray(v)) {
                             const files = getAttachments(v);
                             if (files.length > 0) {
@@ -1198,10 +1216,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       </Stack>
                     )}
 
-                    {files.length > 0 && (
+                    {standaloneFiles.length > 0 && (
                       <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', mt: 1, flexWrap: 'wrap' }}>
                         <AttachFileIcon fontSize="small" color="action" />
-                        {files.map((file) => (
+                        {standaloneFiles.map((file) => (
                           <Button
                             key={file.id}
                             component="a"

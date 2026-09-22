@@ -113,7 +113,7 @@ export default function DynamicTableField({
             border: '1px solid',
             borderColor: disabled ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0.12)',
             borderRadius: 2,
-            bgcolor: disabled ? '#f5f5f5' : '#ffffff',
+            bgcolor: disabled ? '#fafcfa' : '#ffffff',
           }}
         >
           <Table size="small" sx={{ minWidth: 320, borderCollapse: 'collapse' }}>
