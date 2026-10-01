@@ -22,6 +22,7 @@ export type StatusAttachment = {
 
 export type DynamicFieldSchema = {
   id: number;
+  setting: 'internal' | 'external';
   name: string;
   type: string;
   options: unknown[] | null;
@@ -163,11 +164,13 @@ export async function findCapdevByAipCodeService(access: UserAccess, aipCode: st
  * 2. get_request_form_schema:
  * Returns fixed fields and active dynamic request form fields.
  */
-export async function getRequestFormSchemaService(_access?: UserAccess) {
+export async function getRequestFormSchemaService(_access?: UserAccess, setting?: 'internal' | 'external') {
   const dynamicFields = await db
     .select()
     .from(requestFieldDefinitions)
-    .where(eq(requestFieldDefinitions.isActive, true))
+    .where(setting
+      ? and(eq(requestFieldDefinitions.isActive, true), eq(requestFieldDefinitions.setting, setting))
+      : eq(requestFieldDefinitions.isActive, true))
     .orderBy(requestFieldDefinitions.sortOrder);
 
   const fixedFields = [
@@ -200,6 +203,7 @@ export async function getRequestFormSchemaService(_access?: UserAccess) {
     fixedFields,
     dynamicFields: dynamicFields.map((field) => ({
       id: field.id,
+      setting: field.setting as 'internal' | 'external',
       name: field.name,
       type: field.type,
       options: Array.isArray(field.options) ? field.options : null,
@@ -218,7 +222,8 @@ export async function getRequestFormSchemaService(_access?: UserAccess) {
  * Formulates and validates a structured draft without persisting to database.
  */
 export async function createRequestDraftService(access: UserAccess, draft: RequestDraftInput) {
-  const schema = await getRequestFormSchemaService(access);
+  const activeSetting = draft.setting === 'external' ? 'external' : 'internal';
+  const schema = await getRequestFormSchemaService(access, activeSetting);
   const missingRequiredFields: string[] = [];
 
   let capdevInfo: { id: number; aipCode: string; department: string; remainingBudget: number } | null = null;
@@ -338,7 +343,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   }
 
   // Validate dynamic required fields
-  const schema = await getRequestFormSchemaService(access);
+  const schema = await getRequestFormSchemaService(access, input.setting);
   const additionalInfo: Record<string, unknown> = { ...(input.dynamicFields || {}) };
   const missingFields: string[] = [];
 

@@ -100,6 +100,7 @@ export const capdevs = pgTable('capdevs', {
 // Request dynamic fields definitions configuration
 export const requestFieldDefinitions = pgTable('request_field_definitions', {
   id: serial('id').primaryKey(),
+  setting: varchar('setting', { length: 50 }).default('internal').notNull(), // 'internal' | 'external'
   name: varchar('name', { length: 255 }).notNull(),
   type: varchar('type', { length: 50 }).notNull(),
   options: jsonb('options'),
@@ -113,7 +114,7 @@ export const requestFieldDefinitions = pgTable('request_field_definitions', {
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED CONFIG LAST
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => [index('request_field_definitions_setting_idx').on(table.setting, table.isActive, table.sortOrder)]);
 
 // Status update dynamic fields definitions configuration
 export const statusUpdateFieldDefinitions = pgTable('status_update_field_definitions', {

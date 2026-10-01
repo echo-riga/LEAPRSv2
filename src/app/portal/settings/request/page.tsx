@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Container,
   Box,
@@ -47,6 +47,7 @@ import {
   saveRequestFieldDefinition,
   deleteRequestFieldDefinition,
   updateRequestFieldsOrder,
+  type RequestSetting,
 } from '@/app/actions';
 
 interface Field {
@@ -64,8 +65,10 @@ interface Field {
   isTemp?: boolean;
 }
 
-export default function RequestConfigPage() {
+function RequestConfigContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const setting: RequestSetting = searchParams.get('setting') === 'external' ? 'external' : 'internal';
   const session = authClient.useSession();
   const [fields, setFields] = useState<Field[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,7 +93,7 @@ export default function RequestConfigPage() {
 
   // Fixed/required preview fields (AIP Code, Budget, etc.) — typeable, placeholder only
   const [fixedPreviewData, setFixedPreviewData] = useState<Record<string, string>>({
-    setting: '',
+    setting,
     requestedBudget: '',
   });
 
@@ -111,8 +114,9 @@ export default function RequestConfigPage() {
 
   useEffect(() => {
     const loadFields = async () => {
+      setLoading(true);
       try {
-        const data = await getRequestFieldDefinitions();
+        const data = await getRequestFieldDefinitions(setting);
         const mapped = data.map((f) => ({
           ...f,
           key: `field-${f.id}`,
@@ -122,6 +126,10 @@ export default function RequestConfigPage() {
           columnPosition: f.columnPosition === 'right' ? 'right' as const : 'left' as const,
         }));
         setFields(mapped);
+        setEditingKeys(new Set());
+        setBackups({});
+        setOptionDrafts({});
+        setHasPendingDeletion(false);
       } catch (error) {
         console.error('Failed to load fields:', error);
       } finally {
@@ -129,7 +137,7 @@ export default function RequestConfigPage() {
       }
     };
     loadFields();
-  }, []);
+  }, [setting]);
 
   const { draggedFieldKey, dragOverTarget, handlePointerDragStart, handleKeyboardMove } = useFieldReorder({
     fields,
@@ -141,7 +149,7 @@ export default function RequestConfigPage() {
       const fieldLayout = sortedFields
         .filter((field): field is Field & { id: number } => typeof field.id === 'number')
         .map((field) => ({ id: field.id, columnPosition: field.columnPosition }));
-      await updateRequestFieldsOrder(fieldLayout, currentUserId);
+      await updateRequestFieldsOrder(fieldLayout, setting, currentUserId);
     },
   });
 
@@ -240,6 +248,7 @@ export default function RequestConfigPage() {
       const savedFields = await Promise.all(draftFields.map(async (field) => {
         const result = await saveRequestFieldDefinition({
           id: field.isTemp ? undefined : field.id,
+          setting,
           name: field.name,
           type: field.type,
           options: field.options,
@@ -284,7 +293,7 @@ export default function RequestConfigPage() {
     if (!fieldToDelete.id) return;
     setSavingId(fieldToDelete.id);
     try {
-      const result = await deleteRequestFieldDefinition(fieldToDelete.id, currentUserId);
+      const result = await deleteRequestFieldDefinition(fieldToDelete.id, setting, currentUserId);
       if (result.success) {
         setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
         clearEditingState(fieldToDelete.key);
@@ -655,7 +664,7 @@ export default function RequestConfigPage() {
       {/* Main Single Live Preview Container */}
       <Container maxWidth="md" sx={{ p: 0, width: '100%', mb: 4 }}>
         <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px', mb: 0.5 }}>
-          Activity Design Layout
+          {setting === 'internal' ? 'Internal' : 'External'} Activity Design Layout
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           Configure required and optional fields, then drag to set their order.
@@ -706,8 +715,8 @@ export default function RequestConfigPage() {
                                 fullWidth
                                 size="small"
                                 select
-                                value={fixedPreviewData.setting}
-                                onChange={(e) => handleFixedPreviewChange('setting', e.target.value)}
+                                value={setting}
+                                disabled
                                 sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
                               >
                                 <MenuItem value="internal">Internal</MenuItem>
@@ -932,5 +941,13 @@ export default function RequestConfigPage() {
         {isSavingConfiguration ? 'Saving...' : configurationSaved ? 'Saved' : 'Save Configuration'}
       </Button>
     </Box>
+  );
+}
+
+export default function RequestConfigPage() {
+  return (
+    <Suspense fallback={<FormConfigSkeleton titleWidth={260} />}>
+      <RequestConfigContent />
+    </Suspense>
   );
 }

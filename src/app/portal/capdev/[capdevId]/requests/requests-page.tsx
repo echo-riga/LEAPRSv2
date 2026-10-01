@@ -5,7 +5,7 @@ import {
   Add as AddIcon,
   AttachFile as AttachFileIcon,
   Assignment as RequestIcon,
-  ChevronRight as ChevronRightIcon, Close as CloseIcon,
+  ChevronRight as ChevronRightIcon,
   DeleteOutlined as DeleteIcon,
   KeyboardArrowDown as KeyboardArrowDownIcon,
   Payments as PaymentsIcon,
@@ -58,6 +58,7 @@ import {
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import ActionErrorDialog from '@/components/ActionErrorDialog';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
+import FileFieldChecklist from '@/components/FileFieldChecklist';
 
 type RequestRecord = {
   id: number;
@@ -73,7 +74,7 @@ type RequestRecord = {
   requestedBudget: string;
   additionalInfo: Record<string, unknown>;
 };
-type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; width: string; columnPosition: string; placeholder: string | null; section?: string };
+type DynamicField = { id: number; setting?: 'internal' | 'external'; name: string; type: string; options: string[] | null; isRequired: boolean; width: string; columnPosition: string; placeholder: string | null; section?: string };
 type RequestForm = Pick<RequestRecord, 'setting' | 'description' | 'requestedBudget' | 'additionalInfo'>;
 type CapdevDetail = {
   id: number;
@@ -170,10 +171,11 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   }, []);
 
   const loadData = useCallback(async () => {
-    const [projectData, requestData, fieldData, capdevFieldData] = await Promise.all([
+    const [projectData, requestData, internalFieldData, externalFieldData, capdevFieldData] = await Promise.all([
       getCapdevById(capdevId),
       getRequestsByCapdev(capdevId),
-      getRequestFieldDefinitions(),
+      getRequestFieldDefinitions('internal'),
+      getRequestFieldDefinitions('external'),
       getCapdevFieldDefinitions(),
     ]);
     setCapdev(
@@ -211,8 +213,9 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       })
     );
     setDefinitions(
-      fieldData.map((field) => ({
+      [...internalFieldData, ...externalFieldData].map((field) => ({
         ...field,
+        setting: field.setting === 'external' ? 'external' as const : 'internal' as const,
         options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [],
       }))
     );
@@ -276,8 +279,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     }, 1400);
     return () => window.clearTimeout(timeoutId);
   }, [filtered, loading, notificationFocus, page, requests]);
-  const requiredDefinitions = definitions.filter((field) => field.isRequired || field.section === 'required');
-  const allDefinitions = definitions;
+  const allDefinitions = definitions.filter((field) => field.setting === form.setting);
+  const requiredDefinitions = allDefinitions.filter((field) => field.isRequired || field.section === 'required');
   const rightAlignedFieldIds = getHalfFieldLayout(allDefinitions.map((field) => ({ ...field, key: field.id }))).before;
   const rightAlignedCapdevFieldIds = getHalfFieldLayout(capdevDefinitions.map((field) => ({ ...field, key: field.id }))).before;
   const setValue = (updates: Partial<RequestForm>) => setForm((current) => ({ ...current, ...updates }));
@@ -346,7 +349,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     };
     for (const [fieldName, files] of Object.entries(pendingFiles)) {
       if (files.length === 0) continue;
-      const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
+      const field = allDefinitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
+      if (!field) continue;
       const uploaded = await uploadFilesDirectlyToGoogleDrive(files, { ...requestContext, folderId: currentFolderId });
       if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
       if (uploaded.folderId) {
@@ -449,75 +453,16 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           onChange={(value) => setDynamicValue(field, value)}
         />
       ) : field.type === 'file' ? (
-        <Stack spacing={1}>
-          {canEdit && (
-            <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
-              {field.name}
-              {field.isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
-              <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
-            </Button>
-          )}
-          {getAttachments(fieldValue).map((file) => (
-              <Stack
-                key={file.id}
-                direction="row"
-                spacing={1}
-                sx={{
-                  alignItems: 'center',
-                  bgcolor: 'rgba(0,0,0,0.03)',
-                  px: 1.5,
-                  py: 0.5,
-                  borderRadius: 1.5,
-                  width: 'fit-content',
-                  maxWidth: '100%',
-                }}
-              >
-                <Button
-                  component="a"
-                  href={file.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  size="small"
-                  startIcon={<AttachFileIcon />}
-                  sx={{
-                    textTransform: 'none',
-                    p: 0,
-                    minWidth: 0,
-                    fontWeight: 600,
-                    color: 'primary.main',
-                    textAlign: 'left',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {file.name}
-                </Button>
-                {canEdit && (
-                  <IconButton
-                    size="small"
-                    onClick={() => removeExistingAttachment(field, file.id)}
-                    aria-label={`Remove ${file.name}`}
-                    sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
-                  >
-                    <CloseIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
-                )}
-              </Stack>
-            ))}
-          {(pendingFiles[storageKey] || []).length > 0 && (
-            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-              {pendingFiles[storageKey].map((file) => (
-                <Chip
-                  key={`${file.name}-${file.lastModified}-${file.size}`}
-                  label={file.name}
-                  size="small"
-                  onDelete={() => removeSelectedFile(storageKey, file)}
-                />
-              ))}
-            </Stack>
-          )}
-        </Stack>
+        <FileFieldChecklist
+          label={field.name}
+          required={field.isRequired}
+          existingFiles={getAttachments(fieldValue)}
+          pendingFiles={pendingFiles[storageKey] || []}
+          editable={canEdit}
+          onSelectFiles={(event) => addSelectedFiles(storageKey, event)}
+          onRemoveExisting={(fileId) => removeExistingAttachment(field, fileId)}
+          onRemovePending={(file) => removeSelectedFile(storageKey, file)}
+        />
       ) : (
         <TextField
           required={field.isRequired}

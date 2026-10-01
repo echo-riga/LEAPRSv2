@@ -2,8 +2,8 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Add as AddIcon, AttachFile as AttachFileIcon, ChevronRight as ChevronRightIcon, Close as CloseIcon, DeleteOutlined as DeleteIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
-import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Chip, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, FormControlLabel, Grid, IconButton, InputAdornment, MenuItem, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import { Add as AddIcon, ChevronRight as ChevronRightIcon, DeleteOutlined as DeleteIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
+import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, FormControlLabel, Grid, IconButton, InputAdornment, MenuItem, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import { authClient } from '@/lib/auth/client';
 import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
 import DateField from '@/components/DateField';
@@ -14,6 +14,7 @@ import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fiel
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import ActionErrorDialog from '@/components/ActionErrorDialog';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
+import FileFieldChecklist from '@/components/FileFieldChecklist';
 
 type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; section: string; width: string; columnPosition: string; placeholder: string | null };
 type Capdev = { id: number; aipCode: string; description: string; initialBudget: string; budget: string; department: string; updatedById: string; createdAt: Date | string; additionalInfo: Record<string, unknown> };
@@ -331,75 +332,16 @@ export default function PortalPage() {
             onChange={(value) => setDynamicValue(field, value)}
           />
         ) : field.type === 'file' ? (
-          <Stack spacing={1}>
-            {isAdmin && (
-              <Button component="label" variant="outlined" startIcon={<AttachFileIcon />}>
-                {field.name}
-                {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
-                <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
-              </Button>
-            )}
-            {getAttachments(fieldValue).map((file) => (
-              <Stack
-                key={file.id}
-                direction="row"
-                spacing={1}
-                sx={{
-                  alignItems: 'center',
-                  bgcolor: 'rgba(0,0,0,0.03)',
-                  px: 1.5,
-                  py: 0.5,
-                  borderRadius: 1.5,
-                  width: 'fit-content',
-                  maxWidth: '100%',
-                }}
-              >
-                <Button
-                  component="a"
-                  href={file.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  size="small"
-                  startIcon={<AttachFileIcon />}
-                  sx={{
-                    textTransform: 'none',
-                    p: 0,
-                    minWidth: 0,
-                    fontWeight: 600,
-                    color: 'primary.main',
-                    textAlign: 'left',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {file.name}
-                </Button>
-                {isAdmin && (
-                  <IconButton
-                    size="small"
-                    onClick={() => removeExistingAttachment(field, file.id)}
-                    aria-label={`Remove ${file.name}`}
-                    sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
-                  >
-                    <CloseIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
-                )}
-              </Stack>
-            ))}
-            {(pendingFiles[storageKey] || []).length > 0 && (
-              <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                {pendingFiles[storageKey].map((file) => (
-                  <Chip
-                    key={`${file.name}-${file.lastModified}-${file.size}`}
-                    label={file.name}
-                    size="small"
-                    onDelete={() => removeSelectedFile(storageKey, file)}
-                  />
-                ))}
-              </Stack>
-            )}
-          </Stack>
+          <FileFieldChecklist
+            label={field.name}
+            required={isRequired}
+            existingFiles={getAttachments(fieldValue)}
+            pendingFiles={pendingFiles[storageKey] || []}
+            editable={isAdmin}
+            onSelectFiles={(event) => addSelectedFiles(storageKey, event)}
+            onRemoveExisting={(fileId) => removeExistingAttachment(field, fileId)}
+            onRemovePending={(file) => removeSelectedFile(storageKey, file)}
+          />
         ) : (
           <TextField
             required={isRequired}

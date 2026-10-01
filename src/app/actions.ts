@@ -1212,16 +1212,17 @@ export async function deleteCapdev(id: number) {
 export async function getDynamicFieldCounts() {
   try {
     const access = await getCurrentAccess();
-    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevFieldsCount: 0, requestFieldsCount: 0, statusUpdateFieldsCount: 0 };
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevFieldsCount: 0, internalRequestFieldsCount: 0, externalRequestFieldsCount: 0, statusUpdateFieldsCount: 0 };
     const capdevCount = await db
       .select({ value: count() })
       .from(capdevFieldDefinitions)
       .where(eq(capdevFieldDefinitions.isActive, true));
 
-    const requestCount = await db
-      .select({ value: count() })
+    const requestCounts = await db
+      .select({ setting: requestFieldDefinitions.setting, value: count() })
       .from(requestFieldDefinitions)
-      .where(eq(requestFieldDefinitions.isActive, true));
+      .where(eq(requestFieldDefinitions.isActive, true))
+      .groupBy(requestFieldDefinitions.setting);
 
     const statusUpdateCount = await db
       .select({ value: count() })
@@ -1230,12 +1231,13 @@ export async function getDynamicFieldCounts() {
 
     return {
       capdevFieldsCount: capdevCount[0]?.value || 0,
-      requestFieldsCount: requestCount[0]?.value || 0,
+      internalRequestFieldsCount: requestCounts.find((item) => item.setting === 'internal')?.value || 0,
+      externalRequestFieldsCount: requestCounts.find((item) => item.setting === 'external')?.value || 0,
       statusUpdateFieldsCount: statusUpdateCount[0]?.value || 0,
     };
   } catch (error) {
     console.error('Failed to get dynamic field counts:', error);
-    return { capdevFieldsCount: 0, requestFieldsCount: 0, statusUpdateFieldsCount: 0 };
+    return { capdevFieldsCount: 0, internalRequestFieldsCount: 0, externalRequestFieldsCount: 0, statusUpdateFieldsCount: 0 };
   }
 }
 
@@ -1366,13 +1368,20 @@ export async function updateCapdevFieldsOrder(
   }
 }
 
-export async function getRequestFieldDefinitions() {
+export type RequestSetting = 'internal' | 'external';
+
+function isRequestSetting(value: string): value is RequestSetting {
+  return value === 'internal' || value === 'external';
+}
+
+export async function getRequestFieldDefinitions(setting: RequestSetting) {
   try {
     if (!await getCurrentAccess()) return [];
+    if (!isRequestSetting(setting)) return [];
     return await db
       .select()
       .from(requestFieldDefinitions)
-      .where(eq(requestFieldDefinitions.isActive, true))
+      .where(and(eq(requestFieldDefinitions.isActive, true), eq(requestFieldDefinitions.setting, setting)))
       .orderBy(requestFieldDefinitions.sortOrder);
   } catch (error) {
     console.error('Failed to get Request fields:', error);
@@ -1382,6 +1391,7 @@ export async function getRequestFieldDefinitions() {
 
 export async function saveRequestFieldDefinition(data: {
   id?: number;
+  setting: RequestSetting;
   name: string;
   type: string;
   options?: unknown[] | null;
@@ -1396,6 +1406,7 @@ export async function saveRequestFieldDefinition(data: {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    if (!isRequestSetting(data.setting)) return { success: false, error: 'Invalid request setting.' };
     if (data.id) {
       await db
         .update(requestFieldDefinitions)
@@ -1411,19 +1422,21 @@ export async function saveRequestFieldDefinition(data: {
           updatedById: data.updatedById,
           updatedAt: new Date(),
         })
-        .where(eq(requestFieldDefinitions.id, data.id));
-      await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityId: data.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
+        .where(and(eq(requestFieldDefinitions.id, data.id), eq(requestFieldDefinitions.setting, data.setting)));
+      await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityId: data.id, entityLabel: data.name, details: { setting: data.setting, type: data.type, section: data.section, isRequired: data.isRequired } });
       return { success: true, id: data.id };
     }
 
     const existing = await db
       .select({ maxOrder: sql<number>`COALESCE(MAX(${requestFieldDefinitions.sortOrder}), 0)` })
-      .from(requestFieldDefinitions);
+      .from(requestFieldDefinitions)
+      .where(eq(requestFieldDefinitions.setting, data.setting));
     const nextOrder = (existing[0]?.maxOrder || 0) + 1;
 
     const [inserted] = await db
       .insert(requestFieldDefinitions)
       .values({
+        setting: data.setting,
         name: data.name,
         type: data.type,
         options: data.options || null,
@@ -1436,7 +1449,7 @@ export async function saveRequestFieldDefinition(data: {
         updatedById: data.updatedById,
       })
       .returning({ id: requestFieldDefinitions.id });
-    await writeAuditLog(access, { action: 'created', entityType: 'request_field', entityId: inserted.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
+    await writeAuditLog(access, { action: 'created', entityType: 'request_field', entityId: inserted.id, entityLabel: data.name, details: { setting: data.setting, type: data.type, section: data.section, isRequired: data.isRequired } });
     return { success: true, id: inserted.id };
   } catch (error) {
     console.error('Failed to save Request field:', error);
@@ -1444,16 +1457,17 @@ export async function saveRequestFieldDefinition(data: {
   }
 }
 
-export async function deleteRequestFieldDefinition(id: number, updatedById: string) {
+export async function deleteRequestFieldDefinition(id: number, setting: RequestSetting, updatedById: string) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
-    const [field] = await db.select({ name: requestFieldDefinitions.name }).from(requestFieldDefinitions).where(eq(requestFieldDefinitions.id, id)).limit(1);
+    if (!isRequestSetting(setting)) return { success: false, error: 'Invalid request setting.' };
+    const [field] = await db.select({ name: requestFieldDefinitions.name }).from(requestFieldDefinitions).where(and(eq(requestFieldDefinitions.id, id), eq(requestFieldDefinitions.setting, setting))).limit(1);
     await db
       .update(requestFieldDefinitions)
       .set({ isActive: false, updatedById, updatedAt: new Date() })
-      .where(eq(requestFieldDefinitions.id, id));
-    await writeAuditLog(access, { action: 'deleted', entityType: 'request_field', entityId: id, entityLabel: field?.name || `Request field #${id}` });
+      .where(and(eq(requestFieldDefinitions.id, id), eq(requestFieldDefinitions.setting, setting)));
+    await writeAuditLog(access, { action: 'deleted', entityType: 'request_field', entityId: id, entityLabel: field?.name || `Request field #${id}`, details: { setting } });
     return { success: true };
   } catch (error) {
     console.error('Failed to delete Request field:', error);
@@ -1463,11 +1477,13 @@ export async function deleteRequestFieldDefinition(id: number, updatedById: stri
 
 export async function updateRequestFieldsOrder(
   fieldLayout: Array<{ id: number; columnPosition: 'left' | 'right' }>,
+  setting: RequestSetting,
   updatedById: string,
 ) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    if (!isRequestSetting(setting)) return { success: false, error: 'Invalid request setting.' };
     if (fieldLayout.length === 0) return { success: true };
     const orderRows = fieldLayout.map((field, index) => sql`(${field.id}::integer, ${index + 1}::integer, ${field.columnPosition}::varchar)`);
     // See updateCapdevFieldsOrder: a single statement is compatible with Neon HTTP
@@ -1480,8 +1496,9 @@ export async function updateRequestFieldsOrder(
           updated_at = NOW()
       FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order, column_position)
       WHERE field.id = ordered.id
+        AND field.setting = ${setting}
     `);
-    await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityLabel: 'Request field layout', details: { fieldLayout } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityLabel: `${setting === 'internal' ? 'Internal' : 'External'} request field layout`, details: { setting, fieldLayout } });
     return { success: true };
   } catch (error) {
     console.error('Failed to reorder Request fields:', error);

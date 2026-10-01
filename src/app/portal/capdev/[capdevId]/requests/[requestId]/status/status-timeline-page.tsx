@@ -8,7 +8,6 @@ import {
   Cancel as CancelIcon,
   Check as CheckIcon,
   CheckCircle as CheckCircleIcon,
-  Close as CloseIcon,
   ContentCopy as ContentCopyIcon,
   Description as FormIcon,
   Edit as EditIcon,
@@ -36,7 +35,6 @@ import {
   Fab,
   FormControlLabel,
   Grid,
-  IconButton,
   InputAdornment,
   Stack,
   TextField,
@@ -69,6 +67,7 @@ import { getHalfFieldLayout } from '@/components/FieldReorder';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import ActionErrorDialog from '@/components/ActionErrorDialog';
 import type { EvaluationSummary } from '@/lib/google-forms';
+import FileFieldChecklist from '@/components/FileFieldChecklist';
 
 type DynamicField = {
   id: number;
@@ -841,77 +840,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             onChange={(value) => setDynamicValue(field, value)}
           />
         ) : field.type === 'file' ? (
-          <Stack spacing={1}>
-            <Button
-              component="label"
-              variant="outlined"
-              fullWidth
-              startIcon={<AttachFileIcon />}
-              sx={{ borderRadius: 2, fontWeight: 700, py: 1.25 }}
-            >
-              {field.name}
-              {field.isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> *</span>}
-              <input hidden type="file" multiple onChange={(event) => addSelectedFiles(storageKey, event)} />
-            </Button>
-            {getAttachments(fieldValue).map((file) => (
-              <Stack
-                key={file.id}
-                direction="row"
-                spacing={1}
-                sx={{
-                  alignItems: 'center',
-                  bgcolor: 'rgba(0,0,0,0.03)',
-                  px: 1.5,
-                  py: 0.5,
-                  borderRadius: 1.5,
-                  width: 'fit-content',
-                  maxWidth: '100%',
-                }}
-              >
-                <Button
-                  component="a"
-                  href={file.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  size="small"
-                  startIcon={<AttachFileIcon />}
-                  sx={{
-                    textTransform: 'none',
-                    p: 0,
-                    minWidth: 0,
-                    fontWeight: 600,
-                    color: 'primary.main',
-                    textAlign: 'left',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {file.name}
-                </Button>
-                <IconButton
-                  size="small"
-                  onClick={() => removeExistingAttachment(field, file.id)}
-                  aria-label={`Remove ${file.name}`}
-                  sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
-                >
-                  <CloseIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Stack>
-            ))}
-            {(pendingFiles[storageKey] || []).length > 0 && (
-              <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                {pendingFiles[storageKey].map((file) => (
-                  <Chip
-                    key={`${file.name}-${file.lastModified}-${file.size}`}
-                    label={file.name}
-                    size="small"
-                    onDelete={() => removeSelectedFile(storageKey, file)}
-                  />
-                ))}
-              </Stack>
-            )}
-          </Stack>
+          <FileFieldChecklist
+            label={field.name}
+            required={field.isRequired}
+            existingFiles={getAttachments(fieldValue)}
+            pendingFiles={pendingFiles[storageKey] || []}
+            onSelectFiles={(event) => addSelectedFiles(storageKey, event)}
+            onRemoveExisting={(fileId) => removeExistingAttachment(field, fileId)}
+            onRemovePending={(file) => removeSelectedFile(storageKey, file)}
+          />
         ) : (
           <TextField
             required={field.isRequired}

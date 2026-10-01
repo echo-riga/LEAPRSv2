@@ -47,6 +47,7 @@ import type { StatusAttachment } from '@/lib/services/leaprs-service';
 
 export type DynamicField = {
   id: number;
+  setting: 'internal' | 'external';
   name: string;
   type: string;
   options?: unknown[] | null;
@@ -262,6 +263,7 @@ function RequestDraftModal({
   }, [draft]);
 
   if (!draft) return null;
+  const activeDefinitions = definitions.filter((field) => field.setting === draft.setting);
 
   const handleAipCodeBlur = async (codeValue: string) => {
     const code = codeValue.trim();
@@ -407,7 +409,7 @@ function RequestDraftModal({
             </Grid>
 
             {/* Dynamic Fields */}
-            {definitions.map((field) => {
+            {activeDefinitions.map((field) => {
               const fieldValue = getDynamicFieldValue(draft.dynamicFields, field);
               return (
                 <Grid
@@ -571,8 +573,11 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
   }, [currentRole]);
 
   useEffect(() => {
-    void getRequestFieldDefinitions().then((fields) => {
-      setDefinitions(fields as DynamicField[]);
+    void Promise.all([
+      getRequestFieldDefinitions('internal'),
+      getRequestFieldDefinitions('external'),
+    ]).then(([internalFields, externalFields]) => {
+      setDefinitions([...internalFields, ...externalFields] as DynamicField[]);
     });
   }, []);
 

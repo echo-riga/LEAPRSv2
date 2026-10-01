@@ -40,10 +40,17 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'get_request_form_schema',
-    description: 'Retrieves the current fixed and dynamic form fields schema for LEAPRS requests.',
+    description: 'Retrieves the current fixed and dynamic form fields schema for Internal or External LEAPRS requests.',
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        setting: {
+          type: 'string',
+          enum: ['internal', 'external'],
+          description: 'The request setting whose dynamic fields should be returned.',
+        },
+      },
+      required: ['setting'],
     },
   },
   {
@@ -241,7 +248,8 @@ export async function executeMcpTool(
       }
 
       case 'get_request_form_schema': {
-        const result = await getRequestFormSchemaService(access);
+        const setting = args.setting === 'external' ? 'external' : 'internal';
+        const result = await getRequestFormSchemaService(access, setting);
         return { success: true, data: result };
       }
 

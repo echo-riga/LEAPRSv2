@@ -55,6 +55,7 @@ Requisitions filed by employees against a specific CapDev.
   * Fixed fields shown in the form preview remain interactive, but their layout is not configurable: they cannot be edited, deleted, or dragged.
 * **Dynamic Fields (Configurable by Admin)**:
   * Attendance sheets (file type), feedback links, venue details, etc.
+  * Internal and External requests have independent dynamic-field configurations. Changing the fixed `Setting` field immediately switches the dynamic fields shown by the request form; fixed request fields remain unchanged.
   * Stored in `additional_info` JSONB column.
   * Fields marked `isRequired = true` are grouped in the required section, while optional fields appear in optional sections.
   * Dynamic fields remain fully configurable—including edit, delete, width toggling, and drag-and-drop reordering.
@@ -99,7 +100,9 @@ Google Drive is the durable file store; Vercel and the database do not store att
 
 ### C. Form Configuration & Custom Layouts
 * Admins can configure the forms for CapDev and Requests.
+* Request configuration is split into independent Internal and External field layouts, exposed as separate actions on the Settings page.
 * Dynamic field types supported: `text` (combobox: dropdown + text entry), `number`, `date` (datepicker), `select`, `file` (drag & drop upload), and `table` (editable grid). Table fields occupy a full row.
+* In operational forms, each configured `file` field is presented as a checklist row. Its indicator is checked when one or more existing or pending files are present; selecting the row opens the field's attachment dialog for viewing, adding, or removing files.
 * Dynamic fields support full-width or half-width layout. An unpaired half-width field can occupy either the left or right column (`columnPosition: 'left' | 'right'`). Field order and column position persist in both configuration preview and operational forms.
 * Adding/editing a field is a client-side draft operation. The bottom-right **Save Configuration** action is the explicit persistence point for staged additions, edits, and reordering.
 

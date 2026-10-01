@@ -36,6 +36,7 @@ export async function extractActivityDesignWithGemini(
 
   const dynamicFieldsPrompt = schema.dynamicFields.map((f) => ({
     key: `field:${f.id}`,
+    setting: f.setting,
     fallbackName: f.name,
     label: f.name,
     type: f.type,
@@ -61,7 +62,7 @@ CASE B - IS an activity design / seminar proposal:
 - For "requestedBudget", find the total proposed amount or budget requirement. Clean currency signs and return the numeric string.
 - For "setting", determine if "internal" (in-house/on-campus) or "external" (offsite/external provider).
 - For "description", extract the activity/seminar title or primary objective.
-- For "dynamicFields", map extracted details to active fields using their "field:<id>" key.
+- For "dynamicFields", use only fields whose "setting" matches the detected request setting, and map extracted details using their "field:<id>" key.
 - In "explanation", strictly output a single sentence stating the title: "I found an activity design for **[Title]**." Never ask for AIP codes, never ask follow-up questions, and never mention missing fields.
 
 LEAPRS Guidelines for Grounding:

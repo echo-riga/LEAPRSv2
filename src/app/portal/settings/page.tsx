@@ -35,7 +35,7 @@ export default function SettingsPage() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceSaving, setMaintenanceSaving] = useState(false);
   const [maintenanceError, setMaintenanceError] = useState('');
-  const [counts, setCounts] = useState({ capdevFieldsCount: 0, requestFieldsCount: 0, statusUpdateFieldsCount: 0 });
+  const [counts, setCounts] = useState({ capdevFieldsCount: 0, internalRequestFieldsCount: 0, externalRequestFieldsCount: 0, statusUpdateFieldsCount: 0 });
   const [userCounts, setUserCounts] = useState({ activeUsers: 0, pendingApprovals: 0 });
   const [role, setRole] = useState<AppRole | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
@@ -167,12 +167,17 @@ export default function SettingsPage() {
       icon: <RequestIcon color="primary" sx={{ fontSize: 32 }} />,
       description: 'Configure custom dynamic fields, form layout, and layout options for request forms.',
       control: (
-        <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
-          <Chip label={`${counts.requestFieldsCount} Dynamic Fields`} size="small" variant="outlined" color="primary" />
+        <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
+          <Chip label={`${counts.internalRequestFieldsCount} Internal Fields`} size="small" variant="outlined" color="primary" />
+          <Chip label={`${counts.externalRequestFieldsCount} External Fields`} size="small" variant="outlined" color="primary" />
         </Stack>
       ),
-      actionText: 'Configure Fields',
-      route: '/portal/settings/request',
+      footer: (
+        <Stack direction="row" spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/settings/request?setting=external')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Configure External Fields</Button>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/settings/request?setting=internal')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Configure Internal Fields</Button>
+        </Stack>
+      ),
     },
     {
       title: 'Status Update Configuration',
