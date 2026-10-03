@@ -35,6 +35,8 @@ import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess } from '@/app/actions';
 import { FormConfigSkeleton } from '@/components/Skeletons';
 import DateField from '@/components/DateField';
+import SelectionCombobox from '@/components/SelectionCombobox';
+import { hasComboboxOptions } from '@/lib/dynamic-fields';
 import DynamicTableField from '@/components/DynamicTableField';
 import {
   EmptyHalfFieldDropSlot,
@@ -161,7 +163,7 @@ function RequestConfigContent() {
 
   const currentUserId = session.data.user.id;
   const draftFields = fields.filter((field) => field.isTemp || editingKeys.has(field.key));
-  const hasInvalidDraft = draftFields.some((field) => !field.name.trim());
+  const hasInvalidDraft = draftFields.some((field) => !field.name.trim() || !hasComboboxOptions(field.type, field.options));
   const hasConfigurationChanges = draftFields.length > 0 || hasPendingDeletion;
 
   // ---- Inline add / edit / cancel / save / delete -------------------------------------------
@@ -352,6 +354,18 @@ function RequestConfigContent() {
     const files = previewFiles[field.key] || [];
 
     switch (field.type) {
+      case 'combobox':
+        return (
+          <SelectionCombobox
+            label={field.name}
+            required={isRequired}
+            size="small"
+            options={field.options}
+            value={String(value || '')}
+            placeholder={field.placeholder || undefined}
+            onChange={(nextValue) => setPreviewData({ ...previewData, [field.key]: nextValue })}
+          />
+        );
       case 'number':
         return (
           <Stack spacing={0.5}>
@@ -520,6 +534,7 @@ function RequestConfigContent() {
                 onChange={(e) => handleFieldChange(originalIndex, { type: e.target.value })}
               >
                 <MenuItem value="text">Text (Textbox / Combobox)</MenuItem>
+                <MenuItem value="combobox">Combobox (Suggestions Only)</MenuItem>
                 <MenuItem value="number">Number</MenuItem>
                 <MenuItem value="date">Date Picker</MenuItem>
                 <MenuItem value="file">File Upload (Allows Multiple)</MenuItem>
@@ -558,7 +573,7 @@ function RequestConfigContent() {
             />
           </Grid>
 
-          {f.type === 'text' && (
+          {(f.type === 'text' || f.type === 'combobox') && (
             <Grid size={12}>
               <Box sx={{ border: '1px solid rgba(0,0,0,0.12)', borderRadius: 2, p: 2, bgcolor: '#ffffff' }}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
@@ -590,7 +605,7 @@ function RequestConfigContent() {
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, maxHeight: 120, overflowY: 'auto' }}>
                   {(f.options || []).length === 0 ? (
                     <Typography variant="caption" color="text.secondary">
-                      No options added yet. User will type inputs freely.
+                      {f.type === 'combobox' ? 'Add options for users to select.' : 'No options added yet. User will type inputs freely.'}
                     </Typography>
                   ) : (
                     (f.options || []).map((opt) => (

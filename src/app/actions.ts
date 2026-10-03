@@ -17,7 +17,7 @@ import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { headers } from 'next/headers';
-import { getDynamicFieldValue } from '@/lib/dynamic-fields';
+import { getDynamicFieldValue, getInvalidComboboxFields, hasComboboxOptions } from '@/lib/dynamic-fields';
 import { PORTAL_CHATBOT_GUIDE } from '@/lib/portal-chatbot-guide';
 import {
   findCapdevByAipCodeService,
@@ -877,6 +877,18 @@ export type CapdevInput = {
   updatedById: string;
 };
 
+async function validateComboboxValues(
+  kind: 'capdev' | 'request' | 'status',
+  additionalInfo: Record<string, unknown>,
+  setting?: string,
+) {
+  const table = kind === 'capdev' ? capdevFieldDefinitions : kind === 'request' ? requestFieldDefinitions : statusUpdateFieldDefinitions;
+  const fields = await db.select().from(table).where(eq(table.isActive, true));
+  const applicable = kind === 'request' ? fields.filter((field) => 'setting' in field && field.setting === setting) : fields;
+  const invalid = getInvalidComboboxFields(applicable, additionalInfo);
+  return invalid.length ? 'Select a configured option for: ' + invalid.join(', ') + '.' : null;
+}
+
 async function getMissingRequiredCapdevFields(additionalInfo: Record<string, unknown>) {
   const fields = await db
     .select({ id: capdevFieldDefinitions.id, name: capdevFieldDefinitions.name, type: capdevFieldDefinitions.type, isRequired: capdevFieldDefinitions.isRequired, section: capdevFieldDefinitions.section })
@@ -1092,6 +1104,8 @@ export async function createCapdev(data: CapdevInput) {
     if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
       return { success: false, error: 'AIP Code must follow the format: 0000-000-0-0-00-000-000' };
     }
+    const selectionError = await validateComboboxValues('capdev', data.additionalInfo);
+    if (selectionError) return { success: false, error: selectionError };
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const aipCode = data.aipCode.trim();
@@ -1125,6 +1139,8 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
       return { success: false, error: 'AIP Code must follow the format: 0000-000-0-0-00-000-000' };
     }
+    const selectionError = await validateComboboxValues('capdev', data.additionalInfo);
+    if (selectionError) return { success: false, error: selectionError };
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [updated] = await db
@@ -1271,6 +1287,7 @@ export async function saveCapdevFieldDefinition(data: {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    if (!hasComboboxOptions(data.type, data.options)) return { success: false, error: 'Suggestions-only comboboxes require at least one non-empty option.' };
     if (data.id) {
       await db
         .update(capdevFieldDefinitions)
@@ -1406,6 +1423,7 @@ export async function saveRequestFieldDefinition(data: {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    if (!hasComboboxOptions(data.type, data.options)) return { success: false, error: 'Suggestions-only comboboxes require at least one non-empty option.' };
     if (!isRequestSetting(data.setting)) return { success: false, error: 'Invalid request setting.' };
     if (data.id) {
       await db
@@ -1588,6 +1606,7 @@ export async function saveStatusUpdateFieldDefinition(data: {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    if (!hasComboboxOptions(data.type, data.options)) return { success: false, error: 'Suggestions-only comboboxes require at least one non-empty option.' };
     if (data.id) {
       await db
         .update(statusUpdateFieldDefinitions)
@@ -1743,6 +1762,8 @@ export async function createRequest(data: RequestInput) {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return unauthorized;
     if (!await getAccessibleCapdev(access, data.capdevId)) return unauthorized;
+    const selectionError = await validateComboboxValues('request', data.additionalInfo, data.setting);
+    if (selectionError) return { success: false, error: selectionError };
     const { data: session } = await auth.getSession();
 
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, data.capdevId)).limit(1);
@@ -1776,6 +1797,8 @@ export async function updateRequest(id: number, data: RequestInput) {
     if (!access || !canManageRequests(access)) return unauthorized;
     const existing = await getAccessibleRequest(access, id);
     if (!existing) return { success: false, error: 'Request not found.' };
+    const selectionError = await validateComboboxValues('request', data.additionalInfo, data.setting);
+    if (selectionError) return { success: false, error: selectionError };
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, existing.capdevId)).limit(1);
     const [deduction] = await db.select({ id: requestStatusUpdates.id }).from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
     if (deduction && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested budget cannot be changed after it has been deducted.' };
@@ -2333,6 +2356,11 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
 
     if (!isStopperResponse && (!data.statusMark || !['pending', 'completed', 'denied', 'accepted'].includes(data.statusMark))) {
       return { success: false, error: 'A valid status mark (Pending, Completed, or Denied) is required for every status update.' };
+    }
+
+    if (!isStopperResponse) {
+      const selectionError = await validateComboboxValues('status', data.additionalInfo || {});
+      if (selectionError) return { success: false, error: selectionError };
     }
 
     // 1. Handle budget deduction if requested

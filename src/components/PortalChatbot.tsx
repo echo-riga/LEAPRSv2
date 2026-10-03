@@ -41,6 +41,7 @@ import {
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import { authClient } from '@/lib/auth/client';
 import DateField from '@/components/DateField';
+import SelectionCombobox from '@/components/SelectionCombobox';
 import DynamicTableField from '@/components/DynamicTableField';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import type { StatusAttachment } from '@/lib/services/leaprs-service';
@@ -416,7 +417,17 @@ function RequestDraftModal({
                   key={field.id}
                   size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
                 >
-                  {field.type === 'date' ? (
+                  {field.type === 'combobox' ? (
+                    <SelectionCombobox
+                      label={field.name}
+                      required={field.isRequired}
+                      options={field.options}
+                      value={String(fieldValue || '')}
+                      placeholder={field.placeholder || undefined}
+                      disabled={submitting}
+                      onChange={(value) => handleSetDynamicValue(field, value)}
+                    />
+                  ) : field.type === 'date' ? (
                     <DateField
                       label={field.name}
                       required={field.isRequired}

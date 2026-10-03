@@ -8,7 +8,7 @@ import {
   notifications,
 } from '@/db/schema';
 import { and, desc, eq, getTableColumns } from 'drizzle-orm';
-import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
+import { dynamicFieldStorageKey, getDynamicFieldValue, getInvalidComboboxFields } from '@/lib/dynamic-fields';
 
 export type AppRole = 'admin' | 'employee' | 'employee-department' | 'viewer' | 'viewer-full';
 export type UserAccess = { userId: string; role: AppRole; department: string; name?: string; email?: string };
@@ -345,6 +345,8 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   // Validate dynamic required fields
   const schema = await getRequestFormSchemaService(access, input.setting);
   const additionalInfo: Record<string, unknown> = { ...(input.dynamicFields || {}) };
+  const invalidSelections = getInvalidComboboxFields(schema.dynamicFields, additionalInfo);
+  if (invalidSelections.length) return { success: false as const, error: 'Select a configured option for: ' + invalidSelections.join(', ') + '.' };
   const missingFields: string[] = [];
 
   for (const field of schema.dynamicFields) {

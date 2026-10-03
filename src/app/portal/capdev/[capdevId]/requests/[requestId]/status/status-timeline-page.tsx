@@ -61,6 +61,7 @@ import {
   type StatusAttachment,
 } from '@/app/actions';
 import DateField from '@/components/DateField';
+import SelectionCombobox from '@/components/SelectionCombobox';
 import DynamicTableField from '@/components/DynamicTableField';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
@@ -694,7 +695,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
     if (!primaryStatusUpdate && definitions.length > 0) {
       // Find first non-empty text value or default to first field
-      const firstTextField = definitions.find((d) => d.type === 'text' || d.type === 'textarea');
+      const firstTextField = definitions.find((d) => d.type === 'text' || d.type === 'textarea' || d.type === 'combobox');
       if (firstTextField) {
         const val = getDynamicFieldValue(additionalInfo, firstTextField);
         if (typeof val === 'string' && val.trim()) {
@@ -778,7 +779,17 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
         offset={rightAlignedFieldIds.has(field.id) ? { xs: 0, sm: 6 } : undefined}
       >
-        {((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
+        {field.type === 'combobox' ? (
+          <SelectionCombobox
+            label={field.name}
+            required={field.isRequired}
+            options={field.options}
+            value={String(fieldValue || '')}
+            placeholder={field.placeholder || undefined}
+
+            onChange={(value) => setDynamicValue(field, value)}
+          />
+        ) : ((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
           <Autocomplete
             freeSolo
             options={field.options}

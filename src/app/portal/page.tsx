@@ -7,6 +7,7 @@ import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Containe
 import { authClient } from '@/lib/auth/client';
 import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
 import DateField from '@/components/DateField';
+import SelectionCombobox from '@/components/SelectionCombobox';
 import DynamicTableField from '@/components/DynamicTableField';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
@@ -272,7 +273,17 @@ export default function PortalPage() {
         size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
         offset={rightAlignedFieldIds.has(field.id) ? { xs: 0, sm: 6 } : undefined}
       >
-        {((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
+        {field.type === 'combobox' ? (
+          <SelectionCombobox
+            label={field.name}
+            required={field.isRequired}
+            options={field.options}
+            value={String(fieldValue || '')}
+            placeholder={field.placeholder || undefined}
+
+            onChange={(value) => setDynamicValue(field, value)}
+          />
+        ) : ((field.type === 'text' || field.type === 'textarea') && field.options && field.options.length > 0) ? (
           <Autocomplete
             freeSolo
             options={field.options}
