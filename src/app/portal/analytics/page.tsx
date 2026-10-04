@@ -15,7 +15,6 @@ import {
   Card,
   CardContent,
   Checkbox,
-  CircularProgress,
   Container,
   Dialog,
   DialogActions,
@@ -29,6 +28,7 @@ import {
 } from '@mui/material';
 import { getAnalyticsData } from '@/app/actions';
 import { AnalyticsSkeleton } from '@/components/Skeletons';
+import { manilaDate, manilaDateBoundary } from '@/lib/manila-date';
 import DateField from '@/components/DateField';
 
 type AnalyticsData = Awaited<ReturnType<typeof getAnalyticsData>>;
@@ -37,15 +37,14 @@ type AnalyticsFilters = { departments: string[]; capdevIds: number[]; dateFrom: 
 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const auditActivity = [28, 42, 36, 58, 49, 72, 65, 88, 78, 96, 86, 112];
 const currency = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 });
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => manilaDate();
 const dateRange = (range: 'today' | 'month' | 'year') => {
-  const now = new Date();
   const dateTo = today();
   return range === 'today'
     ? { dateFrom: dateTo, dateTo }
     : range === 'month'
-    ? { dateFrom: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, dateTo }
-    : { dateFrom: `${now.getFullYear()}-01-01`, dateTo };
+    ? { dateFrom: dateTo.slice(0, 7) + '-01', dateTo }
+    : { dateFrom: dateTo.slice(0, 4) + '-01-01', dateTo };
 };
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
@@ -62,13 +61,13 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
 }
 
 export default function AnalyticsPage() {
-  const [data, setData] = useState<AnalyticsData>({ capdevs: [], requests: [], statusUpdates: [] });
+  const [data, setData] = useState<AnalyticsData>({ capdevs: [], requests: [] });
   const [loading, setLoading] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<AnalyticsFilters>({
     departments: [],
     capdevIds: [],
-    dateFrom: `${new Date().getFullYear()}-01-01`,
+    dateFrom: manilaDate().slice(0, 4) + '-01-01',
     dateTo: today(),
   });
   const [draftFilters, setDraftFilters] = useState<AnalyticsFilters>(filters);
@@ -81,7 +80,7 @@ export default function AnalyticsPage() {
       const initial: AnalyticsFilters = {
         departments: allDepts,
         capdevIds: allCapdevIds,
-        dateFrom: `${new Date().getFullYear()}-01-01`,
+        dateFrom: manilaDate().slice(0, 4) + '-01-01',
         dateTo: today(),
       };
       setFilters(initial);
@@ -158,7 +157,7 @@ export default function AnalyticsPage() {
     setDraftFilters({
       departments: allDepts,
       capdevIds: allCapdevIds,
-      dateFrom: `${new Date().getFullYear()}-01-01`,
+      dateFrom: manilaDate().slice(0, 4) + '-01-01',
       dateTo: today(),
     });
   };
@@ -168,8 +167,8 @@ export default function AnalyticsPage() {
       const createdAt = new Date(capdev.createdAt).getTime();
       const inDept = filters.departments.includes(capdev.department);
       const inCapdev = filters.capdevIds.includes(capdev.id);
-      const inDateFrom = !filters.dateFrom || createdAt >= new Date(filters.dateFrom).getTime();
-      const inDateTo = !filters.dateTo || createdAt <= new Date(`${filters.dateTo}T23:59:59`).getTime();
+      const inDateFrom = !filters.dateFrom || createdAt >= manilaDateBoundary(filters.dateFrom).getTime();
+      const inDateTo = !filters.dateTo || createdAt <= manilaDateBoundary(filters.dateTo, true).getTime();
       return inDept && inCapdev && inDateFrom && inDateTo;
     });
   }, [data.capdevs, filters]);
@@ -180,17 +179,15 @@ export default function AnalyticsPage() {
       const createdAt = new Date(request.createdAt).getTime();
       return (
         filteredCapdevIds.has(request.capdevId) &&
-        (!filters.dateFrom || createdAt >= new Date(filters.dateFrom).getTime()) &&
-        (!filters.dateTo || createdAt <= new Date(`${filters.dateTo}T23:59:59`).getTime())
+        (!filters.dateFrom || createdAt >= manilaDateBoundary(filters.dateFrom).getTime()) &&
+        (!filters.dateTo || createdAt <= manilaDateBoundary(filters.dateTo, true).getTime())
       );
     });
   }, [data.requests, filteredCapdevIds, filters.dateFrom, filters.dateTo]);
 
-  const completedIds = useMemo(
-    () => new Set(data.statusUpdates.filter((update) => update.markAsComplete).map((update) => update.requestId)),
-    [data.statusUpdates]
-  );
-  const completedCount = filteredRequests.filter((request) => completedIds.has(request.id)).length;
+  const requestTotal = filteredRequests.reduce((sum, bucket) => sum + bucket.total, 0);
+  const completedCount = filteredRequests.reduce((sum, bucket) => sum + bucket.completed, 0);
+  const inProgressCount = filteredRequests.reduce((sum, bucket) => sum + bucket.inProgress, 0);
   const initialBudget = filteredCapdevs.reduce((total, capdev) => total + Number(capdev.initialBudget), 0);
   const remainingBudget = filteredCapdevs.reduce((total, capdev) => total + Number(capdev.budget), 0);
   const utilizedBudget = initialBudget - remainingBudget;
@@ -207,8 +204,8 @@ export default function AnalyticsPage() {
   }, [filteredCapdevs]);
   const maxAllocation = Math.max(...allocations.map((allocation) => allocation.value), 1);
 
-  const internalCount = filteredRequests.filter((request) => request.setting.toLowerCase() === 'internal').length;
-  const externalCount = filteredRequests.filter((request) => request.setting.toLowerCase() === 'external').length;
+  const internalCount = filteredRequests.filter((request) => request.setting.toLowerCase() === 'internal').reduce((sum, bucket) => sum + bucket.total, 0);
+  const externalCount = filteredRequests.filter((request) => request.setting.toLowerCase() === 'external').reduce((sum, bucket) => sum + bucket.total, 0);
   const trainingTotal = internalCount + externalCount;
   const internalPercent = trainingTotal > 0 ? Math.round((internalCount / trainingTotal) * 100) : 0;
   const activityPoints = useMemo(
@@ -263,8 +260,8 @@ export default function AnalyticsPage() {
 
         <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
           {[
-            { label: 'Total requests', value: filteredRequests.length, icon: <RequestIcon /> },
-            { label: 'In progress', value: filteredRequests.length - completedCount, icon: <ProgressIcon /> },
+            { label: 'Total requests', value: requestTotal, icon: <RequestIcon /> },
+            { label: 'In progress', value: inProgressCount, icon: <ProgressIcon /> },
             { label: 'Completed', value: completedCount, icon: <CompleteIcon /> },
           ].map((stat) => (
             <Grid key={stat.label} size={{ xs: 12, sm: 4 }}>
@@ -647,4 +644,3 @@ export default function AnalyticsPage() {
     </Box>
   );
 }
-

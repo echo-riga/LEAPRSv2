@@ -26,6 +26,20 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const securityRateLimits = pgTable('security_rate_limits', {
+  key: text('key').primaryKey(),
+  attempts: integer('attempts').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+}, (table) => [index('security_rate_limits_expires_idx').on(table.expiresAt)]);
+
+// Folder IDs are trusted only when recorded by the server, never from form JSON.
+export const requestStorageFolders = pgTable('request_storage_folders', {
+  folderId: text('folder_id').primaryKey(),
+  requestId: integer('request_id').references(() => requests.id, { onDelete: 'cascade' }),
+  userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  rootFolderId: text('root_folder_id').notNull(),
+}, (table) => [uniqueIndex('request_storage_folders_request_idx').on(table.requestId)]);
+
 // OAuth grants for remote MCP clients. Only hashes of bearer credentials are stored.
 export const mcpOAuthGrants = pgTable('mcp_oauth_grants', {
   tokenHash: text('token_hash').primaryKey(),
@@ -95,7 +109,10 @@ export const capdevs = pgTable('capdevs', {
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED FORM DATA LAST
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => [
+  index('capdevs_department_created_idx').on(table.department, table.createdAt, table.id),
+  index('capdevs_created_idx').on(table.createdAt, table.id),
+]);
 
 // Request dynamic fields definitions configuration
 export const requestFieldDefinitions = pgTable('request_field_definitions', {
@@ -154,7 +171,10 @@ export const requests = pgTable('requests', {
   updatedById: text('updated_by_id').references(() => users.id).notNull(), // WHO EDITED FORM DATA LAST
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => [
+  index('requests_capdev_created_idx').on(table.capdevId, table.createdAt, table.id),
+  index('requests_user_created_idx').on(table.userId, table.createdAt, table.id),
+]);
 
 // Request Status Updates (Timeline logs)
 export const requestStatusUpdates = pgTable('request_status_updates', {
@@ -175,6 +195,7 @@ export const requestStatusUpdates = pgTable('request_status_updates', {
   additionalInfo: jsonb('additional_info').default({}).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
+  index('request_status_updates_request_created_idx').on(table.requestId, table.createdAt),
   uniqueIndex('unique_request_complete_idx')
     .on(table.requestId)
     .where(sql`mark_as_complete = true`),
@@ -187,16 +208,16 @@ export const requestStatusUpdates = pgTable('request_status_updates', {
 export const passwordResets = pgTable('password_resets', {
   id: serial('id').primaryKey(),
   email: varchar('email', { length: 255 }).notNull(),
-  code: varchar('code', { length: 10 }).notNull(),
+  code: varchar('code', { length: 64 }).notNull(),
   expiresAt: timestamp('expires_at').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (table) => [index('password_resets_email_idx').on(table.email)]);
 
 // Signup Email Verifications table
 export const signupVerifications = pgTable('signup_verifications', {
   id: serial('id').primaryKey(),
   email: varchar('email', { length: 255 }).notNull(),
-  code: varchar('code', { length: 10 }).notNull(),
+  code: varchar('code', { length: 64 }).notNull(),
   expiresAt: timestamp('expires_at').notNull(),
   isVerified: boolean('is_verified').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),

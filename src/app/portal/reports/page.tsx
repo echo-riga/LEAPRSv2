@@ -2,8 +2,9 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Assessment as ReportIcon, CheckBox as SelectAllIcon, Download as DownloadIcon, FilterAlt as FilterIcon, Refresh as ResetIcon } from '@mui/icons-material';
-import { Box, Button, Card, CardActionArea, CardContent, Checkbox, CircularProgress, Divider, FormControlLabel, Grid, Stack, TextField, Typography } from '@mui/material';
+import { Box, Button, Card, CardActionArea, CardContent, Checkbox, CircularProgress, Divider, FormControlLabel, Grid, Stack, Typography } from '@mui/material';
 import { generateMonitoringSheet, getMonitoringReportData } from '@/app/actions';
+import { manilaDate, manilaDateBoundary } from '@/lib/manila-date';
 import DateField from '@/components/DateField';
 import { getDynamicFieldValue } from '@/lib/dynamic-fields';
 
@@ -29,7 +30,7 @@ const REQUEST_FIXED_FIELDS = ['Setting', 'Requested Amount', 'Requestor'] as con
 const CAPDEV_FIXED_KEYS = ['aipCode', 'department', 'initialBudget', 'budget'];
 const REQUEST_FIXED_KEYS = ['setting', 'requestedBudget', 'requestorName'];
 
-const toDateInput = () => new Date().toISOString().slice(0, 10);
+const toDateInput = () => manilaDate();
 
 function displayValue(value: unknown) {
   if (value === null || value === undefined || value === '') return '';
@@ -68,7 +69,7 @@ export default function ReportsPage() {
 
   const visibleCapdevs = useMemo(() => data.capdevs.filter((capdev) => {
     const createdAt = new Date(capdev.createdAt).getTime();
-    return (!dateFrom || createdAt >= new Date(dateFrom).getTime()) && (!dateTo || createdAt <= new Date(`${dateTo}T23:59:59`).getTime());
+    return (!dateFrom || createdAt >= manilaDateBoundary(dateFrom).getTime()) && (!dateTo || createdAt <= manilaDateBoundary(dateTo, true).getTime());
   }), [data.capdevs, dateFrom, dateTo]);
   const visibleIds = useMemo(() => new Set(visibleCapdevs.map((capdev) => capdev.id)), [visibleCapdevs]);
   const selectedCapdevs = data.capdevs.filter((capdev) => selectedCapdevIds.includes(capdev.id) && visibleIds.has(capdev.id));
@@ -84,8 +85,8 @@ export default function ReportsPage() {
   const capdevColumnCount = Math.max(1, selectedMonitoringFields.length);
 
   const setQuickDate = (range: 'today' | 'month' | 'year') => {
-    const now = new Date(); const dateTo = toDateInput();
-    setDateFrom(range === 'today' ? dateTo : range === 'month' ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01` : `${now.getFullYear()}-01-01`);
+    const dateTo = toDateInput();
+    setDateFrom(range === 'today' ? dateTo : range === 'month' ? dateTo.slice(0, 7) + '-01' : dateTo.slice(0, 4) + '-01-01');
     setDateTo(dateTo);
   };
   const toggleCapdev = (id: number) => setSelectedCapdevIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);

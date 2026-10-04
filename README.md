@@ -24,6 +24,35 @@ To check discovery after deployment, open `https://YOUR-LEAPRS-DOMAIN/.well-know
 
 ## Getting Started
 
+Use Node.js 22.15 or newer. Database mutations that require locks use Neon's
+WebSocket driver with a connection scoped to each transaction.
+
+After pulling these security changes, apply the additive database migration:
+
+```bash
+npm run db:security-migrate
+```
+
+The script reads `.env.local`, preserves existing records, and can be rerun.
+Existing six-digit verification codes must be requested again because new codes
+are stored as keyed hashes. Existing attachment links remain usable; legacy
+folder IDs from form JSON are never adopted for deletion. New request folders
+are recorded in `request_storage_folders` and checked against the configured
+Google Drive root.
+
+Run regression checks with:
+
+```bash
+npm run test:security
+npm run test:security:db
+```
+
+The database tests create a randomly named disposable schema, exercise budget
+concurrency and folder ownership, and remove that schema afterward. They do not
+modify application records. Verification limits are shared through PostgreSQL;
+the deployment proxy must overwrite client-supplied forwarded IP headers.
+Expired rows in `security_rate_limits` can be removed periodically.
+
 First, run the development server:
 
 ```bash

@@ -1,4 +1,7 @@
 import { db } from '@/db';
+import { withTransaction } from '@/db/transaction';
+import { claimRequestFolder } from '@/lib/request-storage';
+import { validateMoney, validateRequestInput } from '@/lib/request-validation';
 import {
   capdevs,
   requests,
@@ -313,7 +316,7 @@ export async function createRequestDraftService(access: UserAccess, draft: Reque
  * Persists a validated request to the database, enforcing user confirmation and budget limits.
  */
 export async function submitRequestService(access: UserAccess, input: RequestSubmissionInput) {
-  if (!input.userConfirmed) {
+  if (input.userConfirmed !== true) {
     return { success: false as const, error: 'User confirmation is required before submitting a request.' };
   }
 
@@ -328,7 +331,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   }
 
   const capdev = capdevResult.capdev;
-  const requestedBudgetNum = Number(input.requestedBudget);
+  const requestedBudgetNum = Number(validateMoney(input.requestedBudget));
   const remainingBudgetNum = Number(capdev.remainingBudget);
 
   if (isNaN(requestedBudgetNum) || requestedBudgetNum <= 0) {
@@ -344,28 +347,10 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
 
   // Validate dynamic required fields
   const schema = await getRequestFormSchemaService(access, input.setting);
-  const additionalInfo: Record<string, unknown> = { ...(input.dynamicFields || {}) };
+  const additionalInfo = validateRequestInput({ capdevId: capdev.id, setting: input.setting,
+    description: input.description || '', requestedBudget: input.requestedBudget, additionalInfo: input.dynamicFields || {} }).additionalInfo;
   const invalidSelections = getInvalidComboboxFields(schema.dynamicFields, additionalInfo);
   if (invalidSelections.length) return { success: false as const, error: 'Select a configured option for: ' + invalidSelections.join(', ') + '.' };
-  const missingFields: string[] = [];
-
-  for (const field of schema.dynamicFields) {
-    const value = getDynamicFieldValue(additionalInfo, field);
-    if (field.isRequired) {
-      let hasValue = false;
-      if (field.type === 'file') {
-        hasValue = Array.isArray(value) && value.length > 0;
-      } else if (field.type === 'table') {
-        hasValue = Array.isArray(value) && value.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
-      } else {
-        hasValue = value !== undefined && value !== null && String(value).trim().length > 0;
-      }
-      if (!hasValue) {
-        missingFields.push(field.name);
-      }
-    }
-  }
-
   // Attach sourceFile or attachments if provided
   if (input.sourceFile || (input.attachments && input.attachments.length > 0)) {
     const existingAttachments = Array.isArray(additionalInfo.attachments) ? (additionalInfo.attachments as StatusAttachment[]) : [];
@@ -388,6 +373,25 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
     }
   }
 
+  const missingFields: string[] = [];
+
+  for (const field of schema.dynamicFields) {
+    const value = getDynamicFieldValue(additionalInfo, field);
+    if (field.isRequired) {
+      let hasValue = false;
+      if (field.type === 'file') {
+        hasValue = Array.isArray(value) && value.length > 0;
+      } else if (field.type === 'table') {
+        hasValue = Array.isArray(value) && value.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
+      } else {
+        hasValue = value !== undefined && value !== null && String(value).trim().length > 0;
+      }
+      if (!hasValue) {
+        missingFields.push(field.name);
+      }
+    }
+  }
+
   if (missingFields.length > 0) {
     return {
       success: false as const,
@@ -395,7 +399,8 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
     };
   }
 
-  const [created] = await db
+  const created = await withTransaction(async (tx) => {
+  const [record] = await tx
     .insert(requests)
     .values({
       capdevId: capdev.id,
@@ -404,11 +409,15 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
       setting: input.setting,
       description: input.description || '',
       requestedBudget: String(requestedBudgetNum),
-      additionalInfo,
+      additionalInfo: {},
       status: 'in_progress',
       updatedById: access.userId,
     })
     .returning();
+  await claimRequestFolder(tx, access.userId, record.id, additionalInfo);
+  const [saved] = await tx.update(requests).set({ additionalInfo }).where(eq(requests.id, record.id)).returning();
+  return saved;
+  });
 
   await writeAuditLogEntry(access, {
     action: 'created',

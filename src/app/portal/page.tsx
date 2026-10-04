@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Add as AddIcon, ChevronRight as ChevronRightIcon, DeleteOutlined as DeleteIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
 import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, FormControlLabel, Grid, IconButton, InputAdornment, MenuItem, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import { authClient } from '@/lib/auth/client';
-import { createCapdev, deleteCapdev, getAllCapdevs, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
+import { createCapdev, deleteCapdev, getCapdevPage, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
+import { manilaDate } from '@/lib/manila-date';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
 import DynamicTableField from '@/components/DynamicTableField';
@@ -44,6 +45,10 @@ export default function PortalPage() {
   const router = useRouter();
   const session = authClient.useSession();
   const [projects, setProjects] = useState<Capdev[]>([]);
+  const [total, setTotal] = useState(0);
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState('');
+  const loadSequence = useRef(0);
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
   const [departmentIsOther, setDepartmentIsOther] = useState(false);
   const [definitions, setDefinitions] = useState<DynamicField[]>([]);
@@ -91,86 +96,60 @@ export default function PortalPage() {
     };
   }, []);
 
-  const loadData = async () => {
-    const [projectData, fieldData, departmentData] = await Promise.all([getAllCapdevs(), getCapdevFieldDefinitions(), getDepartmentOptions()]);
-    const normalizedProjects = projectData.map((project) => ({
-      ...project,
-      initialBudget: String(project.initialBudget), budget: String(project.budget),
-      additionalInfo: (project.additionalInfo && typeof project.additionalInfo === 'object' ? project.additionalInfo : {}) as Record<string, unknown>,
-    }));
-    setProjects(normalizedProjects);
-    setDepartmentOptions(departmentData);
-    const allKnownDepartments = Array.from(new Set(normalizedProjects.map((project) => (project.department && project.department !== 'None' ? project.department.trim() : '')).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-    allKnownDepartments.unshift('None');
-
-    if (!filtersInitialized.current) {
-      setFilters((current) => ({ ...current, departments: allKnownDepartments }));
-      setDraftFilters((current) => ({ ...current, departments: allKnownDepartments }));
-      filtersInitialized.current = true;
-    } else {
-      setFilters((current) => {
-        const prevKnown = Array.from(new Set(projects.map((p) => (p.department && p.department !== 'None' ? p.department.trim() : 'None'))));
-        const hadAllSelected = prevKnown.length > 0 && prevKnown.every((d) => current.departments.includes(d));
-        if (hadAllSelected) {
-          return { ...current, departments: allKnownDepartments };
+  const userId = session.data?.user.id;
+  const loadData = useCallback(async () => {
+    if (!userId) return;
+    const sequence = ++loadSequence.current;
+    try {
+      const result = await getCapdevPage({ page, search, filters,
+        focusId: notificationFocus ? Number(notificationFocus.targetId.replace('capdev-record-', '')) : undefined });
+      if (sequence !== loadSequence.current) return;
+      if (!result.success) { setLoadError(result.error); return; }
+      setLoadError('');
+      setProjects(result.records.map((project) => ({ ...project, initialBudget: String(project.initialBudget), budget: String(project.budget),
+        additionalInfo: project.additionalInfo as Record<string, unknown> })));
+      setTotal(result.total);
+      setDepartments(result.departments);
+      setPage(result.page);
+      if (!filtersInitialized.current || notificationFocus) {
+        const next = { ...filters, departments: result.departments };
+        if (notificationFocus) {
+          Object.assign(next, { initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' });
+          setSearch('');
         }
-        return current;
-      });
-      setDraftFilters((current) => {
-        const prevKnown = Array.from(new Set(projects.map((p) => (p.department && p.department !== 'None' ? p.department.trim() : 'None'))));
-        const hadAllSelected = prevKnown.length > 0 && prevKnown.every((d) => current.departments.includes(d));
-        if (hadAllSelected) {
-          return { ...current, departments: allKnownDepartments };
-        }
-        return current;
-      });
+        if (JSON.stringify(next) !== JSON.stringify(filters)) setFilters(next);
+        setDraftFilters(next);
+        filtersInitialized.current = true;
+      }
+    } catch {
+      if (sequence === loadSequence.current) setLoadError('Unable to load projects. Please try again.');
+    } finally {
+      if (sequence === loadSequence.current) setLoading(false);
     }
-    setDefinitions(fieldData.map((field) => ({ ...field, options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [] })));
-    setLoading(false);
-  };
+  }, [userId, page, search, filters, notificationFocus]);
 
-  useEffect(() => { void Promise.resolve().then(loadData); }, []);
+  useEffect(() => {
+    let active = true;
+    const sequenceRef = loadSequence;
+    void Promise.resolve().then(() => { if (active) return loadData(); });
+    return () => { active = false; sequenceRef.current++; };
+  }, [loadData]);
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    void Promise.all([getCapdevFieldDefinitions(), getDepartmentOptions()]).then(([fields, options]) => {
+      if (!active) return;
+      setDefinitions(fields.map((field) => ({ ...field, options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [] })));
+      setDepartmentOptions(options);
+    }).catch(() => { if (active) setLoadError('Unable to load project configuration.'); });
+    return () => { active = false; };
+  }, [userId]);
 
-  const departments = useMemo(() => {
-    const list = Array.from(new Set(projects.map((project) => (project.department && project.department !== 'None' ? project.department.trim() : '')).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-    list.unshift('None');
-    return list;
-  }, [projects]);
-  const filtered = useMemo(() => projects.filter((project) => {
-    const projectDept = project.department?.trim() || 'None';
-    const searchText = `${project.aipCode} ${projectDept} ${project.updatedById}`.toLowerCase(); const date = new Date(project.createdAt).getTime();
-    return searchText.includes(search.toLowerCase()) && filters.departments.includes(projectDept) && (!filters.initialMin || Number(project.initialBudget) >= Number(filters.initialMin)) && (!filters.initialMax || Number(project.initialBudget) <= Number(filters.initialMax)) && (!filters.remainingMin || Number(project.budget) >= Number(filters.remainingMin)) && (!filters.remainingMax || Number(project.budget) <= Number(filters.remainingMax)) && (!filters.dateFrom || date >= new Date(filters.dateFrom).getTime()) && (!filters.dateTo || date <= new Date(`${filters.dateTo}T23:59:59`).getTime());
-  }).sort((a, b) => filters.sort === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()), [filters, projects, search]);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / 6));
-  const visible = filtered.slice((page - 1) * 6, page * 6);
+  const pageCount = Math.max(1, Math.ceil(total / 6));
+  const visible = projects;
 
   useEffect(() => {
     if (!notificationFocus || loading) return;
-    const capdevIdToFocus = Number(notificationFocus.targetId.replace('capdev-record-', ''));
-    const filteredIndex = filtered.findIndex((project) => project.id === capdevIdToFocus);
-
-    if (filteredIndex < 0 && projects.some((project) => project.id === capdevIdToFocus)) {
-      const resetTimeoutId = window.setTimeout(() => {
-        setSearch('');
-        setFilters({
-          departments: (() => {
-          const list = Array.from(new Set(projects.map((project) => project.department?.trim() || 'None')));
-          if (!list.includes('None')) list.unshift('None');
-          return list.sort((a, b) => (a === 'None' ? -1 : b === 'None' ? 1 : a.localeCompare(b)));
-        })(),
-          initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest',
-        });
-      }, 0);
-      return () => window.clearTimeout(resetTimeoutId);
-    }
-    if (filteredIndex < 0) return;
-
-    const targetPage = Math.floor(filteredIndex / 6) + 1;
-    if (page !== targetPage) {
-      const pageTimeoutId = window.setTimeout(() => setPage(targetPage), 0);
-      return () => window.clearTimeout(pageTimeoutId);
-    }
-
     const target = document.getElementById(notificationFocus.targetId);
     if (!target) return;
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -178,7 +157,7 @@ export default function PortalPage() {
       setNotificationFocus((current) => current?.nonce === notificationFocus.nonce ? null : current);
     }, 1400);
     return () => window.clearTimeout(timeoutId);
-  }, [filtered, loading, notificationFocus, page, projects]);
+  }, [loading, notificationFocus, projects]);
   const requiredDefinitions = definitions.filter((field) => field.isRequired || field.section === 'required');
   const allDefinitions = definitions;
   const rightAlignedFieldIds = getHalfFieldLayout(allDefinitions.map((field) => ({ ...field, key: field.id }))).before;
@@ -392,6 +371,7 @@ export default function PortalPage() {
         </Stack>
       </Stack>
 
+        {loadError && <Alert severity="error" sx={{ mb: 2 }}>{loadError}<Button onClick={() => void loadData()}>Retry</Button></Alert>}
         {visible.length === 0 ? <Card variant="outlined" sx={{ borderRadius: 2, minHeight: 300, display: 'grid', placeItems: 'center' }}><Stack spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}><CapdevIcon sx={{ fontSize: 42 }} /><Typography>No CapDev projects found</Typography></Stack></Card> :
           <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>{visible.map((project) => <Grid id={`capdev-record-${project.id}`} key={project.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3, scrollMarginTop: 96 }}>
             <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}><Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}><Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>Added {formatDate(project.createdAt)}</Typography></Box></Box>
@@ -423,7 +403,7 @@ export default function PortalPage() {
             </Card>
           </Grid>)}</Grid>}
 
-      {filtered.length > 6 && <Stack direction="row" spacing={2} sx={{ justifyContent: 'center', alignItems: 'center', mt: 3 }}><Button variant="outlined" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</Button><Typography variant="body2" sx={{ fontWeight: 700 }}>Page {page} of {pageCount}</Typography><Button variant="outlined" disabled={page === pageCount} onClick={() => setPage((value) => value + 1)}>Next</Button></Stack>}
+      {total > 6 && <Stack direction="row" spacing={2} sx={{ justifyContent: 'center', alignItems: 'center', mt: 3 }}><Button variant="outlined" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</Button><Typography variant="body2" sx={{ fontWeight: 700 }}>Page {page} of {pageCount}</Typography><Button variant="outlined" disabled={page === pageCount} onClick={() => setPage((value) => value + 1)}>Next</Button></Stack>}
       {isAdmin && <Fab variant="extended" color="primary" onClick={openCreate} sx={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1100, px: 2.5 }}><AddIcon sx={{ mr: 1 }} />Add CapDev</Fab>}
 
       <Dialog open={editorOpen} onClose={() => !saving && setEditorOpen(false)} fullWidth maxWidth="md">
@@ -441,7 +421,7 @@ export default function PortalPage() {
         <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Close</Button>{isAdmin && <Button onClick={saveProject} disabled={saving || !form.aipCode || !form.budget || !areRequiredFieldsComplete} variant="contained">{saving ? 'Saving' : 'Save CapDev'}</Button>}</DialogActions>
       </Dialog>
       <ActionErrorDialog open={Boolean(error)} title="Unable to Save CapDev" message={error} onClose={() => setError('')} />
-      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev Projects</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const d = new Date().toISOString().slice(0, 10); setDraftFilters({ ...draftFilters, dateFrom: d, dateTo: d }); }}>Today</Button><Button size="small" onClick={() => { const d = new Date(); setDraftFilters({ ...draftFilters, dateFrom: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`, dateTo: d.toISOString().slice(0,10) }); }}>This month</Button><Button size="small" onClick={() => { const d = new Date(); setDraftFilters({ ...draftFilters, dateFrom: `${d.getFullYear()}-01-01`, dateTo: d.toISOString().slice(0,10) }); }}>This year</Button></Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { setFilters({ ...draftFilters, departments: [...draftFilters.departments] }); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev Projects</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const d = manilaDate(); setDraftFilters({ ...draftFilters, dateFrom: d, dateTo: d }); }}>Today</Button><Button size="small" onClick={() => { const d = manilaDate(); setDraftFilters({ ...draftFilters, dateFrom: d.slice(0, 7) + '-01', dateTo: d }); }}>This month</Button><Button size="small" onClick={() => { const d = manilaDate(); setDraftFilters({ ...draftFilters, dateFrom: d.slice(0, 4) + '-01-01', dateTo: d }); }}>This year</Button></Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { setFilters({ ...draftFilters, departments: [...draftFilters.departments] }); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
       <Dialog open={Boolean(deleting)} onClose={() => !saving && setDeleting(null)} maxWidth="xs" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Delete CapDev Project?</DialogTitle><DialogContent><Stack spacing={2}>{deleteError && <Alert severity="error">{deleteError}</Alert>}<Typography>
   This permanently deletes {deleting?.aipCode} and all its requests. This cannot be undone.
 </Typography></Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDeleting(null)} disabled={saving}>Cancel</Button><Button color="error" variant="contained" onClick={removeProject} disabled={saving} sx={{ whiteSpace: 'nowrap' }}>{saving ? 'Deleting' : 'Delete project'}</Button></DialogActions></Dialog>

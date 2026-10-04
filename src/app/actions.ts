@@ -1,8 +1,15 @@
 'use server';
 
 import { db } from '@/db';
+import { withTransaction } from '@/db/transaction';
+import { requestStorageFolders, mcpOAuthGrants } from '@/db/schema';
+import { writeRequestStatusUpdate } from '@/lib/request-budget';
+import { validateRequestInput, validateMoney } from '@/lib/request-validation';
+import { claimRequestFolder } from '@/lib/request-storage';
+import { limitVerification, verificationCode, verificationHash, consumeRateLimit } from '@/lib/security';
+import { manilaDate, manilaDateBoundary } from '@/lib/manila-date';
 import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, statusUpdateFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
-import { sql, count, and, eq, getTableColumns, lte, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
+import { sql, count, and, eq, getTableColumns, lte, gte, asc, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail, sendSignupVerificationEmail } from '@/lib/email';
 import {
@@ -24,14 +31,12 @@ import {
   getRequestFormSchemaService,
   createRequestDraftService,
   submitRequestService,
-  getRequestStatusService,
   type RequestDraftInput,
   type RequestSubmissionInput,
 } from '@/lib/services/leaprs-service';
 import {
   extractActivityDesignWithGemini,
   type ActivityDesignFileInput,
-  type ExtractedActivityDesign,
 } from '@/lib/gemini-activity-design';
 import { executeMcpTool, LEAPRS_MCP_TOOLS } from '@/lib/mcp/server';
 
@@ -374,6 +379,10 @@ export async function checkDrizzleConnection(): Promise<DbStatus> {
   const testedAt = new Date().toISOString();
   const start = Date.now();
 
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return { success: false, testedAt, errorMessage: 'Administrator access is required.' };
+  if (!await consumeRateLimit(`db-check:${access.userId}`, 5, 60000)) return { success: false, testedAt, errorMessage: 'Please wait before checking again.' };
+
   try {
     // 1. Test Read Connection
     await db.execute(sql`SELECT NOW()`);
@@ -386,7 +395,7 @@ export async function checkDrizzleConnection(): Promise<DbStatus> {
         status: 'success',
       });
       writeSuccess = true;
-    } catch (e: any) {
+    } catch (e) {
       console.error('Database write error:', e);
     }
 
@@ -395,7 +404,7 @@ export async function checkDrizzleConnection(): Promise<DbStatus> {
     try {
       const countRes = await db.select({ value: count() }).from(connections);
       totalChecks = countRes[0].value || 0;
-    } catch (e: any) {
+    } catch (e) {
       console.error('Database aggregation error:', e);
     }
 
@@ -406,12 +415,12 @@ export async function checkDrizzleConnection(): Promise<DbStatus> {
       writeSuccess,
       totalChecks,
     };
-  } catch (error: any) {
+  } catch (error) {
     console.error('Database connection check failed:', error);
     return {
       success: false,
       testedAt,
-      errorMessage: error.message || 'Unknown database connection error',
+      errorMessage: 'Unable to connect to the database.',
     };
   }
 }
@@ -913,36 +922,88 @@ export async function getAllCapdevs() {
   try {
     const access = await getCurrentAccess();
     if (!access) return [];
-    const records = await db.select().from(capdevs).orderBy(capdevs.aipCode);
-    return records.filter((capdev) => canAccessCapdev(access, capdev));
+    return await db.select().from(capdevs).where(access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined).orderBy(capdevs.aipCode);
   } catch (error) {
     console.error('Failed to fetch CapDev projects:', error);
     return [];
   }
 }
 
+export type CapdevPageFilters = { departments: string[]; initialMin: string; initialMax: string; remainingMin: string; remainingMax: string; dateFrom: string; dateTo: string; sort: string };
+
+export async function getCapdevPage(input: { page: number; search: string; filters: CapdevPageFilters; focusId?: number }) {
+  const access = await getCurrentAccess();
+  if (!access) return { success: false as const, records: [], departments: [], total: 0, page: 1, error: 'You must be signed in.' };
+  try {
+    const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
+    const conditions: SQL[] = scope ? [scope] : [];
+    const departmentRows = await db.selectDistinct({ department: capdevs.department }).from(capdevs).where(scope).orderBy(capdevs.department);
+    const departments = Array.from(new Set(departmentRows.map((row) => row.department.trim() || 'None')));
+    if (!departments.includes('None')) departments.unshift('None');
+    const focus = input.focusId ? await getAccessibleCapdev(access, input.focusId) : null;
+    const ascending = !focus && input.filters.sort === 'oldest';
+    if (!focus) {
+      if (typeof input.search !== 'string' || input.search.length > 300) throw new Error('Invalid search.');
+      if (input.search) {
+        const search = '%' + input.search.replace(/[\\%_]/g, '\\$&') + '%';
+        conditions.push(or(ilike(capdevs.aipCode, search), ilike(capdevs.department, search), ilike(capdevs.updatedById, search))!);
+      }
+      if (!Array.isArray(input.filters.departments) || !input.filters.departments.every((value) => typeof value === 'string')) throw new Error('Invalid department filter.');
+      conditions.push(input.filters.departments.length ? inArray(sql`COALESCE(NULLIF(TRIM(${capdevs.department}), ''), 'None')`, input.filters.departments) : sql`false`);
+      for (const [value, column, minimum] of [
+        [input.filters.initialMin, capdevs.initialBudget, true], [input.filters.initialMax, capdevs.initialBudget, false],
+        [input.filters.remainingMin, capdevs.budget, true], [input.filters.remainingMax, capdevs.budget, false],
+      ] as const) {
+        if (value !== '') {
+          if (!Number.isFinite(Number(value))) throw new Error('Invalid balance filter.');
+          conditions.push(minimum ? gte(column, value) : lte(column, value));
+        }
+      }
+      if (input.filters.dateFrom) conditions.push(gte(capdevs.createdAt, manilaDateBoundary(input.filters.dateFrom)));
+      if (input.filters.dateTo) conditions.push(lte(capdevs.createdAt, manilaDateBoundary(input.filters.dateTo, true)));
+    }
+    const where = and(...conditions);
+    const [totalRow] = await db.select({ total: count() }).from(capdevs).where(where);
+    const total = Number(totalRow.total);
+    let page = Math.max(1, Math.min(Number.isSafeInteger(input.page) ? input.page : 1, Math.max(1, Math.ceil(total / 6))));
+    if (focus) {
+      const [before] = await db.select({ total: count() }).from(capdevs).where(and(scope,
+        sql`(${capdevs.createdAt}, ${capdevs.id}) > (SELECT created_at, id FROM capdevs WHERE id = ${focus.id})`));
+      page = Math.floor(Number(before.total) / 6) + 1;
+    }
+    const records = await db.select().from(capdevs).where(where)
+      .orderBy(ascending ? asc(capdevs.createdAt) : desc(capdevs.createdAt), ascending ? asc(capdevs.id) : desc(capdevs.id)).limit(6).offset((page - 1) * 6);
+    return { success: true as const, records, departments, total, page };
+  } catch (error) {
+    console.error('Failed to fetch project page:', error);
+    return { success: false as const, records: [], departments: [], total: 0, page: 1, error: 'Unable to load projects. Check your filters and try again.' };
+  }
+}
+
 export async function getAnalyticsData() {
   try {
     const access = await getCurrentAccess();
-    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [], statusUpdates: [] };
-    const [capdevData, requestData, statusUpdateData] = await Promise.all([
-      db.select({ id: capdevs.id, aipCode: capdevs.aipCode, description: capdevs.description, department: capdevs.department, initialBudget: capdevs.initialBudget, budget: capdevs.budget, createdAt: capdevs.createdAt }).from(capdevs),
-      db.select({ id: requests.id, capdevId: requests.capdevId, setting: requests.setting, createdAt: requests.createdAt }).from(requests),
-      db.select({ requestId: requestStatusUpdates.requestId, markAsComplete: requestStatusUpdates.markAsComplete }).from(requestStatusUpdates),
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [] };
+    const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
+    const day = sql<string>`to_char(${requests.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Manila', 'YYYY-MM-DD')`;
+    const complete = sql`(${requests.status} = 'completed' OR EXISTS (SELECT 1 FROM request_status_updates u WHERE u.request_id = ${requests.id} AND u.mark_as_complete = true))`;
+    const [projects, buckets] = await Promise.all([
+      db.select({ id: capdevs.id, aipCode: capdevs.aipCode, description: capdevs.description, department: capdevs.department,
+        initialBudget: capdevs.initialBudget, budget: capdevs.budget, createdAt: capdevs.createdAt }).from(capdevs).where(scope),
+      db.select({ capdevId: requests.capdevId, setting: requests.setting, day,
+        total: sql<number>`COUNT(*)::integer`,
+        completed: sql<number>`COUNT(*) FILTER (WHERE ${complete})::integer`,
+        inProgress: sql<number>`COUNT(*) FILTER (WHERE ${requests.status} = 'in_progress' AND NOT ${complete})::integer`,
+      }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(scope)
+        .groupBy(requests.capdevId, requests.setting, day),
     ]);
-
-    const permittedCapdevs = capdevData.filter((capdev) => canAccessCapdev(access, capdev));
-    const permittedIds = new Set(permittedCapdevs.map((capdev) => capdev.id));
-    const permittedRequests = requestData.filter((request) => permittedIds.has(request.capdevId));
-    const permittedRequestIds = new Set(permittedRequests.map((request) => request.id));
     return {
-      capdevs: permittedCapdevs.map((capdev) => ({ ...capdev, initialBudget: String(capdev.initialBudget), budget: String(capdev.budget), createdAt: capdev.createdAt.toISOString() })),
-      requests: permittedRequests.map((request) => ({ ...request, createdAt: request.createdAt.toISOString() })),
-      statusUpdates: statusUpdateData.filter((update) => permittedRequestIds.has(update.requestId)),
+      capdevs: projects.map((project) => ({ ...project, createdAt: project.createdAt.toISOString() })),
+      requests: buckets.map((bucket) => ({ ...bucket, createdAt: bucket.day + 'T00:00:00+08:00' })),
     };
   } catch (error) {
-    console.error('Failed to fetch analytics data:', error);
-    return { capdevs: [], requests: [], statusUpdates: [] };
+    console.error('Failed to fetch analytics:', error);
+    return { capdevs: [], requests: [] };
   }
 }
 
@@ -950,9 +1011,10 @@ export async function getMonitoringReportData() {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [], capdevFields: [], requestFields: [] };
+    const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
     const [capdevData, requestData, capdevFields, requestFields] = await Promise.all([
-      db.select().from(capdevs).orderBy(capdevs.aipCode),
-      db.select().from(requests).orderBy(requests.createdAt),
+      db.select().from(capdevs).where(scope).orderBy(capdevs.aipCode),
+      db.select(getTableColumns(requests)).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(scope).orderBy(requests.createdAt),
       db.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.isActive, true)).orderBy(capdevFieldDefinitions.sortOrder),
       db.select().from(requestFieldDefinitions).where(eq(requestFieldDefinitions.isActive, true)).orderBy(requestFieldDefinitions.sortOrder),
     ]);
@@ -1712,6 +1774,12 @@ export type RequestInput = {
   updatedById: string;
 };
 
+function hasRequiredValue(value: unknown, type: string) {
+  if (type === 'file') return Array.isArray(value) && value.length > 0;
+  if (type === 'table') return Array.isArray(value) && value.some((row) => Array.isArray(row) && row.some((cell) => String(cell ?? '').trim()));
+  return value !== undefined && value !== null && String(value).trim().length > 0;
+}
+
 export async function getRequestsByCapdev(capdevId: number) {
   try {
     const access = await getCurrentAccess();
@@ -1761,6 +1829,8 @@ export async function createRequest(data: RequestInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return unauthorized;
+    const validated = validateRequestInput(data);
+    data = { ...data, ...validated };
     if (!await getAccessibleCapdev(access, data.capdevId)) return unauthorized;
     const selectionError = await validateComboboxValues('request', data.additionalInfo, data.setting);
     if (selectionError) return { success: false, error: selectionError };
@@ -1768,12 +1838,21 @@ export async function createRequest(data: RequestInput) {
 
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, data.capdevId)).limit(1);
     if (!capdev || Number(data.requestedBudget) > Number(capdev.budget)) return { success: false, error: 'Requested amount exceeds the remaining CapDev balance.' };
-    const [created] = await db.insert(requests).values({
-      ...data,
+    const schema = await getRequestFormSchemaService(access, validated.setting);
+    const missing = schema.dynamicFields.filter((field) => field.isRequired && !hasRequiredValue(getDynamicFieldValue(validated.additionalInfo, field), field.type));
+    if (missing.length) return { success: false, error: 'Complete the required fields: ' + missing.map((field) => field.name).join(', ') };
+    const created = await withTransaction(async (tx) => {
+      const [record] = await tx.insert(requests).values({
+      capdevId: validated.capdevId, setting: validated.setting, description: validated.description,
+      requestedBudget: validated.requestedBudget, additionalInfo: {}, status: 'in_progress',
       userId: access.userId,
       updatedById: access.userId,
       requestorName: session?.user?.name || session?.user?.email || 'Requestor',
     }).returning();
+      await claimRequestFolder(tx, access.userId, record.id, validated.additionalInfo);
+      const [saved] = await tx.update(requests).set({ additionalInfo: validated.additionalInfo }).where(eq(requests.id, record.id)).returning();
+      return saved;
+    });
     await writeAuditLog(access, { action: 'created', entityType: 'request', entityId: created.id, entityLabel: `Request #${created.id}`, details: { capdevId: created.capdevId, setting: created.setting, requestedBudget: created.requestedBudget, requestorName: created.requestorName } });
     void createNotification({
       actorId: access.userId,
@@ -1795,6 +1874,8 @@ export async function updateRequest(id: number, data: RequestInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return unauthorized;
+    const validated = validateRequestInput(data);
+    data = { ...data, ...validated };
     const existing = await getAccessibleRequest(access, id);
     if (!existing) return { success: false, error: 'Request not found.' };
     const selectionError = await validateComboboxValues('request', data.additionalInfo, data.setting);
@@ -1803,7 +1884,24 @@ export async function updateRequest(id: number, data: RequestInput) {
     const [deduction] = await db.select({ id: requestStatusUpdates.id }).from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
     if (deduction && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested budget cannot be changed after it has been deducted.' };
     if (!deduction && (!capdev || Number(data.requestedBudget) > Number(capdev.budget))) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
-    const [updated] = await db.update(requests).set({ ...data, capdevId: existing.capdevId, userId: existing.userId, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
+    const schema = await getRequestFormSchemaService(access, validated.setting);
+    const missing = schema.dynamicFields.filter((field) => field.isRequired && !hasRequiredValue(getDynamicFieldValue(validated.additionalInfo, field), field.type));
+    if (missing.length) return { success: false, error: 'Complete the required fields: ' + missing.map((field) => field.name).join(', ') };
+    const updated = await withTransaction(async (tx) => {
+      const [current] = await tx.select().from(requests).where(eq(requests.id, id)).for('update');
+      if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error('Request not found.');
+      const [deducted] = await tx.select().from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
+      if (deducted && validated.requestedBudget !== String(current.requestedBudget) && Number(validated.requestedBudget) !== Number(current.requestedBudget)) throw new Error('Requested budget cannot be changed after deduction.');
+      if (!deducted) {
+        const [balance] = await tx.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, current.capdevId));
+        if (!balance || Number(validated.requestedBudget) > Number(balance.budget)) throw new Error('Requested budget exceeds the remaining CapDev budget.');
+      }
+      await claimRequestFolder(tx, access.userId, id, validated.additionalInfo);
+      const [saved] = await tx.update(requests).set({ setting: validated.setting, description: validated.description,
+        requestedBudget: validated.requestedBudget, additionalInfo: validated.additionalInfo,
+        updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
+      return saved;
+    });
     if (!updated) return { success: false, error: 'Request not found.' };
     await writeAuditLog(access, { action: 'updated', entityType: 'request', entityId: updated.id, entityLabel: `Request #${updated.id}`, details: { capdevId: updated.capdevId, setting: updated.setting, requestedBudget: updated.requestedBudget } });
     return { success: true, request: updated };
@@ -1820,17 +1918,19 @@ export async function deleteRequest(id: number) {
     if (!access || !canManageRequests(access) || !existing) return unauthorized;
     const actor = await getActorSnapshot(access);
 
-    const driveFolderId = (typeof existing.additionalInfo === 'object' && existing.additionalInfo !== null)
-      ? (existing.additionalInfo as Record<string, unknown>).googleDriveFolderId
-      : undefined;
+    const [storageFolder] = await db.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, id)).limit(1);
+    const driveFolderId = storageFolder?.folderId;
 
     if (typeof driveFolderId === 'string' && driveFolderId.trim()) {
       try {
         const accessToken = await getGoogleDriveAccessToken();
-        await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFolderId.trim())}`, {
+        if (storageFolder.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID) throw new Error('Untrusted storage root.');
+        await verifyManagedDriveFolder(accessToken, storageFolder.folderId, storageFolder.rootFolderId);
+        const deletion = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFolderId.trim())}`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${accessToken}` },
         });
+        if (!deletion.ok && deletion.status !== 404) throw new Error('Unable to delete request attachment folder.');
       } catch (err) {
         console.warn('Could not delete Google Drive folder for request:', err);
       }
@@ -1956,104 +2056,61 @@ export type RequestUploadContext = {
 };
 
 function formatFolderDate(dateValue?: string | Date | null): string {
-  if (!dateValue) return new Date().toISOString().split('T')[0];
+  if (!dateValue) return manilaDate();
   const date = new Date(dateValue);
-  if (isNaN(date.getTime())) return new Date().toISOString().split('T')[0];
-  return date.toISOString().split('T')[0];
+  if (isNaN(date.getTime())) return manilaDate();
+  return manilaDate(date);
 }
 
 function sanitizeFolderName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, '-').trim();
 }
 
-async function ensureRequestGoogleDriveFolder(accessToken: string, context?: RequestUploadContext): Promise<string> {
+async function verifyManagedDriveFolder(accessToken: string, folderId: string, rootFolderId: string) {
+  const response = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(folderId) + '?fields=id,mimeType,parents,appProperties,trashed', {
+    headers: { Authorization: 'Bearer ' + accessToken },
+  });
+  if (!response.ok) throw new Error('Attachment folder is unavailable.');
+  const folder = await response.json() as { mimeType?: string; parents?: string[]; appProperties?: Record<string, string>; trashed?: boolean };
+  if (folder.trashed || folder.mimeType !== 'application/vnd.google-apps.folder' || !folder.parents?.includes(rootFolderId) || folder.appProperties?.leaprsManaged !== 'true') {
+    throw new Error('Attachment folder ownership could not be verified.');
+  }
+}
+
+async function ensureRequestGoogleDriveFolder(accessToken: string, access: UserAccess, context?: RequestUploadContext): Promise<string> {
   const rootParentFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
-  if (!rootParentFolderId) {
-    throw new Error('Google Drive storage is not configured.');
-  }
-
-  if (context?.folderId && context.folderId.trim()) {
-    return context.folderId.trim();
-  }
-
-  if (!context || (!context.requestId && !context.requestorName && !context.dateRequested)) {
-    return rootParentFolderId;
-  }
-
-  let requestorName = context.requestorName?.trim();
-  let dateRequested = context.dateRequested ? formatFolderDate(context.dateRequested) : undefined;
-  let existingFolderId: string | undefined;
-
-  if (context.requestId) {
-    try {
-      const [req] = await db.select().from(requests).where(eq(requests.id, context.requestId)).limit(1);
-      if (req) {
-        const additionalInfo = (typeof req.additionalInfo === 'object' && req.additionalInfo !== null) ? req.additionalInfo as Record<string, unknown> : {};
-        if (typeof additionalInfo.googleDriveFolderId === 'string' && additionalInfo.googleDriveFolderId.trim()) {
-          return additionalInfo.googleDriveFolderId.trim();
-        }
-        if (!requestorName) requestorName = req.requestorName || undefined;
-        if (!dateRequested) dateRequested = formatFolderDate(req.createdAt);
+  if (!rootParentFolderId) throw new Error('Google Drive storage is not configured.');
+  if (context?.requestId !== undefined && (!Number.isSafeInteger(context.requestId) || !await getAccessibleRequest(access, context.requestId))) throw new Error(unauthorized.error);
+  return withTransaction(async (tx) => {
+    let req: typeof requests.$inferSelect | undefined;
+    if (context?.requestId) {
+      [req] = await tx.select().from(requests).where(eq(requests.id, context.requestId)).for('update');
+      if (!req || (access.role === 'employee' && req.userId !== access.userId)) throw new Error(unauthorized.error);
+      const [folder] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, req.id));
+      if (folder) {
+        if (folder.rootFolderId !== rootParentFolderId) throw new Error('Invalid attachment folder.');
+        await verifyManagedDriveFolder(accessToken, folder.folderId, rootParentFolderId);
+        return folder.folderId;
       }
-    } catch (err) {
-      console.warn('Could not query request record for drive folder resolution:', err);
     }
-  }
-
-  if (!requestorName) {
-    requestorName = 'Unknown_Requestor';
-  }
-  if (!dateRequested) {
-    dateRequested = formatFolderDate(new Date());
-  }
-
-  const folderName = sanitizeFolderName(`${requestorName}_${dateRequested}`);
-
-  // Create a brand new dedicated folder in Google Drive for this request
-  try {
-    const createFolderResponse = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json; charset=UTF-8',
-      },
-      body: JSON.stringify({
-        name: folderName,
-        mimeType: 'application/vnd.google-apps.folder',
-        parents: [rootParentFolderId],
-      }),
+    if (context?.folderId && !req) {
+      const [folder] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.folderId, context.folderId)).for('update');
+      if (!folder || folder.userId !== access.userId || folder.rootFolderId !== rootParentFolderId || folder.requestId !== null) throw new Error(unauthorized.error);
+      await verifyManagedDriveFolder(accessToken, folder.folderId, rootParentFolderId);
+      return folder.folderId;
+    }
+    if (!context) return rootParentFolderId;
+    const name = sanitizeFolderName((req?.requestorName || access.name || 'Requestor') + '_' + formatFolderDate(req?.createdAt));
+    const response = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [rootParentFolderId], appProperties: { leaprsManaged: 'true' } }),
     });
-
-    if (createFolderResponse.ok) {
-      const createdFolder = await createFolderResponse.json() as { id?: string };
-      if (createdFolder.id) {
-        existingFolderId = createdFolder.id;
-      }
-    } else {
-      console.error('Failed to create request Google Drive folder:', createFolderResponse.status, await createFolderResponse.text());
-    }
-  } catch (err) {
-    console.error('Error creating request Google Drive folder:', err);
-  }
-
-  const finalFolderId = existingFolderId || rootParentFolderId;
-
-  if (context.requestId && existingFolderId) {
-    try {
-      const [req] = await db.select().from(requests).where(eq(requests.id, context.requestId)).limit(1);
-      if (req) {
-        const additionalInfo = (typeof req.additionalInfo === 'object' && req.additionalInfo !== null) ? { ...(req.additionalInfo as Record<string, unknown>) } : {};
-        if (additionalInfo.googleDriveFolderId !== existingFolderId) {
-          additionalInfo.googleDriveFolderId = existingFolderId;
-          await db.update(requests).set({ additionalInfo }).where(eq(requests.id, context.requestId));
-        }
-      }
-    } catch (err) {
-      console.warn('Could not persist googleDriveFolderId into request additionalInfo:', err);
-    }
-  }
-
-  return finalFolderId;
+    if (!response.ok) throw new Error('Unable to create attachment folder.');
+    const folder = await response.json() as { id?: string };
+    if (!folder.id) throw new Error('Drive did not return an attachment folder.');
+    await tx.insert(requestStorageFolders).values({ folderId: folder.id, requestId: req?.id, userId: access.userId, rootFolderId: rootParentFolderId });
+    return folder.id;
+  });
 }
 
 async function uploadFileToGoogleDrive(file: File, accessToken: string, parentFolderId: string): Promise<StatusAttachment> {
@@ -2127,7 +2184,7 @@ export async function createGoogleDriveUploadSessions(files: GoogleDriveUploadFi
       return { success: false, error: 'The upload origin could not be verified.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
     }
     const accessToken = await getGoogleDriveAccessToken();
-    const parentFolderId = await ensureRequestGoogleDriveFolder(accessToken, context);
+    const parentFolderId = await ensureRequestGoogleDriveFolder(accessToken, access, context);
     const sessions = await Promise.all(files.map((file) => createGoogleDriveUploadSession(file, accessToken, origin, parentFolderId)));
     return { success: true, sessions, folderId: parentFolderId };
   } catch (error) {
@@ -2147,7 +2204,7 @@ export async function uploadFilesToGoogleDrive(formData: FormData, context?: Req
     if (files.length === 0) return { success: true, files: [] as StatusAttachment[] };
 
     const accessToken = await getGoogleDriveAccessToken();
-    const parentFolderId = await ensureRequestGoogleDriveFolder(accessToken, context);
+    const parentFolderId = await ensureRequestGoogleDriveFolder(accessToken, access, context);
     const uploadedFiles = await Promise.all(files.map((file) => uploadFileToGoogleDrive(file, accessToken, parentFolderId)));
     return { success: true, files: uploadedFiles };
   } catch (error) {
@@ -2232,6 +2289,7 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return unauthorized;
+    if (status !== 'completed' && status !== 'denied') return { success: false, error: 'Invalid request status.' };
     const req = await getAccessibleRequest(access, requestId);
     if (!req) return unauthorized;
     if (req.isStopped && access.role === 'employee') {
@@ -2337,6 +2395,9 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access) || !await getAccessibleRequest(access, data.requestId)) return unauthorized;
+    for (const flag of [data.markAsComplete, data.subtractsRequestedAmount, data.isStopperResponse]) {
+      if (flag !== undefined && typeof flag !== 'boolean') return { success: false, error: 'Invalid status update options.' };
+    }
     const { data: session } = await auth.getSession();
 
     // Check if request is already concluded (completed or denied)
@@ -2363,65 +2424,18 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
       if (selectionError) return { success: false, error: selectionError };
     }
 
-    // 1. Handle budget deduction if requested
-    if (data.subtractsRequestedAmount && !isStopperResponse) {
-      const [alreadyDeducted] = await db
-        .select({ id: requestStatusUpdates.id })
-        .from(requestStatusUpdates)
-        .where(and(eq(requestStatusUpdates.requestId, data.requestId), eq(requestStatusUpdates.subtractsRequestedAmount, true)))
-        .limit(1);
-
-      if (alreadyDeducted) {
-        return { success: false, error: 'Budget has already been deducted for this request.' };
-      }
-
-      const [capdev] = await db
-        .select({ budget: capdevs.budget })
-        .from(capdevs)
-        .where(eq(capdevs.id, existingReq[0].capdevId))
-        .limit(1);
-
-      const amountToDeduct = data.deductedAmount && Number(data.deductedAmount) > 0
-        ? String(data.deductedAmount)
-        : String(existingReq[0].requestedBudget);
-
-      if (!capdev || Number(capdev.budget) < Number(amountToDeduct)) {
-        return { success: false, error: 'Insufficient CapDev budget balance to deduct.' };
-      }
-
-      // Deduct from CapDev budget
-      await db
-        .update(capdevs)
-        .set({
-          budget: sql`${capdevs.budget} - ${amountToDeduct}::numeric`,
-          updatedAt: new Date(),
-        })
-        .where(eq(capdevs.id, existingReq[0].capdevId));
-
-      // Update request's requested budget with final utilized amount
-      await db
-        .update(requests)
-        .set({
-          requestedBudget: amountToDeduct,
-          updatedAt: new Date(),
-        })
-        .where(eq(requests.id, data.requestId));
-    }
-    // 2. Insert status update log
-    const [createdUpdate] = await db.insert(requestStatusUpdates).values({
-      requestId: data.requestId,
-      userId: access.userId,
+    if (!data.statusUpdate?.trim() || data.statusUpdate.length > 20000) return { success: false, error: 'Enter a status update of up to 20,000 characters.' };
+    if (isStopperResponse && (data.subtractsRequestedAmount || data.markAsComplete)) return { success: false, error: 'A stopper response cannot deduct budget or complete a request.' };
+    const deductedAmount = data.deductedAmount === undefined || data.deductedAmount === '' ? undefined : validateMoney(data.deductedAmount);
+    const createdUpdate = await withTransaction((tx) => writeRequestStatusUpdate(tx, access.role, {
+      requestId: data.requestId, userId: access.userId,
       authorName: session?.user?.name || session?.user?.email || 'Staff member',
-      statusUpdate: data.statusUpdate,
-      remarks: data.remarks || null,
-      files: data.files || [],
-      statusMark: data.statusMark || null,
-      markAsComplete: Boolean(data.markAsComplete),
-      subtractsRequestedAmount: Boolean(data.subtractsRequestedAmount),
-      isStopperResponse,
-      stopperId: isStopperResponse ? data.stopperId : null,
-      additionalInfo: data.additionalInfo || {},
-    }).returning({ id: requestStatusUpdates.id });
+      statusUpdate: data.statusUpdate, remarks: data.remarks || null, files: data.files || [],
+      statusMark: data.statusMark || null, markAsComplete: Boolean(data.markAsComplete),
+      subtractsRequestedAmount: Boolean(data.subtractsRequestedAmount), isStopperResponse,
+      stopperId: isStopperResponse ? data.stopperId : null, additionalInfo: data.additionalInfo || {},
+      deductedAmount,
+    }));
 
     await writeAuditLog(access, {
       action: 'created',
@@ -2631,206 +2645,97 @@ async function createNotification(data: {
   }
 }
 
-export async function requestPasswordReset(rawEmail: string) {
-
+export async function requestPasswordReset(rawEmail: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  const generic = { success: true, message: 'If an account exists, a verification code has been sent. Please wait before requesting another.' };
   try {
-    const email = rawEmail.trim().toLowerCase();
-    if (!email) {
-      return { success: false, error: 'Please enter your email address.' };
-    }
-
-    // Check if user exists in neon_auth.user
-    const userResult = await db.execute(sql`
-      SELECT id, email FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1
-    `);
-
-    if (userResult.rows.length === 0) {
-      return { success: false, error: 'No account found with this email address.' };
-    }
-
-    const matchedEmail = String(userResult.rows[0].email);
-
-    // Generate 6-digit numeric verification code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes validity
-
-    // Remove any previous active reset codes for this email
-    await db.delete(passwordResets).where(eq(passwordResets.email, email));
-
-    // Save reset code
-    await db.insert(passwordResets).values({
-      email,
-      code,
-      expiresAt,
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 255) return generic;
+    if (!await limitVerification('reset-send', email, true)) return generic;
+    const result = await db.execute(sql`SELECT email FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1`);
+    if (!result.rows.length) return generic;
+    const code = verificationCode();
+    await withTransaction(async (tx) => {
+      await tx.delete(passwordResets).where(eq(passwordResets.email, email));
+      await tx.insert(passwordResets).values({ email, code: verificationHash('reset', email, code), expiresAt: new Date(Date.now() + 900000) });
     });
-
-    // Send plain text email via Resend
-    await sendPasswordResetEmail(matchedEmail, code);
-
-    return {
-      success: true,
-      message: 'A 6-digit verification code has been sent to your email address.',
-    };
-  } catch (error: any) {
+    await sendPasswordResetEmail(String(result.rows[0].email), code);
+    return generic;
+  } catch (error) {
     console.error('Password reset request failed:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to send password reset email. Please try again.',
-    };
+    return generic;
   }
 }
 
-export async function requestSignupVerificationCode(rawEmail: string) {
+export async function requestSignupVerificationCode(rawEmail: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  const generic = { success: true, message: 'If this email can be registered, a verification code has been sent. Please wait before requesting another.' };
   try {
-    const email = rawEmail.trim().toLowerCase();
-    if (!email) {
-      return { success: false, error: 'Please enter your email address.' };
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return { success: false, error: 'Please enter a valid email address.' };
-    }
-
-    // Check if user already exists in neon_auth.user
-    const existingAuth = await db.execute(sql`
-      SELECT id FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1
-    `);
-
-    if (existingAuth.rows.length > 0) {
-      return { success: false, error: 'An account with this email address already exists. Please sign in.' };
-    }
-
-    // Generate 6-digit numeric verification code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes validity
-
-    // Remove any previous active signup verification codes for this email
-    await db.delete(signupVerifications).where(eq(signupVerifications.email, email));
-
-    // Save signup verification code
-    await db.insert(signupVerifications).values({
-      email,
-      code,
-      expiresAt,
-      isVerified: false,
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 255) return { success: false, error: 'Please enter a valid email address.' };
+    if (!await limitVerification('signup-send', email, true)) return generic;
+    const existing = await db.execute(sql`SELECT id FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1`);
+    if (existing.rows.length) return generic;
+    const code = verificationCode();
+    await withTransaction(async (tx) => {
+      await tx.delete(signupVerifications).where(eq(signupVerifications.email, email));
+      await tx.insert(signupVerifications).values({ email, code: verificationHash('signup', email, code), expiresAt: new Date(Date.now() + 900000), isVerified: false });
     });
-
-    // Send plain text email via Resend
     await sendSignupVerificationEmail(email, code);
-
-    return {
-      success: true,
-      message: 'A 6-digit verification code has been sent to your email address.',
-    };
-  } catch (error: any) {
+    return generic;
+  } catch (error) {
     console.error('Signup verification request failed:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to send verification code. Please try again.',
-    };
+    return { success: false, error: 'Unable to send a verification code. Please try again later.' };
   }
 }
 
 export async function verifySignupCode(rawEmail: string, rawCode: string) {
   try {
-    const email = rawEmail.trim().toLowerCase();
-    const code = rawCode.trim();
-
-    if (!email || !code) {
-      return { success: false, error: 'Please provide both email and verification code.' };
-    }
-
-    // Check code in database
-    const [record] = await db
-      .select()
-      .from(signupVerifications)
-      .where(and(eq(signupVerifications.email, email), eq(signupVerifications.code, code)))
-      .limit(1);
-
-    if (!record) {
-      return { success: false, error: 'Invalid verification code. Please check your email and try again.' };
-    }
-
-    if (new Date() > record.expiresAt) {
-      await db.delete(signupVerifications).where(eq(signupVerifications.id, record.id));
-      return { success: false, error: 'Verification code has expired. Please request a new code.' };
-    }
-
-    // Mark as verified
-    await db.update(signupVerifications).set({ isVerified: true }).where(eq(signupVerifications.id, record.id));
-
-    return { success: true, message: 'Email verified successfully.' };
-  } catch (error: any) {
-    console.error('Signup code verification failed:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to verify code. Please try again.',
-    };
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!email || email.length > 255) return { success: false, error: 'Invalid or expired verification code.' };
+    if (!await limitVerification('signup-verify', email)) return { success: false, error: 'Too many attempts. Please try again later.' };
+    const code = typeof rawCode === 'string' ? rawCode.trim() : '';
+    if (!/^\d{6}$/.test(code)) return { success: false, error: 'Invalid or expired verification code.' };
+    const verified = await db.update(signupVerifications).set({ isVerified: true }).where(and(
+      eq(signupVerifications.email, email), eq(signupVerifications.code, verificationHash('signup', email, code)),
+      sql`${signupVerifications.expiresAt} > NOW()`, eq(signupVerifications.isVerified, false),
+    )).returning({ id: signupVerifications.id });
+    return verified.length ? { success: true, message: 'Email verified successfully.' } : { success: false, error: 'Invalid or expired verification code.' };
+  } catch (error) {
+    console.error('Signup verification failed:', error);
+    return { success: false, error: 'Unable to verify the code.' };
   }
 }
 
 export async function verifyAndResetPassword(rawEmail: string, rawCode: string, newPassword: string) {
   try {
-    const email = rawEmail.trim().toLowerCase();
-    const code = rawCode.trim();
-
-    if (!email || !code || !newPassword) {
-      return { success: false, error: 'Please fill in all required fields.' };
-    }
-
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!email || email.length > 255) return { success: false, error: 'Invalid or expired verification code.' };
+    if (!await limitVerification('reset-verify', email)) return { success: false, error: 'Too many attempts. Please try again later.' };
+    const code = typeof rawCode === 'string' ? rawCode.trim() : '';
+    if (!/^\d{6}$/.test(code) || typeof newPassword !== 'string') return { success: false, error: 'Invalid or expired verification code.' };
     const passwordError = getPasswordValidationError(newPassword);
     if (passwordError) return { success: false, error: passwordError };
-
-    // Check code in database
-    const [resetRecord] = await db
-      .select()
-      .from(passwordResets)
-      .where(and(eq(passwordResets.email, email), eq(passwordResets.code, code)))
-      .limit(1);
-
-    if (!resetRecord) {
-      return { success: false, error: 'Invalid verification code.' };
-    }
-
-    if (new Date() > resetRecord.expiresAt) {
-      await db.delete(passwordResets).where(eq(passwordResets.id, resetRecord.id));
-      return { success: false, error: 'Verification code has expired. Please request a new one.' };
-    }
-
-    // Find the user ID in neon_auth.user
-    const userResult = await db.execute(sql`
-      SELECT id FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1
-    `);
-
-    if (userResult.rows.length === 0) {
-      return { success: false, error: 'User account not found.' };
-    }
-
-    const userId = String(userResult.rows[0].id);
+    const codeHash = verificationHash('reset', email, code);
+    const [candidate] = await db.select({ id: passwordResets.id }).from(passwordResets).where(and(eq(passwordResets.email, email), eq(passwordResets.code, codeHash), sql`${passwordResets.expiresAt} > NOW()`)).limit(1);
+    if (!candidate) return { success: false, error: 'Invalid or expired verification code.' };
     const hashedPassword = await hashPassword(newPassword);
-
-    // Update the password in neon_auth.account
-    await db.execute(sql`
-      UPDATE neon_auth.account
-      SET password = ${hashedPassword},
-          "updatedAt" = NOW()
-      WHERE "userId" = ${userId}
-    `);
-
-    // Invalidate existing sessions for this user so they log in fresh
-    await db.execute(sql`
-      DELETE FROM neon_auth.session
-      WHERE "userId" = ${userId}
-    `);
-
-    // Delete used reset record
-    await db.delete(passwordResets).where(eq(passwordResets.email, email));
-
-    return { success: true, message: 'Password has been successfully updated.' };
-  } catch (error: any) {
+    const changed = await withTransaction(async (tx) => {
+      // Deleting the matching code here makes concurrent reuse impossible.
+      const consumed = await tx.delete(passwordResets).where(and(eq(passwordResets.id, candidate.id), eq(passwordResets.code, codeHash), sql`${passwordResets.expiresAt} > NOW()`)).returning();
+      if (!consumed.length) return false;
+      const userResult = await tx.execute(sql`SELECT id FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1`);
+      if (!userResult.rows.length) throw new Error('Account unavailable.');
+      const userId = String(userResult.rows[0].id);
+      const updated = await tx.execute(sql`UPDATE neon_auth.account SET password = ${hashedPassword}, "updatedAt" = NOW() WHERE "userId" = ${userId} AND "providerId" = 'credential' RETURNING id`);
+      if (!updated.rows.length) throw new Error('Password login is unavailable for this account.');
+      await tx.execute(sql`DELETE FROM neon_auth.session WHERE "userId" = ${userId}`);
+      await tx.delete(mcpOAuthGrants).where(eq(mcpOAuthGrants.userId, userId));
+      await tx.delete(passwordResets).where(eq(passwordResets.email, email));
+      return true;
+    });
+    return changed ? { success: true, message: 'Password has been successfully updated.' } : { success: false, error: 'Invalid or expired verification code.' };
+  } catch (error) {
     console.error('Password reset failed:', error);
-    return { success: false, error: error.message || 'Failed to reset password.' };
+    return { success: false, error: 'Unable to reset the password. Please request a new code.' };
   }
 }
 
