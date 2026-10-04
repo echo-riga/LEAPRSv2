@@ -983,27 +983,84 @@ export async function getCapdevPage(input: { page: number; search: string; filte
 export async function getAnalyticsData() {
   try {
     const access = await getCurrentAccess();
-    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [] };
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [], requestEvents: [], auditActivity: [], auditItems: [] };
     const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
-    const day = sql<string>`to_char(${requests.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Manila', 'YYYY-MM-DD')`;
-    const complete = sql`(${requests.status} = 'completed' OR EXISTS (SELECT 1 FROM request_status_updates u WHERE u.request_id = ${requests.id} AND u.mark_as_complete = true))`;
-    const [projects, buckets] = await Promise.all([
+    const auditDay = sql<string>`to_char(${auditLogs.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Manila', 'YYYY-MM-DD')`;
+    const auditCapdevId = sql<number>`COALESCE(
+      CASE WHEN jsonb_typeof(${auditLogs.details}->'capdevId') = 'number' THEN (${auditLogs.details}->>'capdevId')::integer END,
+      CASE WHEN ${auditLogs.entityType} = 'capdev' AND ${auditLogs.entityId} ~ '^[0-9]+$' THEN ${auditLogs.entityId}::integer END,
+      CASE WHEN ${auditLogs.entityType} = 'request' THEN ${requests.capdevId} END
+    )`;
+    const [projects, requestRows, timelineEvents, resolutionEvents, auditRows] = await Promise.all([
       db.select({ id: capdevs.id, aipCode: capdevs.aipCode, description: capdevs.description, department: capdevs.department,
         initialBudget: capdevs.initialBudget, budget: capdevs.budget, createdAt: capdevs.createdAt }).from(capdevs).where(scope),
-      db.select({ capdevId: requests.capdevId, setting: requests.setting, day,
-        total: sql<number>`COUNT(*)::integer`,
-        completed: sql<number>`COUNT(*) FILTER (WHERE ${complete})::integer`,
-        inProgress: sql<number>`COUNT(*) FILTER (WHERE ${requests.status} = 'in_progress' AND NOT ${complete})::integer`,
-      }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(scope)
-        .groupBy(requests.capdevId, requests.setting, day),
+      db.select({ id: requests.id, capdevId: requests.capdevId, requestorName: requests.requestorName,
+        description: requests.description, setting: requests.setting, status: requests.status,
+        isStopped: requests.isStopped, activeStopperId: requests.activeStopperId, createdAt: requests.createdAt })
+        .from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(scope),
+      db.select({ id: requestStatusUpdates.id, requestId: requestStatusUpdates.requestId,
+        createdAt: requestStatusUpdates.createdAt, complete: requestStatusUpdates.markAsComplete,
+        stopped: requestStatusUpdates.isStopper, resumed: requestStatusUpdates.isResume,
+        subtracts: requestStatusUpdates.subtractsRequestedAmount, amount: requests.requestedBudget })
+        .from(requestStatusUpdates)
+        .innerJoin(requests, eq(requestStatusUpdates.requestId, requests.id))
+        .innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(scope),
+      db.select({ id: auditLogs.id, requestId: requests.id, createdAt: auditLogs.createdAt, details: auditLogs.details })
+        .from(auditLogs)
+        .innerJoin(requests, and(eq(auditLogs.entityType, 'request'), sql`${auditLogs.entityId} = ${requests.id}::text`))
+        .innerJoin(capdevs, eq(requests.capdevId, capdevs.id))
+        .where(and(scope, eq(auditLogs.action, 'status_changed'))),
+      db.select({ id: auditLogs.id, capdevId: auditCapdevId, day: auditDay, createdAt: auditLogs.createdAt,
+        action: auditLogs.action, entityType: auditLogs.entityType, entityId: auditLogs.entityId,
+        entityLabel: auditLogs.entityLabel, details: auditLogs.details })
+        .from(auditLogs)
+        .leftJoin(requests, and(eq(auditLogs.entityType, 'request'), sql`${auditLogs.entityId} = ${requests.id}::text`))
+        .innerJoin(capdevs, eq(capdevs.id, auditCapdevId))
+        .where(scope),
     ]);
+    const auditActivity = Array.from(auditRows.reduce((totals, row) => {
+      const key = `${row.capdevId}:${row.day}`;
+      const current = totals.get(key) || { capdevId: row.capdevId, day: row.day, total: 0 };
+      current.total++;
+      totals.set(key, current);
+      return totals;
+    }, new Map<string, { capdevId: number; day: string; total: number }>()).values());
     return {
       capdevs: projects.map((project) => ({ ...project, createdAt: project.createdAt.toISOString() })),
-      requests: buckets.map((bucket) => ({ ...bucket, createdAt: bucket.day + 'T00:00:00+08:00' })),
+      requests: requestRows.map((request) => ({ ...request, createdAt: request.createdAt.toISOString() })),
+      requestEvents: [
+        ...timelineEvents.map((event) => ({
+          id: `timeline-${event.id}`,
+          requestId: event.requestId,
+          createdAt: event.createdAt.toISOString(),
+          complete: event.complete,
+          denied: false,
+          stopped: event.stopped,
+          resumed: event.resumed,
+          deductedAmount: event.subtracts ? event.amount : null,
+        })),
+        ...resolutionEvents.map((event) => {
+          const details = event.details && typeof event.details === 'object' && !Array.isArray(event.details)
+            ? event.details as Record<string, unknown>
+            : {};
+          return {
+            id: `audit-${event.id}`,
+            requestId: event.requestId,
+            createdAt: event.createdAt.toISOString(),
+            complete: details.status === 'completed',
+            denied: details.status === 'denied',
+            stopped: false,
+            resumed: false,
+            deductedAmount: null,
+          };
+        }),
+      ],
+      auditActivity,
+      auditItems: auditRows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })),
     };
   } catch (error) {
     console.error('Failed to fetch analytics:', error);
-    return { capdevs: [], requests: [] };
+    return { capdevs: [], requests: [], requestEvents: [], auditActivity: [], auditItems: [] };
   }
 }
 
