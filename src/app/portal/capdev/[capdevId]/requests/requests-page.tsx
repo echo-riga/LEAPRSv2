@@ -6,14 +6,13 @@ import {
   AttachFile as AttachFileIcon,
   Assignment as RequestIcon,
   ChevronRight as ChevronRightIcon,
-  DeleteOutlined as DeleteIcon,
   KeyboardArrowDown as KeyboardArrowDownIcon,
   Payments as PaymentsIcon,
   Search as SearchIcon,
   VisibilityOutlined as VisibilityIcon,
-  WarningAmber as WarningIcon,
 } from '@mui/icons-material';
 import {
+  Alert,
   Autocomplete,
   Box,
   Button,
@@ -37,14 +36,18 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { authClient } from '@/lib/auth/client';
+import ArchiveActions from '@/components/ArchiveActions';
+import ReadOnlyDynamicField from '@/components/ReadOnlyDynamicField';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
 import DynamicTableField from '@/components/DynamicTableField';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import {
+  archiveRequest,
+  restoreRequest,
   createRequest,
   deleteRequest,
   getCapdevById,
@@ -57,11 +60,12 @@ import {
   type StatusAttachment,
 } from '@/app/actions';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
-import ActionErrorDialog from '@/components/ActionErrorDialog';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
 import FileFieldChecklist from '@/components/FileFieldChecklist';
+import { focusFormError } from '@/lib/form-error-focus';
 
 type RequestRecord = {
+  archivedAt: Date | string | null;
   id: number;
   capdevId: number;
   userId: string;
@@ -78,6 +82,7 @@ type RequestRecord = {
 type DynamicField = { id: number; setting?: 'internal' | 'external'; name: string; type: string; options: string[] | null; isRequired: boolean; width: string; columnPosition: string; placeholder: string | null; section?: string };
 type RequestForm = Pick<RequestRecord, 'setting' | 'description' | 'requestedBudget' | 'additionalInfo'>;
 type CapdevDetail = {
+  archivedAt: Date | string | null;
   id: number;
   aipCode: string;
   department: string;
@@ -116,6 +121,16 @@ const disabledFieldSx = {
 
 export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const query = searchParams.toString();
+  const showArchived = searchParams.get('archived') === '1';
+  const setShowArchived = useCallback((archived: boolean) => {
+    const params = new URLSearchParams(query);
+    if (archived) params.set('archived', '1');
+    else params.delete('archived');
+    const suffix = params.toString();
+    router.replace(`/portal/capdev/${capdevId}/requests${suffix ? `?${suffix}` : ''}${window.location.hash}`, { scroll: false });
+  }, [capdevId, query, router]);
   const session = authClient.useSession();
   const [capdev, setCapdev] = useState<CapdevDetail | null>(null);
   const [capdevDefinitions, setCapdevDefinitions] = useState<DynamicField[]>([]);
@@ -129,13 +144,11 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const [page, setPage] = useState(1);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<RequestRecord | null>(null);
-  const [deleting, setDeleting] = useState<RequestRecord | null>(null);
   const [form, setForm] = useState<RequestForm>(EMPTY_FORM);
   const [pendingFiles, setPendingFiles] = useState<Record<string, File[]>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [budgetValidationOpen, setBudgetValidationOpen] = useState(false);
-  const [budgetValidationMessage, setBudgetValidationMessage] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [role, setRole] = useState<AppRole>('employee');
   const [showScrollArrow, setShowScrollArrow] = useState(true);
   const [notificationFocus, setNotificationFocus] = useState<{ targetId: string; nonce: number } | null>(null);
@@ -183,6 +196,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       projectData
         ? {
             id: projectData.id,
+            archivedAt: projectData.archivedAt,
             aipCode: projectData.aipCode,
             department: projectData.department,
             description: projectData.description,
@@ -240,6 +254,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const filtered = useMemo(() => requests.filter((request) => {
     const date = new Date(request.createdAt).getTime();
     return (
+      (Boolean(request.archivedAt) === showArchived) &&
       (request.requestorName || '').toLowerCase().includes(search.toLowerCase()) &&
       (filters.setting === 'all' || request.setting === filters.setting) &&
       (!filters.min || Number(request.requestedBudget) >= Number(filters.min)) &&
@@ -247,7 +262,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       (!filters.dateFrom || date >= new Date(filters.dateFrom).getTime()) &&
       (!filters.dateTo || date <= new Date(`${filters.dateTo}T23:59:59`).getTime())
     );
-  }).sort((a, b) => filters.sort === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()), [filters, requests, search]);
+  }).sort((a, b) => filters.sort === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()), [filters, requests, search, showArchived]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / 6));
   const visible = filtered.slice((page - 1) * 6, page * 6);
@@ -259,6 +274,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
 
     if (filteredIndex < 0 && requests.some((request) => request.id === requestIdToFocus)) {
       const resetTimeoutId = window.setTimeout(() => {
+        const focused = requests.find((item) => item.id === requestIdToFocus);
+        setShowArchived(Boolean(focused?.archivedAt));
         setSearch('');
         setFilters({ setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' });
       }, 0);
@@ -277,19 +294,28 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const timeoutId = window.setTimeout(() => {
       setNotificationFocus((current) => current?.nonce === notificationFocus.nonce ? null : current);
-    }, 1400);
+    }, 2500);
     return () => window.clearTimeout(timeoutId);
-  }, [filtered, loading, notificationFocus, page, requests]);
+  }, [filtered, loading, notificationFocus, page, requests, setShowArchived]);
   const allDefinitions = definitions.filter((field) => field.setting === form.setting);
   const requiredDefinitions = allDefinitions.filter((field) => field.isRequired || field.section === 'required');
   const rightAlignedFieldIds = getHalfFieldLayout(allDefinitions.map((field) => ({ ...field, key: field.id }))).before;
   const rightAlignedCapdevFieldIds = getHalfFieldLayout(capdevDefinitions.map((field) => ({ ...field, key: field.id }))).before;
-  const setValue = (updates: Partial<RequestForm>) => setForm((current) => ({ ...current, ...updates }));
+  const setValue = (updates: Partial<RequestForm>) => {
+    setForm((current) => ({ ...current, ...updates }));
+    const changed = Object.keys(updates);
+    if (changed.some((key) => fieldErrors[key])) setFieldErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !changed.includes(key))));
+  };
+  const showFormError = (message: string) => {
+    setError(message);
+    focusFormError('request-form-error');
+  };
   const setDynamicValue = (field: DynamicField, value: unknown) => setForm((current) => ({ ...current, additionalInfo: { ...current.additionalInfo, [dynamicFieldStorageKey(field)]: value } }));
   const resetPage = () => setPage(1);
 
-  const openCreate = () => { setError(''); setPendingFiles({}); setEditing(null); setForm(EMPTY_FORM); setShowScrollArrow(true); setEditorOpen(true); };
-  const openEdit = (request: RequestRecord) => { setError(''); setPendingFiles({}); setEditing(request); setForm({ setting: request.setting, description: request.description, requestedBudget: request.requestedBudget, additionalInfo: { ...request.additionalInfo } }); setShowScrollArrow(true); setEditorOpen(true); };
+  const editorReadOnly = showArchived || Boolean(capdev?.archivedAt || editing?.archivedAt);
+  const openCreate = () => { if (showArchived || capdev?.archivedAt) return; setError(''); setFieldErrors({}); setPendingFiles({}); setEditing(null); setForm(EMPTY_FORM); setShowScrollArrow(true); setEditorOpen(true); };
+  const openEdit = (request: RequestRecord) => { setError(''); setFieldErrors({}); setPendingFiles({}); setEditing(request); setForm({ setting: request.setting, description: request.description, requestedBudget: request.requestedBudget, additionalInfo: { ...request.additionalInfo } }); setShowScrollArrow(true); setEditorOpen(true); };
   const addSelectedFiles = (fieldName: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
     setPendingFiles((current) => ({ ...current, [fieldName]: [...(current[fieldName] || []), ...selectedFiles].filter((file, index, files) => files.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index) }));
@@ -318,23 +344,25 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const areRequiredFieldsComplete = requiredDefinitions.every(hasDynamicValue);
 
   const saveRequest = async () => {
+    if (editorReadOnly) return;
     if (!session.data || !form.requestedBudget) return;
 
     const missingRequiredFields = requiredDefinitions.filter((field) => !hasDynamicValue(field));
-    if (missingRequiredFields.length > 0) {
-      setError(`Complete the required field${missingRequiredFields.length === 1 ? '' : 's'}: ${missingRequiredFields.map((field) => field.name).join(', ')}.`);
-      return;
-    }
+    if (missingRequiredFields.length > 0) return;
 
     const requestedAmount = Number(form.requestedBudget);
     const availableBudget = Number(capdev?.budget || 0);
 
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+      setFieldErrors({ requestedBudget: 'Enter an amount greater than zero.' });
+      focusFormError('request-field-budget');
+      return;
+    }
+
     // Validation check for requested budget vs remaining CapDev budget
     if (!editing?.hasDeductedBudget && requestedAmount > availableBudget) {
-      setBudgetValidationMessage(
-        `The requested amount of ${formatCurrency(requestedAmount)} exceeds the available CapDev balance of ${formatCurrency(availableBudget)}. Please adjust the requested amount.`
-      );
-      setBudgetValidationOpen(true);
+      setFieldErrors({ requestedBudget: `Exceeds available balance of ${formatCurrency(availableBudget)}.` });
+      focusFormError('request-field-budget');
       return;
     }
 
@@ -353,7 +381,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       const field = allDefinitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
       if (!field) continue;
       const uploaded = await uploadFilesDirectlyToGoogleDrive(files, { ...requestContext, folderId: currentFolderId });
-      if (!uploaded.success) { setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
+      if (!uploaded.success) { showFormError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
       if (uploaded.folderId) {
         currentFolderId = uploaded.folderId;
         additionalInfo.googleDriveFolderId = uploaded.folderId;
@@ -367,28 +395,22 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
       setEditorOpen(false);
       await loadData();
     } else {
-      if (result.error && result.error.toLowerCase().includes('budget')) {
-        setBudgetValidationMessage(result.error);
-        setBudgetValidationOpen(true);
+      const resultError = result.error?.toLowerCase() || '';
+      if (['budget', 'amount', 'balance'].some((term) => resultError.includes(term))) {
+        setFieldErrors({ requestedBudget: `Exceeds available balance of ${formatCurrency(availableBudget)}.` });
+        focusFormError('request-field-budget');
       } else {
-        setError(result.error || 'Unable to save request.');
+        showFormError(result.error || 'Unable to save request.');
       }
     }
-    setSaving(false);
-  };
-
-  const removeRequest = async () => {
-    if (!deleting) return;
-    setSaving(true);
-    const result = await deleteRequest(deleting.id);
-    if (result.success) { setDeleting(null); await loadData(); }
     setSaving(false);
   };
 
   const renderDynamicField = (field: DynamicField) => {
     const storageKey = dynamicFieldStorageKey(field);
     const fieldValue = getDynamicFieldValue(form.additionalInfo, field);
-    const canEdit = !editing || role === 'admin' || role === 'employee-department' || (role === 'employee' && editing.userId === session.data?.user?.id);
+    if (editorReadOnly) return <Grid key={field.id} size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}><ReadOnlyDynamicField field={field} value={getDynamicFieldValue(form.additionalInfo, field)} /></Grid>;
+    const canEdit = !editorReadOnly && (!editing || role === 'admin' || role === 'employee-department' || (role === 'employee' && editing.userId === session.data?.user?.id));
     return <Grid
       key={field.id}
       size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
@@ -525,6 +547,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
             <Button size="small" sx={{ height: 40 }} variant="outlined" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}>
               Filter
             </Button>
+            <Button size="small" sx={{ height: 40, whiteSpace: 'nowrap' }} variant="outlined" onClick={() => { setShowArchived(!showArchived); setNotificationFocus(null); resetPage(); }}>{showArchived ? 'See Active Requests' : 'See Archives'}</Button>
           </Stack>
         </Stack>
 
@@ -542,7 +565,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}>
                   <Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}>
                     <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>
-                      Added {formatDate(request.createdAt)}
+                      {request.archivedAt ? 'Archived' : 'Added'} {formatDate(request.archivedAt || request.createdAt)}
                     </Typography>
                   </Box>
                 </Box>
@@ -552,13 +575,13 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                     position: 'relative',
                     zIndex: 1,
                     borderRadius: 2,
-                    bgcolor: '#ffffff',
+                    bgcolor: request.archivedAt || capdev.archivedAt ? 'grey.100' : '#fafcfa',
                     height: '100%',
                     display: 'flex',
                     flexDirection: 'column',
                     transition: 'all 0.2s',
                     animation: notificationFocus?.targetId === `request-record-${request.id}`
-                      ? 'requestNotificationFocus 900ms ease-in-out'
+                      ? 'requestNotificationFocus 2500ms ease-in-out'
                       : 'none',
                     '@keyframes requestNotificationFocus': {
                       '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
@@ -571,55 +594,45 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 >
                   <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
                     <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}>
-                      <Box sx={{ bgcolor: 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <RequestIcon color="primary" />
+                      <Box sx={{ bgcolor: request.archivedAt || capdev.archivedAt ? 'grey.200' : 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <RequestIcon color={request.archivedAt || capdev.archivedAt ? 'action' : 'primary'} />
                       </Box>
                       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                         <Typography variant="h6" noWrap sx={{ fontWeight: '700', color: 'text.primary', lineHeight: 1.2 }}>
-                          Request #{request.id}
+                          {request.requestorName || 'Requestor'}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
-                          {request.setting === 'internal' ? 'Internal' : 'External'}
+                          {request.setting === 'internal' ? 'In-House' : 'External'}
                         </Typography>
                       </Box>
                       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
                         <Chip
                           label={request.status === 'completed' || request.isComplete ? 'Complete' : request.status === 'denied' ? 'Denied' : 'In progress'}
-                          color={request.status === 'completed' || request.isComplete ? 'success' : request.status === 'denied' ? 'error' : 'primary'}
+                          color={request.archivedAt || capdev.archivedAt ? 'default' : request.status === 'completed' || request.isComplete ? 'success' : request.status === 'denied' ? 'error' : 'primary'}
                           size="small"
                           sx={{ fontWeight: 700 }}
                         />
-                        {request.hasDeductedBudget && <Chip icon={<PaymentsIcon />} label="Amount deducted" color="success" variant="outlined" size="small" sx={{ fontWeight: 700 }} />}
+                        {request.hasDeductedBudget && <Chip icon={<PaymentsIcon />} label="Amount deducted" color={request.archivedAt || capdev.archivedAt ? 'default' : 'success'} variant="outlined" size="small" sx={{ fontWeight: 700 }} />}
                       </Stack>
                     </Stack>
                     <Stack spacing={1.5} sx={{ my: 1 }}>
                       <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="body2" color="text.secondary">Requestor</Typography>
-                        <Typography variant="body2" sx={{ fontWeight: 700 }}>{request.requestorName || 'Requestor'}</Typography>
-                      </Stack>
-                      <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
                         <Typography variant="body2" color="text.secondary">Requested amount</Typography>
-                        <Typography variant="body2" sx={{ fontWeight: '700', color: 'primary.dark' }}>{formatCurrency(request.requestedBudget)}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: '700', color: request.archivedAt || capdev.archivedAt ? 'text.secondary' : 'primary.dark' }}>{formatCurrency(request.requestedBudget)}</Typography>
                       </Stack>
                     </Stack>
                     <Divider sx={{ my: 2 }} />
                     <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                      <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/portal/capdev/${capdevId}/requests/${request.id}/status`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
+                      <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/portal/capdev/${capdevId}/requests/${request.id}/status${showArchived || request.archivedAt ? '?archived=1' : ''}`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
                         Track Progress
                       </Button>
                       <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-                        <Tooltip title="View & Edit Details">
+                        <Tooltip title={request.archivedAt || capdev.archivedAt ? 'View Details' : 'View & Edit Details'}>
                           <IconButton size="small" color="primary" onClick={() => openEdit(request)} aria-label="View request details">
                             <VisibilityIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        {canEditRequest(request) && (
-                          <Tooltip title="Delete Request">
-                            <IconButton size="small" color="error" onClick={() => setDeleting(request)} aria-label="Delete request">
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
+                        {canEditRequest(request) && <ArchiveActions label={`${request.requestorName || 'Requestor'}'s request`} archived={Boolean(request.archivedAt)} parentArchived={Boolean(capdev.archivedAt)} onArchive={() => archiveRequest(request.id)} onRestore={() => restoreRequest(request.id)} onDelete={() => deleteRequest(request.id)} onChanged={loadData} deleteMessage={`Permanently delete ${request.requestorName || 'Requestor'}'s request and its progress updates? This cannot be undone.`} />}
                       </Stack>
                     </Stack>
                   </CardContent>
@@ -644,7 +657,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
         )}
       </Container>
 
-      {canManageRequest && (
+      {canManageRequest && !showArchived && !capdev.archivedAt && (
         <Fab variant="extended" color="primary" onClick={openCreate} sx={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1100, px: 2.5, boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)' }}>
           <AddIcon sx={{ mr: 1 }} />
           Add Request
@@ -653,7 +666,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
 
       {/* Add / Edit Request Dialog */}
       <Dialog open={editorOpen} onClose={() => !saving && setEditorOpen(false)} fullWidth maxWidth="md">
-        <DialogTitle sx={{ fontWeight: 800 }}>{editing ? 'Edit Request' : 'Add Request'}</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 800 }}>{editorReadOnly ? 'Request Details' : editing ? 'Edit Request' : 'Add Request'}</DialogTitle>
         <DialogContent
           dividers
           sx={{ position: 'relative' }}
@@ -661,6 +674,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
             setShowScrollArrow(e.currentTarget.scrollTop < 120);
           }}
         >
+          {error && <Alert id="request-form-error" tabIndex={-1} severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
           {/* Section: CapDev Information */}
           {capdev && (
@@ -738,28 +752,33 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 </Grid>
               )}
               <Grid size={12}>
-                <TextField select required fullWidth label="Setting" value={form.setting} onChange={(event) => setValue({ setting: event.target.value })}>
-                  <MenuItem value="internal">Internal</MenuItem>
+                <TextField disabled={editorReadOnly} select required fullWidth label="Setting" value={form.setting} onChange={(event) => setValue({ setting: event.target.value })}>
+                  <MenuItem value="internal">In-House</MenuItem>
                   <MenuItem value="external">External</MenuItem>
                 </TextField>
               </Grid>
               <Grid size={12}>
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  required
+              <Grid size={{ xs: 12, sm: 6 }} id="request-field-budget">
+                <TextField required
                   fullWidth
                   label="Amount"
                   type="number"
                   value={form.requestedBudget}
                   onChange={(event) => setValue({ requestedBudget: event.target.value })}
-                  disabled={editing?.hasDeductedBudget}
+                  onBlur={() => {
+                    if (form.requestedBudget && (!Number.isFinite(Number(form.requestedBudget)) || Number(form.requestedBudget) <= 0)) {
+                      setFieldErrors((current) => ({ ...current, requestedBudget: 'Enter an amount greater than zero.' }));
+                    }
+                  }}
+                  error={Boolean(fieldErrors.requestedBudget)}
+                  helperText={fieldErrors.requestedBudget}
+                  disabled={editorReadOnly || editing?.hasDeductedBudget}
                   sx={editing?.hasDeductedBudget ? disabledFieldSx : undefined}
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  fullWidth
+                <TextField fullWidth
                   label="Balance"
                   value={capdev ? formatCurrency(capdev.budget) : '₱0.00'}
                   disabled
@@ -818,47 +837,12 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           {(!editing || canEditRequest(editing)) && canManageRequest && (
             <Button
               onClick={saveRequest}
-              disabled={saving || !form.requestedBudget || !areRequiredFieldsComplete}
+              disabled={editorReadOnly || saving || !form.requestedBudget || Number(form.requestedBudget) <= 0 || !areRequiredFieldsComplete || Object.keys(fieldErrors).length > 0}
               variant="contained"
             >
               {saving ? 'Saving' : 'Save Request'}
             </Button>
           )}
-        </DialogActions>
-      </Dialog>
-
-      <ActionErrorDialog open={Boolean(error)} title="Unable to Save Request" message={error} onClose={() => setError('')} />
-
-      {/* Dedicated Budget Validation Dialog */}
-      <Dialog
-        open={budgetValidationOpen}
-        onClose={() => setBudgetValidationOpen(false)}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <WarningIcon color="warning" />
-          Balance Limit Exceeded
-        </DialogTitle>
-        <DialogContent dividers>
-          <Stack spacing={1.5} sx={{ py: 1 }}>
-            <Typography variant="body1" sx={{ color: 'text.primary' }}>
-              {budgetValidationMessage || 'The requested amount exceeds the remaining CapDev allocation.'}
-            </Typography>
-            <Box sx={{ p: 1.5, bgcolor: '#f4f7f4', borderRadius: 1.5 }}>
-              <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-                <Typography variant="caption" color="text.secondary">Remaining Project Balance</Typography>
-                <Typography variant="caption" sx={{ fontWeight: 700, color: isCapdevBudgetDepleted ? 'error.main' : 'primary.dark' }}>
-                  {formatCurrency(capdev.budget)}
-                </Typography>
-              </Stack>
-            </Box>
-          </Stack>
-        </DialogContent>
-        <DialogActions sx={{ p: 2 }}>
-          <Button variant="contained" onClick={() => setBudgetValidationOpen(false)} sx={{ fontWeight: 700 }}>
-            Understood
-          </Button>
         </DialogActions>
       </Dialog>
 
@@ -870,7 +854,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
             <Grid size={12}>
               <TextField select fullWidth label="Setting" value={draftFilters.setting} onChange={(e) => setDraftFilters({ ...draftFilters, setting: e.target.value })}>
                 <MenuItem value="all">All settings</MenuItem>
-                <MenuItem value="internal">Internal</MenuItem>
+                <MenuItem value="internal">In-House</MenuItem>
                 <MenuItem value="external">External</MenuItem>
               </TextField>
             </Grid>
@@ -912,20 +896,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
         </DialogActions>
       </Dialog>
 
-      {/* Delete Request Dialog */}
-      <Dialog open={Boolean(deleting)} onClose={() => !saving && setDeleting(null)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800 }}>Delete Request?</DialogTitle>
-        <DialogContent>
-          <Typography>This permanently removes Request #{deleting?.id}.</Typography>
-        </DialogContent>
-        <DialogActions sx={{ p: 2.5 }}>
-          <Button onClick={() => setDeleting(null)} disabled={saving}>Cancel</Button>
-          <Button color="error" variant="contained" onClick={removeRequest} disabled={saving}>
-            {saving ? 'Deleting' : 'Delete'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+
     </Box>
   );
 }
-

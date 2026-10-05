@@ -3,6 +3,7 @@
 import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
+  Alert,
   Container,
   Box,
   Typography,
@@ -34,10 +35,12 @@ import {
 import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess } from '@/app/actions';
 import { FormConfigSkeleton } from '@/components/Skeletons';
+import DeleteConfirmationDialog from '@/components/DeleteConfirmationDialog';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
 import { hasComboboxOptions } from '@/lib/dynamic-fields';
 import DynamicTableField from '@/components/DynamicTableField';
+import { focusFormError } from '@/lib/form-error-focus';
 import {
   EmptyHalfFieldDropSlot,
   FieldDropIndicator,
@@ -73,8 +76,14 @@ function RequestConfigContent() {
   const setting: RequestSetting = searchParams.get('setting') === 'external' ? 'external' : 'internal';
   const session = authClient.useSession();
   const [fields, setFields] = useState<Field[]>([]);
+  const [deletingField, setDeletingField] = useState<Field | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | string | null>(null);
+  const [errorMessage, setErrorMessage] = useState('');
+  const showConfigurationError = (message: string) => {
+    setErrorMessage(message);
+    focusFormError('request-configuration-error');
+  };
 
   // Inline editing state (replaces the old modal)
   const [editingKeys, setEditingKeys] = useState<Set<string>>(new Set());
@@ -246,6 +255,7 @@ function RequestConfigContent() {
     }
     setIsSavingConfiguration(true);
     setConfigurationSaved(false);
+    setErrorMessage('');
     try {
       const savedFields = await Promise.all(draftFields.map(async (field) => {
         const result = await saveRequestFieldDefinition({
@@ -277,36 +287,38 @@ function RequestConfigContent() {
         setConfigurationSaved(true);
         if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
         configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
+      } else {
+        const failed = savedFields.find(({ result }) => !result.success || !result.id);
+        showConfigurationError(failed?.result.error || 'Unable to save field configuration.');
       }
     } catch (error) {
       console.error('Configuration save failed:', error);
+      showConfigurationError(error instanceof Error ? error.message : 'Unable to save field configuration.');
     } finally {
       setIsSavingConfiguration(false);
     }
   };
 
-  const handleDeleteFieldDirect = async (originalIndex: number) => {
-    const fieldToDelete = fields[originalIndex];
-    if (fieldToDelete.isTemp) {
-      setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
-      clearEditingState(fieldToDelete.key);
-      return;
-    }
-    if (!fieldToDelete.id) return;
-    setSavingId(fieldToDelete.id);
-    try {
-      const result = await deleteRequestFieldDefinition(fieldToDelete.id, setting, currentUserId);
-      if (result.success) {
-        setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
-        clearEditingState(fieldToDelete.key);
+  const handleDeleteFieldDirect = (originalIndex: number) => {
+    setDeletingField(fields[originalIndex] || null);
+  };
+
+  const confirmDeleteField = async () => {
+    if (!deletingField) return;
+    if (!deletingField.isTemp) {
+      if (!deletingField.id) throw new Error('Form field not found.');
+      setSavingId(deletingField.id);
+      try {
+        const result = await deleteRequestFieldDefinition(deletingField.id, setting, currentUserId);
+        if (!result.success) throw new Error(result.error || 'Unable to delete field.');
         setHasPendingDeletion(true);
         setConfigurationSaved(false);
+      } finally {
+        setSavingId(null);
       }
-    } catch (error) {
-      console.error('Delete failed:', error);
-    } finally {
-      setSavingId(null);
     }
+    setFields((current) => current.filter((field) => field.key !== deletingField.key));
+    clearEditingState(deletingField.key);
   };
 
   // Options builder (used inside the inline editor for "text" fields)
@@ -679,11 +691,17 @@ function RequestConfigContent() {
       {/* Main Single Live Preview Container */}
       <Container maxWidth="md" sx={{ p: 0, width: '100%', mb: 4 }}>
         <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px', mb: 0.5 }}>
-          {setting === 'internal' ? 'Internal' : 'External'} Activity Design Layout
+          {setting === 'internal' ? 'In-House' : 'External'} Activity Design Layout
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           Configure required and optional fields, then drag to set their order.
         </Typography>
+
+        {errorMessage && (
+          <Alert id="request-configuration-error" tabIndex={-1} severity="error" onClose={() => setErrorMessage('')} sx={{ mb: 3 }}>
+            {errorMessage}
+          </Alert>
+        )}
 
         <Card
           variant="outlined"
@@ -734,7 +752,7 @@ function RequestConfigContent() {
                                 disabled
                                 sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
                               >
-                                <MenuItem value="internal">Internal</MenuItem>
+                                <MenuItem value="internal">In-House</MenuItem>
                                 <MenuItem value="external">External</MenuItem>
                               </TextField>
                             </Stack>
@@ -945,6 +963,7 @@ function RequestConfigContent() {
           </CardContent>
         </Card>
       </Container>
+      <DeleteConfirmationDialog open={Boolean(deletingField)} title="Delete Form Field?" recordLabel={deletingField?.name || 'Untitled field'} onClose={() => setDeletingField(null)} onConfirm={confirmDeleteField} />
       <Button
         variant="contained"
         size="large"

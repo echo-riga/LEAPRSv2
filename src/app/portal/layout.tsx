@@ -89,7 +89,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
   const backHref = isSettingsPage && safeSettingsReturnPath
     ? safeSettingsReturnPath
     : statusRouteMatch
-      ? `/portal/capdev/${statusRouteMatch[1]}/requests`
+      ? `/portal/capdev/${statusRouteMatch[1]}/requests${searchParams.get('archived') === '1' ? '?archived=1' : ''}`
       : pathname === '/portal/users' || pathname === '/portal/analytics' || pathname === '/portal/reports' || pathname === '/portal/audit-logs' || pathname === '/portal/settings/capdev' || pathname === '/portal/settings/request'
         ? '/portal/settings'
         : '/portal';

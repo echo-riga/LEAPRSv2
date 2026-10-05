@@ -40,7 +40,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'get_request_form_schema',
-    description: 'Retrieves the current fixed and dynamic form fields schema for Internal or External LEAPRS requests.',
+    description: 'Retrieves the current fixed and dynamic form fields schema for In-House or External LEAPRS requests.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -128,7 +128,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
         setting: {
           type: 'string',
           enum: ['internal', 'external'],
-          description: 'Whether the training/activity is internal or external.',
+          description: 'Whether the training/activity is In-House or External.',
         },
         requested_budget: {
           type: 'string',

@@ -11,6 +11,7 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   return nextResolve(specifier.startsWith('@/') ? new URL('../src/' + specifier.slice(2) + '.ts', import.meta.url).href : specifier, context);
 } });
 const { writeRequestStatusUpdate } = await import('../src/lib/request-budget.ts');
+const { deleteRequestRecords } = await import('../src/lib/request-deletion.ts');
 const { claimRequestFolder } = await import('../src/lib/request-storage.ts');
 const { rateLimitStatement } = await import('../src/lib/security-rate-limit.ts');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -35,11 +36,13 @@ const input = (requestId, overrides = {}) => ({ requestId, userId: 'owner', stat
 test('database security regression suite uses an isolated disposable schema', async (t) => {
   try {
     await pool.query('CREATE SCHEMA ' + quoted);
-    for (const table of ['capdevs', 'requests', 'request_status_updates', 'request_storage_folders', 'security_rate_limits']) {
+    for (const table of ['capdevs', 'requests', 'request_status_updates', 'request_storage_folders', 'security_rate_limits', 'audit_logs']) {
       await pool.query(`CREATE TABLE ${quoted}."${table}" (LIKE public."${table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)`);
     }
     await pool.query(`CREATE SEQUENCE ${quoted}.status_id`);
     await pool.query(`ALTER TABLE ${quoted}.request_status_updates ALTER COLUMN id SET DEFAULT nextval('${schema}.status_id')`);
+    await pool.query(`CREATE SEQUENCE ${quoted}.audit_id`);
+    await pool.query(`ALTER TABLE ${quoted}.audit_logs ALTER COLUMN id SET DEFAULT nextval('${schema}.audit_id')`);
     const setup = async () => run(async (tx) => {
       await tx.execute(sql`TRUNCATE request_status_updates, request_storage_folders, requests, capdevs`);
       await tx.execute(sql`INSERT INTO capdevs (id,aip_code,initial_budget,budget,department,updated_by_id) VALUES (1,'TEST','10000','10000','Test','owner')`);
@@ -52,11 +55,43 @@ test('database security regression suite uses an isolated disposable schema', as
       const result = await run((tx) => tx.execute(sql`SELECT budget FROM capdevs WHERE id=1`));
       assert.equal(result.rows[0].budget, '3000.00');
     });
+    await t.test('archived requests and projects reject progress writes and deductions until restored', async () => {
+      for (const table of ['requests', 'capdevs']) {
+        await setup();
+        await run((tx) => tx.execute(sql.raw(`UPDATE ${table} SET archived_at = NOW()`)));
+        await assert.rejects(run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10))), /Archived records are read-only/);
+        const blocked = await run((tx) => tx.execute(sql`SELECT budget, (SELECT COUNT(*) FROM request_status_updates) AS updates FROM capdevs WHERE id = 1`));
+        assert.equal(blocked.rows[0].budget, '10000.00');
+        assert.equal(Number(blocked.rows[0].updates), 0);
+        await run((tx) => tx.execute(sql.raw(`UPDATE ${table} SET archived_at = NULL`)));
+        await run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10)));
+        const restored = await run((tx) => tx.execute(sql`SELECT budget FROM capdevs WHERE id = 1`));
+        assert.equal(restored.rows[0].budget, '3000.00');
+      }
+    });
     await t.test('concurrent retries deduct a request only once', async () => {
       await setup();
       const results = await Promise.allSettled([run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10))), run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10)))]);
       assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
       const result = await run((tx) => tx.execute(sql`SELECT budget FROM capdevs WHERE id=1`));
+      assert.equal(result.rows[0].budget, '3000.00');
+    });
+    await t.test('deleting a deducted request preserves the reduced CapDev balance', async () => {
+      await setup();
+      await run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10)));
+      const deleted = await run((tx) => deleteRequestRecords(tx, 10, { actorId: 'owner', actorName: 'Owner', actorEmail: 'owner@plpasig.edu.ph' }));
+      assert.equal(deleted.rows.length, 1);
+      const result = await run((tx) => tx.execute(sql`SELECT budget, (SELECT COUNT(*) FROM requests WHERE id = 10) AS requests, (SELECT COUNT(*) FROM request_status_updates WHERE request_id = 10) AS updates FROM capdevs WHERE id = 1`));
+      assert.equal(result.rows[0].budget, '3000.00');
+      assert.equal(Number(result.rows[0].requests), 0);
+      assert.equal(Number(result.rows[0].updates), 0);
+    });
+    await t.test('deleting deduction history does not allow another deduction', async () => {
+      await setup();
+      await run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10)));
+      await run((tx) => tx.execute(sql`DELETE FROM request_status_updates WHERE request_id = 10`));
+      await assert.rejects(run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10))), /already been deducted/);
+      const result = await run((tx) => tx.execute(sql`SELECT budget FROM capdevs WHERE id = 1`));
       assert.equal(result.rows[0].budget, '3000.00');
     });
     await t.test('a failed timeline insert rolls back its deduction', async () => {

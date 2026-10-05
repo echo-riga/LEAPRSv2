@@ -36,6 +36,7 @@ function displayValue(value: unknown) {
   if (value === null || value === undefined || value === '') return '';
   if (Array.isArray(value)) return value.map((item) => typeof item === 'object' && item !== null && 'name' in item ? String(item.name) : String(item)).join(', ');
   if (typeof value === 'object') return JSON.stringify(value);
+  if (value === 'internal') return 'In-House';
   return String(value);
 }
 

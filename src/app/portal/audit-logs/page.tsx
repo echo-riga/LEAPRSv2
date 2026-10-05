@@ -2,104 +2,30 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Card, Container, FormControl, InputAdornment, InputLabel, MenuItem,
-  Pagination, Select, Stack, TextField, Typography,
+  Box, Button, Card, Container, Dialog, DialogActions, DialogContent, DialogTitle,
+  FormControl, InputAdornment, InputLabel, MenuItem,
+  Pagination, Select, Stack, Table, TableBody, TableCell, TableContainer,
+  TableHead, TableRow, TextField, Typography,
 } from '@mui/material';
 import {
-  AssignmentOutlined as RequestIcon,
   HistoryOutlined as HistoryIcon,
-  PersonOutlined as UserIcon,
-  SchoolOutlined as CapdevIcon,
   Search as SearchIcon,
-  TuneOutlined as FieldIcon,
-  UpdateOutlined as UpdateIcon,
 } from '@mui/icons-material';
+import { describeAudit } from '@/lib/audit-description';
 import { getAuditLogs, type AuditLogItem } from '@/app/actions';
 import { AuditLogsSkeleton } from '@/components/Skeletons';
 
-const PAGE_SIZE = 12;
+const PAGE_SIZE = 6;
 
 const actionLabels: Record<string, string> = {
-  created: 'Created', updated: 'Updated', deleted: 'Deleted', status_changed: 'Status changed', stopped: 'Stopped', resumed: 'Resumed',
+  created: 'Created', updated: 'Updated', deleted: 'Deleted', archived: 'Archived', restored: 'Restored', status_changed: 'Status changed', stopped: 'Paused', resumed: 'Resumed',
 };
 const entityLabels: Record<string, string> = {
-  capdev: 'CapDev', request: 'Request', status_update: 'Status update', user: 'User', capdev_field: 'CapDev field', request_field: 'Request field',
+  capdev: 'CapDev project', request: 'Request', status_update: 'Progress update', user: 'User account', capdev_field: 'CapDev form field', request_field: 'Request form field', status_update_field: 'Progress update form field', system_setting: 'System setting',
 };
 
 function formatDate(value: Date | string) {
-  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
-}
-
-function getDetails(details: unknown): Record<string, unknown> {
-  return details && typeof details === 'object' && !Array.isArray(details) ? details as Record<string, unknown> : {};
-}
-
-function isInternalId(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-}
-
-function recordLabel(log: AuditLogItem, details: Record<string, unknown>) {
-  if (log.entityType === 'user') {
-    const name = log.entityLabel.trim();
-    if (name && !isInternalId(name)) return name;
-    if (typeof details.email === 'string' && details.email.trim()) return details.email;
-    if (details.source === 'self_registration') return log.actorName;
-    return 'user account';
-  }
-  if (log.entityType === 'capdev') return 'CapDev project';
-  if (log.entityType === 'request') return log.entityLabel || 'request';
-  if (log.entityType === 'status_update') {
-    return typeof details.requestId === 'number' ? `Request #${details.requestId}` : 'a request';
-  }
-  return log.entityLabel;
-}
-
-function activityText(log: AuditLogItem) {
-  const details = getDetails(log.details);
-  const label = recordLabel(log, details);
-  const action = actionLabels[log.action] || log.action;
-
-  if (log.entityType === 'status_update') {
-    return `${action === 'Created' ? 'Added' : action} a status update to ${label}`;
-  }
-  if (log.entityType === 'request' && log.action === 'status_changed') {
-    const status = typeof details.status === 'string' ? details.status.replace(/_/g, ' ') : 'updated';
-    return `Marked ${label} ${status}`;
-  }
-  if (log.entityType === 'request' && log.action === 'stopped') return `Stopped progress on ${label}`;
-  if (log.entityType === 'request' && log.action === 'resumed') return `Resumed progress on ${label}`;
-  if (log.entityType === 'system_setting' && typeof details.enabled === 'boolean') {
-    return `${details.enabled ? 'Enabled' : 'Disabled'} maintenance mode`;
-  }
-  if (log.entityType === 'capdev') return `${action} ${label}`;
-  if (log.entityType === 'user') {
-    if (details.source === 'role_approval') {
-      return `${details.decision === 'accepted' ? 'Approved' : 'Declined'} role request for ${label}`;
-    }
-    return label === 'user account' ? `${action} a user account` : `${action} user account for ${label}`;
-  }
-  return `${action} ${label}`;
-}
-
-function activityDetail(log: AuditLogItem) {
-  const details = getDetails(log.details);
-  if (log.entityType === 'capdev') return `AIP code: ${log.entityLabel}`;
-  if (log.action === 'stopped' && typeof details.reason === 'string') return `Reason: ${details.reason}`;
-  if (log.entityType === 'status_update' && typeof details.statusMark === 'string') {
-    return `Status: ${details.statusMark.replace(/_/g, ' ')}`;
-  }
-  if ((log.entityType === 'request' || log.entityType === 'status_update') && typeof details.capdevAipCode === 'string') {
-    return `CapDev AIP code: ${details.capdevAipCode}`;
-  }
-  return null;
-}
-
-function activityIcon(entityType: string) {
-  if (entityType === 'capdev') return <CapdevIcon color="primary" />;
-  if (entityType === 'request' || entityType === 'status_update') return <RequestIcon color="primary" />;
-  if (entityType === 'user') return <UserIcon color="primary" />;
-  if (entityType === 'capdev_field' || entityType === 'request_field') return <FieldIcon color="primary" />;
-  return <UpdateIcon color="primary" />;
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(value));
 }
 
 export default function AuditLogsPage() {
@@ -111,6 +37,7 @@ export default function AuditLogsPage() {
   const [entityType, setEntityType] = useState('');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [selectedLog, setSelectedLog] = useState<AuditLogItem | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { setDebouncedSearch(search); setPage(1); }, 250);
@@ -130,6 +57,7 @@ export default function AuditLogsPage() {
   }, [debouncedSearch, action, entityType, page]);
 
   const pageCount = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
+  const selectedActivity = selectedLog ? describeAudit(selectedLog) : null;
   if (loading && logs.length === 0) return <AuditLogsSkeleton />;
 
   return (
@@ -139,37 +67,72 @@ export default function AuditLogsPage() {
         <TextField
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search actor or record"
+          placeholder="Search name or record"
           aria-label="Search audit logs"
-          sx={{ flexGrow: 1 }}
+          sx={{ flexGrow: 1, '& .MuiOutlinedInput-root': { bgcolor: '#fafcfa', minHeight: 56 } }}
           slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon /></InputAdornment> } }}
         />
-        <FormControl sx={{ minWidth: { md: 180 } }}><InputLabel>Action</InputLabel><Select label="Action" value={action} onChange={(event) => { setAction(event.target.value); setPage(1); }}><MenuItem value="">All actions</MenuItem>{Object.entries(actionLabels).map(([value, label]) => <MenuItem key={value} value={value}>{label}</MenuItem>)}</Select></FormControl>
-        <FormControl sx={{ minWidth: { md: 180 } }}><InputLabel>Record type</InputLabel><Select label="Record type" value={entityType} onChange={(event) => { setEntityType(event.target.value); setPage(1); }}><MenuItem value="">All record types</MenuItem>{Object.entries(entityLabels).map(([value, label]) => <MenuItem key={value} value={value}>{label}</MenuItem>)}</Select></FormControl>
+        <FormControl sx={{ minWidth: { md: 180 } }}><InputLabel>Action</InputLabel><Select sx={{ bgcolor: '#fafcfa', minHeight: 56 }} label="Action" value={action} onChange={(event) => { setAction(event.target.value); setPage(1); }}><MenuItem value="">All actions</MenuItem>{Object.entries(actionLabels).map(([value, label]) => <MenuItem key={value} value={value}>{label}</MenuItem>)}</Select></FormControl>
+        <FormControl sx={{ minWidth: { md: 180 } }}><InputLabel>Record type</InputLabel><Select sx={{ bgcolor: '#fafcfa', minHeight: 56 }} label="Record type" value={entityType} onChange={(event) => { setEntityType(event.target.value); setPage(1); }}><MenuItem value="">All record types</MenuItem>{Object.entries(entityLabels).map(([value, label]) => <MenuItem key={value} value={value}>{label}</MenuItem>)}</Select></FormControl>
       </Stack>
 
-      <Card variant="outlined" sx={{ borderRadius: 2, overflow: 'hidden' }}>
-        {logs.length === 0 ? (
-          <Stack spacing={1} sx={{ py: 8, px: 3, alignItems: 'center' }}><HistoryIcon sx={{ fontSize: 44, color: 'text.disabled' }} /><Typography color="text.secondary" sx={{ fontWeight: 600 }}>No audit logs found</Typography></Stack>
-        ) : logs.map((log) => (
-          <Box key={log.id} sx={{ px: { xs: 2, md: 2.5 }, py: 2, borderBottom: '1px solid', borderColor: 'divider', '&:last-child': { borderBottom: 0 } }}>
-            <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start' }}>
-              <Box sx={{ width: 40, height: 40, borderRadius: 2, bgcolor: log.action === 'deleted' ? 'rgba(211, 47, 47, 0.1)' : 'rgba(46, 125, 50, 0.08)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                {activityIcon(log.entityType)}
-              </Box>
-              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: 'space-between', gap: 0.5 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>{log.actorName}</Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>{formatDate(log.createdAt)}</Typography>
-                </Stack>
-                <Typography sx={{ fontWeight: 600, color: 'text.primary', mt: 0.25, overflowWrap: 'anywhere' }}>{activityText(log)}</Typography>
-                {activityDetail(log) && <Typography variant="body2" color="text.secondary" title={activityDetail(log) || undefined} sx={{ mt: 0.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activityDetail(log)}</Typography>}
-              </Box>
-            </Stack>
-          </Box>
-        ))}
+      <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#fafcfa', overflow: 'hidden' }}>
+        <TableContainer tabIndex={0} role="region" aria-label="Audit logs table" sx={{ overflowX: 'auto' }}>
+          <Table aria-label="Audit logs" sx={{
+            minWidth: 1100,
+            tableLayout: 'fixed',
+            '& th, & td': { px: 2, py: 1, fontSize: '1rem', lineHeight: 1.5, borderColor: 'divider' },
+            '& td': { verticalAlign: 'middle', color: 'text.primary' },
+            '& th': { bgcolor: 'background.default', color: 'secondary.main', fontWeight: 700 },
+            '& .MuiTableRow-hover:hover': { bgcolor: 'background.default' },
+          }}>
+            <TableHead>
+              <TableRow>
+                <TableCell scope="col" sx={{ width: '17%' }}>Date and time</TableCell>
+                <TableCell scope="col" sx={{ width: '16%' }}>Performed by</TableCell>
+                <TableCell scope="col" sx={{ width: '15%' }}>Record type</TableCell>
+                <TableCell scope="col" sx={{ width: '26%' }}>Action</TableCell>
+                <TableCell scope="col" sx={{ width: '26%' }}>Details</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {logs.length === 0 ? (
+                <TableRow><TableCell colSpan={5}>
+                  <Stack spacing={1} sx={{ py: 6, alignItems: 'center' }}><HistoryIcon sx={{ fontSize: 44, color: 'text.disabled' }} /><Typography color="text.secondary" sx={{ fontWeight: 600 }}>No audit logs found</Typography></Stack>
+                </TableCell></TableRow>
+              ) : logs.map((log) => {
+                const activity = describeAudit(log);
+                return (
+                  <TableRow key={log.id} hover sx={{ '&:last-child td': { borderBottom: 0 } }}>
+                    <TableCell><Typography noWrap title={formatDate(log.createdAt)}>{formatDate(log.createdAt)}</Typography></TableCell>
+                    <TableCell><Typography noWrap title={log.actorName} sx={{ fontWeight: 700 }}>{log.actorName}</Typography></TableCell>
+                    <TableCell><Typography noWrap title={entityLabels[log.entityType] || 'Activity'}>{entityLabels[log.entityType] || 'Activity'}</Typography></TableCell>
+                    <TableCell><Typography noWrap title={activity.summary} sx={{ fontWeight: 600 }}>{activity.summary}</Typography></TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                        <Typography noWrap title={activity.lines.join('\n')} sx={{ flex: 1, minWidth: 0, color: 'text.secondary' }}>{activity.lines.join(' · ') || '—'}</Typography>
+                        <Button variant="text" onClick={() => setSelectedLog(log)} aria-label={`View audit details: ${activity.summary}`} sx={{ flexShrink: 0 }}>View</Button>
+                      </Stack>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
       </Card>
-      {pageCount > 1 && <Box sx={{ display: 'flex', justifyContent: 'center', pt: 3 }}><Pagination count={pageCount} page={page} onChange={(_, value) => setPage(value)} color="primary" /></Box>}
+      {pageCount > 1 && <Box sx={{ display: 'flex', justifyContent: 'center', pt: 3 }}><Pagination count={pageCount} page={page} onChange={(_, value) => setPage(value)} color="primary" size="large" sx={{ '& .MuiPaginationItem-root': { minWidth: 48, height: 48, fontSize: '1rem' } }} /></Box>}
+      <Dialog open={Boolean(selectedLog)} onClose={() => setSelectedLog(null)} maxWidth="sm" fullWidth aria-labelledby="audit-details-title" slotProps={{ paper: { sx: { bgcolor: '#fafcfa', borderRadius: 2 } } }}>
+        <DialogTitle id="audit-details-title" sx={{ fontWeight: 700 }}>Audit Details</DialogTitle>
+        <DialogContent dividers>
+          {selectedLog && selectedActivity && <Stack spacing={2} sx={{ overflowWrap: 'anywhere' }}>
+            <Box><Typography sx={{ fontWeight: 700 }}>{selectedLog.actorName}</Typography><Typography color="text.secondary">{formatDate(selectedLog.createdAt)}</Typography></Box>
+            <Typography sx={{ fontWeight: 600 }}>{selectedActivity.summary}</Typography>
+            {selectedActivity.lines.map((line, index) => <Typography key={index} sx={{ whiteSpace: 'pre-wrap' }}>{line}</Typography>)}
+          </Stack>}
+        </DialogContent>
+        <DialogActions><Button onClick={() => setSelectedLog(null)}>Close</Button></DialogActions>
+      </Dialog>
     </Container>
   );
 }

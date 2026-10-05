@@ -301,7 +301,11 @@ export default function AnalyticsPage() {
     return {
       key: `request-${request.id}-${targetEventId || 'record'}`,
       title: `Request #${request.id}`,
-      subtitle: [project?.aipCode, request.requestorName, request.setting].filter(Boolean).join(' · '),
+      subtitle: [
+        project?.aipCode,
+        request.requestorName,
+        request.setting.toLowerCase() === 'internal' ? 'In-House' : 'External',
+      ].filter(Boolean).join(' · '),
       href: hash
         ? `/portal/capdev/${request.capdevId}/requests/${request.id}/status${hash}`
         : `/portal/capdev/${request.capdevId}/requests#request-record-${request.id}`,
@@ -423,7 +427,7 @@ export default function AnalyticsPage() {
                   <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                     <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: 'primary.main' }} />
                     <Box>
-                      <Typography variant="body2">Internal</Typography>
+                      <Typography variant="body2">In-House</Typography>
                       <Typography sx={{ fontWeight: 800 }}>
                         {internalCount} · {internalPercent}%
                       </Typography>

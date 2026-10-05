@@ -33,6 +33,7 @@ import {
   Key as KeyIcon,
 } from '@mui/icons-material';
 import { checkDrizzleConnection, completeSelfRegistration, DbStatus, getDepartmentOptions, getMaintenanceMode, getOrCreateUserRole, requestPasswordReset, verifyAndResetPassword, requestSignupVerificationCode, verifySignupCode } from './actions';
+import { isAllowedSignupEmail, SIGNUP_EMAIL_ERROR } from '@/lib/signup-email';
 import { authClient } from '@/lib/auth/client';
 import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
@@ -240,8 +241,8 @@ export default function Home() {
       setAuthError('Please enter your full name.');
       return;
     }
-    if (!signUpEmail.trim()) {
-      setAuthError('Please enter your email address.');
+    if (!isAllowedSignupEmail(signUpEmail)) {
+      setAuthError(SIGNUP_EMAIL_ERROR);
       return;
     }
     if (signUpRole === 'viewer' && !signUpDepartment.trim()) {
@@ -269,7 +270,7 @@ export default function Home() {
   };
 
   const handleResendSignUpCode = async () => {
-    if (!signUpEmail.trim()) return;
+    if (!isAllowedSignupEmail(signUpEmail)) { setAuthError(SIGNUP_EMAIL_ERROR); return; }
     setResendingSignUpCode(true);
     setAuthError(null);
     setAuthSuccess(null);
@@ -289,6 +290,7 @@ export default function Home() {
 
   const handleVerifyAndSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAllowedSignupEmail(signUpEmail)) { setAuthError(SIGNUP_EMAIL_ERROR); return; }
     if (!signUpCode.trim()) {
       setAuthError('Please enter the 6-digit verification code.');
       return;

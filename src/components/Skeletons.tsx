@@ -9,6 +9,12 @@ import {
   Grid,
   Skeleton,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
 } from '@mui/material';
 
 /**
@@ -282,23 +288,27 @@ export function ReportsSkeleton() {
 export function AuditLogsSkeleton() {
   return (
     <Container maxWidth={false} sx={{ p: 0, width: '100%' }}>
-      <Skeleton variant="text" width={210} height={48} sx={{ mb: 2 }} />
+      <Skeleton variant="text" width={210} height={48} sx={{ mb: 3 }} />
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 3 }}>
-        <Skeleton variant="rounded" height={48} sx={{ flexGrow: 1, borderRadius: 2 }} />
-        <Skeleton variant="rounded" width={180} height={48} sx={{ borderRadius: 2 }} />
-        <Skeleton variant="rounded" width={180} height={48} sx={{ borderRadius: 2 }} />
+        <Skeleton variant="rounded" height={56} sx={{ flexGrow: 1, borderRadius: 2 }} />
+        <Skeleton variant="rounded" height={56} sx={{ width: { xs: '100%', md: 180 }, borderRadius: 2 }} />
+        <Skeleton variant="rounded" height={56} sx={{ width: { xs: '100%', md: 180 }, borderRadius: 2 }} />
       </Stack>
-      <Card variant="outlined" sx={{ borderRadius: 2, overflow: 'hidden' }}>
-        {Array.from({ length: 8 }).map((_, index) => (
-          <React.Fragment key={index}>
-            <Stack direction="row" spacing={3} sx={{ p: 2.5, alignItems: 'center' }}>
-              <Skeleton variant="rounded" width={86} height={26} sx={{ borderRadius: 1 }} />
-              <Box sx={{ flexGrow: 1 }}><Skeleton variant="text" width="42%" /><Skeleton variant="text" width="28%" /></Box>
-              <Skeleton variant="text" width={140} />
-            </Stack>
-            {index < 7 && <Divider />}
-          </React.Fragment>
-        ))}
+      <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#fafcfa', overflow: 'hidden' }}>
+        <TableContainer>
+          <Table aria-label="Loading audit logs" sx={{ minWidth: 1100, tableLayout: 'fixed', '& th, & td': { px: 2, py: 1 } }}>
+            <TableHead><TableRow>
+              {[17, 16, 15, 26, 26].map((width, index) => <TableCell key={index} sx={{ width: `${width}%`, bgcolor: 'background.default' }}><Skeleton variant="text" width="75%" height={24} /></TableCell>)}
+            </TableRow></TableHead>
+            <TableBody>
+              {Array.from({ length: 6 }).map((_, index) => (
+                <TableRow key={index} sx={{ '&:last-child td': { borderBottom: 0 } }}>
+                  {Array.from({ length: 5 }).map((_, column) => <TableCell key={column} sx={{ height: 64 }}><Skeleton variant="text" width="90%" height={24} /></TableCell>)}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
       </Card>
     </Container>
   );

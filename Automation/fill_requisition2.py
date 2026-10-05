@@ -17,7 +17,7 @@ def fill_requisition(page):
 
     # 4. "Setting" dropdown (MUI Select)
     page.get_by_label("Setting").click()
-    page.get_by_role("option", name="Internal").click()
+    page.get_by_role("option", name="In-House").click()
 
     # 5. Text fields -- instant fill, paced by slow_mo between each one
     page.get_by_label("Description").fill("Sample training session for staff")

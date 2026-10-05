@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  Alert,
   Container,
   Box,
   Typography,
@@ -36,11 +37,12 @@ import {
 import { authClient } from '@/lib/auth/client';
 import { getCurrentUserAccess } from '@/app/actions';
 import { FormConfigSkeleton } from '@/components/Skeletons';
+import DeleteConfirmationDialog from '@/components/DeleteConfirmationDialog';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
 import { hasComboboxOptions } from '@/lib/dynamic-fields';
 import DynamicTableField from '@/components/DynamicTableField';
-import ActionErrorDialog from '@/components/ActionErrorDialog';
+import { focusFormError } from '@/lib/form-error-focus';
 import {
   EmptyHalfFieldDropSlot,
   FieldDropIndicator,
@@ -73,9 +75,14 @@ export default function StatusUpdateConfigPage() {
   const router = useRouter();
   const session = authClient.useSession();
   const [fields, setFields] = useState<Field[]>([]);
+  const [deletingField, setDeletingField] = useState<Field | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | string | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const showConfigurationError = (message: string) => {
+    setErrorMessage(message);
+    focusFormError('status-configuration-error');
+  };
 
   // Inline editing state
   const [editingKeys, setEditingKeys] = useState<Set<string>>(new Set());
@@ -92,7 +99,7 @@ export default function StatusUpdateConfigPage() {
   }, []);
 
   // Interactive preview input states
-  const [previewData, setPreviewData] = useState<Record<string, any>>({});
+  const [previewData, setPreviewData] = useState<Record<string, unknown>>({});
   const [previewFiles, setPreviewFiles] = useState<Record<string, File[]>>({});
 
   // Fixed preview states for Status Update form (top of the section)
@@ -243,6 +250,7 @@ export default function StatusUpdateConfigPage() {
     }
     setIsSavingConfiguration(true);
     setConfigurationSaved(false);
+    setErrorMessage('');
     try {
       const savedFields = await Promise.all(
         draftFields.map(async (field) => {
@@ -287,37 +295,33 @@ export default function StatusUpdateConfigPage() {
       setConfigurationSaved(true);
       if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
       configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to save status update configuration:', error);
-      setErrorMessage(error?.message || 'Failed to save field configuration.');
+      showConfigurationError(error instanceof Error ? error.message : 'Failed to save field configuration.');
     } finally {
       setIsSavingConfiguration(false);
     }
   };
 
-  const handleDeleteFieldDirect = async (originalIndex: number) => {
-    const f = fields[originalIndex];
-    if (f.isTemp) {
-      setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
-      clearEditingState(f.key);
-      return;
-    }
-    setSavingId(f.id!);
-    try {
-      const result = await deleteStatusUpdateFieldDefinition(f.id!, currentUserId);
-      if (result.success) {
-        setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
-        clearEditingState(f.key);
+  const handleDeleteFieldDirect = (originalIndex: number) => {
+    setDeletingField(fields[originalIndex] || null);
+  };
+
+  const confirmDeleteField = async () => {
+    if (!deletingField) return;
+    if (!deletingField.isTemp) {
+      if (!deletingField.id) throw new Error('Form field not found.');
+      setSavingId(deletingField.id);
+      try {
+        const result = await deleteStatusUpdateFieldDefinition(deletingField.id, currentUserId);
+        if (!result.success) throw new Error(result.error || 'Unable to delete field.');
         setHasPendingDeletion(true);
-      } else {
-        setErrorMessage(result.error || 'Unable to delete field.');
+      } finally {
+        setSavingId(null);
       }
-    } catch (error: any) {
-      console.error('Failed to delete field:', error);
-      setErrorMessage(error?.message || 'Unable to delete field.');
-    } finally {
-      setSavingId(null);
     }
+    setFields((current) => current.filter((field) => field.key !== deletingField.key));
+    clearEditingState(deletingField.key);
   };
 
   const handleAddOption = (originalIndex: number) => {
@@ -398,7 +402,7 @@ export default function StatusUpdateConfigPage() {
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
               {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
-            <DateField size="small" value={value} onChange={(nextValue) => setPreviewData({ ...previewData, [field.key]: nextValue })} />
+            <DateField size="small" value={String(value || '')} onChange={(nextValue) => setPreviewData({ ...previewData, [field.key]: nextValue })} />
           </Stack>
         );
       case 'file':
@@ -694,6 +698,12 @@ export default function StatusUpdateConfigPage() {
           Configure required and optional fields, then drag to set their order.
         </Typography>
 
+        {errorMessage && (
+          <Alert id="status-configuration-error" tabIndex={-1} severity="error" onClose={() => setErrorMessage('')} sx={{ mb: 3 }}>
+            {errorMessage}
+          </Alert>
+        )}
+
         <Card
           variant="outlined"
           sx={{
@@ -978,6 +988,7 @@ export default function StatusUpdateConfigPage() {
       </Container>
 
       {/* Floating Save Configuration Button */}
+      <DeleteConfirmationDialog open={Boolean(deletingField)} title="Delete Form Field?" recordLabel={deletingField?.name || 'Untitled field'} onClose={() => setDeletingField(null)} onConfirm={confirmDeleteField} />
       <Button
         variant="contained"
         size="large"
@@ -994,12 +1005,6 @@ export default function StatusUpdateConfigPage() {
         {isSavingConfiguration ? 'Saving...' : configurationSaved ? 'Saved' : 'Save Configuration'}
       </Button>
 
-      <ActionErrorDialog
-        open={Boolean(errorMessage)}
-        title="Configuration Error"
-        message={errorMessage}
-        onClose={() => setErrorMessage('')}
-      />
     </Box>
   );
 }

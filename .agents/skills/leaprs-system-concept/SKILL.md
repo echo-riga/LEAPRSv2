@@ -81,6 +81,7 @@ Chronological logs track request progression. Status updates are **fixed** (not 
 * **Budget Deduction**: Once a status update has `subtracts_requested_amount = true`, the deduction modal opens allowing the user to review/edit the amount deducted before it is subtracted from the parent CapDev's balance. Only one status update per request can trigger this deduction.
 * **Budget Availability**: A request's requested budget cannot exceed its parent CapDev's remaining budget. The same check is enforced again when a deduction status update is saved.
 * **Budget History**: A CapDev stores its initial and remaining budgets. Its details view lists every deducted request amount and the status-update author.
+* **Permanent Deductions**: Committed deductions never return to the CapDev balance, including after deleting a request or progress update. A persistent request `budget_deducted_at` marker prevents repeat deductions even if the original timeline entry is deleted. Selecting the deduction checkbox opens a one-time, irreversible deduction warning before confirmation.
 * **Enforcement**: PostgreSQL partial unique indexes prevent duplicate `subtracts_requested_amount` status updates (`unique_request_subtract_idx`) and duplicate legacy `mark_as_complete` status updates (`unique_request_complete_idx`).
 
 ### B. File Uploads & Google Drive Storage Hierarchy
@@ -152,6 +153,7 @@ Notifications are event records, visible only while their associated CapDev/requ
 ### B. Self-Registration & Role Approvals
 
 * The login page supports self-registration with full name, email, password, role, and department.
+* Self-registration accepts only the exact `@plpasig.edu.ph` email domain (case-insensitive). Enforce this in the form, verification actions, auth sign-up endpoint, and profile completion. Admin-created accounts in Users Management may use other email domains.
 * **Email Verification**: Registration enforces two-step email verification. Entering details dispatches a 6-digit verification code to the applicant's email (valid for 15 minutes) via Resend. The user must confirm this verification code before the account is created in Neon Auth and the database.
 * Self-registration offers **Employee**, **Employee (All Department Requests)**, **Viewer**, and **Viewer (All Departments)**. Admin is assignable only through Users Management.
 * Registrations for Employee, Viewer, and Viewer (All Departments) receive their role and profile immediately after email code verification.
@@ -166,6 +168,16 @@ Notifications are event records, visible only while their associated CapDev/requ
 ### D. Maintenance Mode
 * Maintenance mode is a persistent system setting (`system_settings.maintenance_mode`) toggled by an **Admin** from Portal Settings.
 * While active, Admins retain full access. All other roles are denied sign-in and existing non-Admin sessions lose portal and server action access immediately.
+
+### User Archiving
+* Admins archive user accounts instead of deleting them from Users Management.
+* Archived users remain in authentication and business history, but cannot access portal actions while archived.
+* Users Management has separate Active and Archived views. Restoring an archived user returns the account to the Active view with its role and department intact.
+* Only archived accounts offer permanent deletion, with a named confirmation dialog. Deletion removes the authentication account, sessions, and MCP grants; the archived application row remains to preserve existing requests and history. Permanently deleted accounts cannot be restored.
+* CapDev and requests have active/archive views. Archived records are read-only: no creation, editing, uploads, or workflow changes. Archiving a parent freezes its descendants without changing their own archive flags; restore the parent before modifying or restoring its descendants.
+* The progress timeline has no separate archive screen or archive/restore/delete controls. It displays the full history, including previously archived updates. Under an archived request or CapDev, progress is gray and read-only, with no Add Status, stopper response, Resume, or conclusion actions.
+* Archive actions are orange, Restore is blue, permanent Delete is red, and View stays green. Archived icons and badges are gray. Permanent deletion is offered only for archived records or descendants of an archived parent and requires confirmation.
+* Archiving preserves budget deductions and workflow history. Permanent deletion never refunds deducted amounts; deleting an active stopper clears the stopped state and removes its response/resume records.
 
 ### E. Dynamic Field Storage Identity
 * Dynamic form values are stored in `additional_info` JSONB keyed by the field definition's stable database ID (`field-${id}` or `field:${id}`), never by its editable display label.

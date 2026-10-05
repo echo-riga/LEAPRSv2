@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Add as AddIcon,
+  VisibilityOutlined as VisibilityIcon,
   Assignment as RequestIcon,
   AttachFile as AttachFileIcon,
   Cancel as CancelIcon,
@@ -36,6 +38,8 @@ import {
   FormControlLabel,
   Grid,
   InputAdornment,
+  IconButton,
+  Tooltip,
   Stack,
   TextField,
   ToggleButton,
@@ -43,6 +47,7 @@ import {
   Typography,
 } from '@mui/material';
 import { TimelineGridSkeleton } from '@/components/Skeletons';
+import ReadOnlyDynamicField from '@/components/ReadOnlyDynamicField';
 import EvaluationSummaryDialog from '@/components/EvaluationSummaryDialog';
 import { authClient } from '@/lib/auth/client';
 import {
@@ -66,9 +71,9 @@ import DynamicTableField from '@/components/DynamicTableField';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
 import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
-import ActionErrorDialog from '@/components/ActionErrorDialog';
 import type { EvaluationSummary } from '@/lib/google-forms';
 import FileFieldChecklist from '@/components/FileFieldChecklist';
+import { focusFormError } from '@/lib/form-error-focus';
 
 type DynamicField = {
   id: number;
@@ -83,6 +88,9 @@ type DynamicField = {
 };
 
 type RequestSummary = {
+  budgetDeductedAt: Date | string | null;
+  archivedAt: Date | string | null;
+  requestorName: string | null;
   id: number;
   capdevId: number;
   setting: string;
@@ -95,6 +103,7 @@ type RequestSummary = {
 };
 
 type StatusUpdate = {
+  archivedAt: Date | string | null;
   id: number;
   requestId: number;
   authorName: string | null;
@@ -292,8 +301,10 @@ function ConnectorLeft({ toResolution = false }: { toResolution?: boolean }) {
 }
 
 export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: number; requestId: number }) {
+  const router = useRouter();
   const session = authClient.useSession();
   const [request, setRequest] = useState<RequestSummary | null>(null);
+  const [viewingUpdate, setViewingUpdate] = useState<StatusUpdate | null>(null);
   const [updates, setUpdates] = useState<StatusUpdate[]>([]);
   const [definitions, setDefinitions] = useState<DynamicField[]>([]);
   const [loading, setLoading] = useState(true);
@@ -311,8 +322,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [pendingFiles, setPendingFiles] = useState<Record<string, File[]>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [capdev, setCapdev] = useState<{ id: number; aipCode: string; budget: string } | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [capdev, setCapdev] = useState<{ id: number; aipCode: string; budget: string; archivedAt: Date | string | null } | null>(null);
   const [deductModalOpen, setDeductModalOpen] = useState(false);
+  const [deductionWarningOpen, setDeductionWarningOpen] = useState(false);
   const [editableDeductedAmount, setEditableDeductedAmount] = useState('');
   const [role, setRole] = useState<AppRole>('employee');
   const [stopperResponse, setStopperResponse] = useState({ text: '', files: [] as File[] });
@@ -363,10 +376,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const timeoutId = window.setTimeout(() => {
       setTimelineFocus((current) => (current?.nonce === timelineFocus.nonce ? null : current));
-    }, 1400);
+    }, 2500);
 
     return () => window.clearTimeout(timeoutId);
-  }, [loading, timelineFocus]);
+  }, [loading, timelineFocus, updates]);
 
   useEffect(() => {
     if (session.data) {
@@ -396,23 +409,34 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     if (capdevData) {
       setCapdev({
         id: capdevData.id,
+        archivedAt: capdevData.archivedAt,
         aipCode: capdevData.aipCode,
         budget: String(capdevData.budget),
       });
     }
 
     if (requestData?.capdevId === capdevId) {
+      if (requestData.archivedAt) {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('archived') !== '1') {
+          url.searchParams.set('archived', '1');
+          router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false });
+        }
+      }
       let formFields = {
         participantFeedbackFormId: requestData.participantFeedbackFormId,
         participantFeedbackFormUrl: requestData.participantFeedbackFormUrl,
       };
-      if (requestData.status === 'completed') {
+      if (!requestData.archivedAt && !capdevData?.archivedAt && requestData.status === 'completed' && requestData.setting === 'internal') {
         const generated = await getOrCreateRequestEvaluationForms(requestId);
         if (generated.success) formFields = generated.forms;
         else setError(generated.error);
       }
       setRequest({
         id: requestData.id,
+        archivedAt: requestData.archivedAt,
+        budgetDeductedAt: requestData.budgetDeductedAt,
+        requestorName: requestData.requestorName,
         capdevId: requestData.capdevId,
         setting: requestData.setting,
         requestedBudget: String(requestData.requestedBudget),
@@ -433,25 +457,27 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       window.dispatchEvent(new CustomEvent('leaprs:request-timeline-changed', { detail: requestId }));
     }
     setLoading(false);
-  }, [capdevId, requestId]);
+  }, [capdevId, requestId, router]);
 
   useEffect(() => {
     void Promise.resolve().then(loadData);
   }, [loadData]);
 
   const hasDeductedBudget = useMemo(
-    () => updates.some((update) => update.subtractsRequestedAmount),
-    [updates]
+    () => Boolean(request?.budgetDeductedAt) || updates.some((update) => update.subtractsRequestedAmount),
+    [request, updates]
   );
   const isCompleted = request?.status === 'completed';
   const isDenied = request?.status === 'denied';
   const isConcluded = isCompleted || isDenied;
-  const canControlStopper = role === 'admin' || role === 'employee-department';
+  const parentArchived = Boolean(request?.archivedAt || capdev?.archivedAt);
+  const readOnly = parentArchived;
+  const canControlStopper = !readOnly && !updates.some((update) => update.id === request?.activeStopperId && update.archivedAt) && (role === 'admin' || role === 'employee-department');
   const canConcludeRequest =
-    (role === 'admin' || role === 'employee' || role === 'employee-department') &&
+    !readOnly && (role === 'admin' || role === 'employee' || role === 'employee-department') &&
     !(request?.isStopped && role === 'employee');
   const visibleUpdates = useMemo(
-    () => updates.filter((update) => !update.isStopperResponse && !update.isResume),
+    () => updates.filter((update) => !update.isStopperResponse),
     [updates]
   );
 
@@ -460,7 +486,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   }, [definitions]);
 
   const openAdd = () => {
+    if (readOnly) return;
     setError('');
+    setFieldErrors({});
     setPendingFiles({});
     setForm(EMPTY_FORM);
     setDialogOpen(true);
@@ -504,6 +532,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
   const setDynamicValue = (field: DynamicField, value: unknown) => {
     const key = dynamicFieldStorageKey(field);
+    setFieldErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
     setForm((current) => {
       const nextInfo = { ...current.additionalInfo, [key]: value };
       let su = current.statusUpdate;
@@ -540,6 +574,21 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     return value !== undefined && value !== null && String(value).trim().length > 0;
   };
 
+  const requiredStatusFieldsComplete = definitions.every(
+    (field) => !field.isRequired || hasDynamicValue(field)
+  );
+
+  const showFieldError = (key: string, message: string, elementId: string) => {
+    setError('');
+    setFieldErrors((current) => ({ ...current, [key]: message }));
+    focusFormError(elementId);
+  };
+
+  const showStatusFormError = (message: string, elementId = 'status-form-error') => {
+    setError(message);
+    focusFormError(elementId);
+  };
+
   const addStopperResponseFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(event.target.files ?? []);
     setStopperResponse((current) => ({
@@ -558,6 +607,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   };
 
   const submitStopperResponse = async (stopperId: number) => {
+    if (readOnly) return;
     if (!session.data || !stopperResponse.text.trim()) return;
     setRespondingToStopper(true);
     const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperResponse.files, { requestId });
@@ -584,37 +634,21 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   };
 
   const handleInitiateSave = () => {
+    if (readOnly) return;
     if (!session.data) return;
 
     if (form.addStopper) {
-      if (!form.statusUpdate.trim()) {
-        setError('Please enter a stopper reason.');
-        return;
-      }
+      if (!form.statusUpdate.trim()) return;
       void executeStopper();
       return;
     }
 
-    if (!form.statusMark) {
-      setError('Please select a Status Mark (Pending, Completed, or Denied).');
-      return;
-    }
-
-    // Check required dynamic fields
-    const missing = definitions.filter((f) => f.isRequired).filter((f) => !hasDynamicValue(f));
-    if (missing.length > 0) {
-      setError(`Complete the required field${missing.length === 1 ? '' : 's'}: ${missing.map((f) => f.name).join(', ')}.`);
-      return;
-    }
-
-    // Fallback check if definitions are empty
-    if (definitions.length === 0 && !form.statusUpdate.trim()) {
-      setError('Please enter a status update.');
-      return;
-    }
+    if (!form.statusMark || !requiredStatusFieldsComplete) return;
+    if (definitions.length === 0 && !form.statusUpdate.trim()) return;
 
     setError('');
     if (form.subtractsRequestedAmount && !hasDeductedBudget) {
+      setFieldErrors((current) => ({ ...current, deductedAmount: '' }));
       setEditableDeductedAmount(request?.requestedBudget || '');
       setDeductModalOpen(true);
       return;
@@ -628,7 +662,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     const stopperFiles = pendingFiles['stopper'] || form.files || [];
     const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperFiles, { requestId });
     if (!uploaded.success) {
-      setError(uploaded.error || 'Unable to upload the selected files.');
+      showStatusFormError(uploaded.error || 'Unable to upload the selected files.');
       setSaving(false);
       return;
     }
@@ -641,12 +675,18 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       setDialogOpen(false);
       await loadData();
     } else {
-      setError(result.error || 'Unable to stop request progress.');
+      const message = result.error || 'Unable to stop request progress.';
+      if (message.toLowerCase().includes('reason') || message.toLowerCase().includes('status')) {
+        showFieldError('stopper', message, 'status-field-stopper');
+      } else {
+        showStatusFormError(message);
+      }
     }
     setSaving(false);
   };
 
   const handleResumeProgress = async () => {
+    if (readOnly) return;
     setSaving(true);
     const result = await resumeRequestProgress(requestId);
     if (result.success) await loadData();
@@ -655,6 +695,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   };
 
   const executeSaveUpdate = async (deductedAmountOverride?: string) => {
+    if (readOnly) return;
     if (!session.data) return;
     setSaving(true);
     setError('');
@@ -668,7 +709,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       const field = definitions.find((d) => dynamicFieldStorageKey(d) === fieldName);
       const uploaded = await uploadFilesDirectlyToGoogleDrive(files, { requestId });
       if (!uploaded.success) {
-        setError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`);
+        showStatusFormError(
+          uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`,
+          deductedAmountOverride !== undefined ? 'status-deduction-error' : 'status-form-error'
+        );
         setSaving(false);
         return;
       }
@@ -725,7 +769,28 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       setDeductModalOpen(false);
       await loadData();
     } else {
-      setError(result.error || 'Unable to save this status update.');
+      const message = result.error || 'Unable to save this status update.';
+      const normalized = message.toLowerCase();
+      if (normalized.includes('deduct') || normalized.includes('amount') || normalized.includes('balance')) {
+        showFieldError('deductedAmount', message, 'status-field-deductedAmount');
+      } else if (normalized.includes('status mark')) {
+        showFieldError('statusMark', message, 'status-field-statusMark');
+      } else {
+        const matchingField = definitions.find((field) =>
+          normalized.includes(field.name.trim().toLowerCase())
+        );
+        if (matchingField) {
+          const key = dynamicFieldStorageKey(matchingField);
+          showFieldError(key, message, `status-field-${key}`);
+        } else if (normalized.includes('status update')) {
+          showFieldError('statusUpdate', message, 'status-field-statusUpdate');
+        } else {
+          showStatusFormError(
+            message,
+            deductedAmountOverride !== undefined ? 'status-deduction-error' : 'status-form-error'
+          );
+        }
+      }
     }
     setSaving(false);
   };
@@ -750,19 +815,20 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   };
 
   const handleConcludeRequest = async () => {
+    if (readOnly) return;
     if (!concludeAction) return;
     setConcluding(true);
     setError('');
     const result = await updateRequestStatus(requestId, concludeAction);
     if (result.success) {
       setConcludeDialogOpen(false);
-      if (concludeAction === 'completed') {
+      if (concludeAction === 'completed' && request?.setting === 'internal') {
         setFormsModalOpen(true);
       }
       setConcludeAction(null);
       await loadData();
     } else {
-      setError(result.error || 'Unable to update request status.');
+      showStatusFormError(result.error || 'Unable to update request status.', 'status-conclude-error');
     }
     setConcluding(false);
   };
@@ -776,6 +842,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     return (
       <Grid
         key={field.id}
+        id={`status-field-${storageKey}`}
         size={field.type === 'table' ? 12 : field.width === 'half' ? { xs: 12, sm: 6 } : 12}
         offset={rightAlignedFieldIds.has(field.id) ? { xs: 0, sm: 6 } : undefined}
       >
@@ -820,6 +887,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                 minRows={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea' ? 2 : 1}
                 label={field.name}
                 placeholder={field.placeholder || 'Select or type...'}
+                error={Boolean(fieldErrors[storageKey])}
+                helperText={fieldErrors[storageKey]}
               />
             )}
           />
@@ -833,6 +902,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             placeholder={field.placeholder || ''}
             value={String(fieldValue ?? (isStandardStatusUpdate ? form.statusUpdate : isStandardRemarks ? form.remarks : ''))}
             onChange={(event) => setDynamicValue(field, event.target.value)}
+            error={Boolean(fieldErrors[storageKey])}
+            helperText={fieldErrors[storageKey]}
           />
         ) : field.type === 'table' ? (
           <DynamicTableField
@@ -869,7 +940,14 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             value={String(fieldValue || '')}
             placeholder={field.placeholder || ''}
             onChange={(event) => setDynamicValue(field, event.target.value)}
+            error={Boolean(fieldErrors[storageKey])}
+            helperText={fieldErrors[storageKey]}
           />
+        )}
+        {fieldErrors[storageKey] && !['text', 'textarea', 'number'].includes(field.type) && (
+          <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5, mx: 1.75 }}>
+            {fieldErrors[storageKey]}
+          </Typography>
         )}
       </Grid>
     );
@@ -901,16 +979,16 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         >
           <Box>
             <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>
-              Request Status
+              {request.requestorName || 'Requestor'}&apos;s Request
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Request #{request.id} · {request.setting === 'internal' ? 'Internal' : 'External'} · {formatCurrency(request.requestedBudget)}
+              {request.setting === 'internal' ? 'In-House' : 'External'} · {formatCurrency(request.requestedBudget)}
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
             <Chip
               label={isCompleted ? 'Complete' : isDenied ? 'Denied' : 'In progress'}
-              color={isCompleted ? 'success' : isDenied ? 'error' : 'primary'}
+              color={parentArchived ? 'default' : isCompleted ? 'success' : isDenied ? 'error' : 'primary'}
               size="small"
               sx={{ fontWeight: 700 }}
             />
@@ -918,7 +996,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               <Chip
                 icon={<PaymentsIcon sx={{ fontSize: '16px !important' }} />}
                 label="Amount deducted"
-                color="success"
+                color={parentArchived ? 'default' : 'success'}
                 variant="outlined"
                 size="small"
                 sx={{ fontWeight: 700 }}
@@ -926,6 +1004,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             )}
           </Stack>
         </Stack>
+
+        {error && !dialogOpen && !deductModalOpen && !concludeDialogOpen && (
+          <Alert id="status-page-error" tabIndex={-1} severity="error" onClose={() => setError('')} sx={{ mb: 3 }}>
+            {error}
+          </Alert>
+        )}
 
         <Box
           sx={{
@@ -937,6 +1021,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           }}
         >
           {visibleUpdates.map((update, index) => {
+            const archived = Boolean(update.archivedAt || parentArchived);
             const row = Math.floor(index / 3);
             const column = row % 2 === 0 ? (index % 3) + 1 : 3 - (index % 3);
             const isRowEnd = (index + 1) % 3 === 0;
@@ -1000,7 +1085,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   variant="outlined"
                   sx={{
                     borderRadius: 2,
-                    bgcolor: '#ffffff',
+                    bgcolor: archived ? 'grey.100' : '#fafcfa',
+                    ...(archived ? { '& .MuiChip-root': { bgcolor: 'grey.200', color: 'text.secondary', borderColor: 'grey.400' }, '& .MuiChip-icon': { color: 'text.secondary' } } : {}),
                     height: '100%',
                     display: 'flex',
                     flexDirection: 'column',
@@ -1008,7 +1094,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     borderColor: isStopper ? 'error.main' : undefined,
                     animation:
                       timelineFocus?.targetId === `request-status-update-${update.id}`
-                        ? 'timelineCardFocus 900ms ease-in-out'
+                        ? 'timelineCardFocus 2500ms ease-in-out'
                         : 'none',
                     '@keyframes timelineCardFocus': {
                       '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
@@ -1026,7 +1112,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start', mb: 2 }}>
                       <Box
                         sx={{
-                          bgcolor: isStopper ? 'rgba(211, 47, 47, 0.1)' : 'rgba(46, 125, 50, 0.08)',
+                          bgcolor: archived ? 'grey.200' : isStopper ? 'rgba(211, 47, 47, 0.1)' : 'rgba(46, 125, 50, 0.08)',
                           p: 1.1,
                           borderRadius: 2,
                           display: 'flex',
@@ -1035,14 +1121,14 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         }}
                       >
                         {isStopper ? (
-                          <StopperIcon color="error" sx={{ transform: 'rotate(35deg)' }} />
+                          <StopperIcon color={archived ? 'action' : 'error'} sx={{ transform: 'rotate(35deg)' }} />
                         ) : (
-                          <RequestIcon color="primary" />
+                          <RequestIcon color={archived ? 'action' : 'primary'} />
                         )}
                       </Box>
                       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                         <Typography variant="h6" sx={{ fontWeight: '700', lineHeight: 1.2 }}>
-                          {isStopper ? 'Stopper' : `Update ${index + 1}`}
+                          {isStopper ? 'Stopper' : update.isResume ? 'Progress Resumed' : update.isStopperResponse ? 'Stopper Response' : `Update ${index + 1}`}
                         </Typography>
                         <Typography variant="body2" color="text.secondary" noWrap>
                           {update.authorName || 'Staff member'} · {formatDateTime(update.createdAt)}
@@ -1058,7 +1144,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                             )
                           }
                           label={wasResumed ? 'Resumed' : 'Stopped'}
-                          color={wasResumed ? 'success' : 'error'}
+                          color={archived ? 'default' : wasResumed ? 'success' : 'error'}
                           size="small"
                           sx={{ fontWeight: 700 }}
                         />
@@ -1073,7 +1159,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 : 'Denied'
                             }
                             color={
-                              update.statusMark === 'pending'
+                              archived ? 'default' : update.statusMark === 'pending'
                                 ? 'warning'
                                 : update.statusMark === 'completed' || update.statusMark === 'accepted'
                                 ? 'success'
@@ -1186,7 +1272,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     {isStopper && stopperResponses.length > 0 && (
                       <Stack spacing={1} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
                         {stopperResponses.map((response) => (
-                          <Box key={response.id}>
+                          <Box key={response.id} sx={response.archivedAt || parentArchived ? { bgcolor: 'grey.100', color: 'text.secondary', borderRadius: 1, p: 1 } : undefined}>
                             <Typography variant="caption" color="text.secondary">
                               {response.authorName || 'Employee'} · {formatDateTime(response.createdAt)}
                             </Typography>
@@ -1223,7 +1309,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       </Stack>
                     )}
 
-                    {isActiveStopper && role === 'employee' && (
+                    {!readOnly && !archived && isActiveStopper && role === 'employee' && (
                       <Stack spacing={1.25} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
                         <TextField
                           fullWidth
@@ -1279,7 +1365,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         <Chip
                           icon={<CheckCircleIcon />}
                           label="Completed"
-                          color="success"
+                          color={archived ? 'default' : 'success'}
                           size="small"
                           sx={{ fontWeight: 700 }}
                         />
@@ -1288,12 +1374,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         <Chip
                           icon={<PaymentsIcon />}
                           label="Amount deducted"
-                          color="success"
+                          color={archived ? 'default' : 'success'}
                           variant="outlined"
                           size="small"
                           sx={{ fontWeight: 700 }}
                         />
                       )}
+                    </Stack>
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 'auto', pt: 2, justifyContent: 'flex-end' }}>
+                      <Tooltip title="View Details"><IconButton size="small" color="primary" onClick={() => setViewingUpdate(update)} aria-label="View progress update"><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
                     </Stack>
                   </CardContent>
                 </Card>
@@ -1334,7 +1423,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   scrollMarginTop: 96,
                   animation:
                     timelineFocus?.targetId === 'request-status-resolution'
-                      ? 'timelineResolutionFocus 900ms ease-in-out'
+                      ? 'timelineResolutionFocus 2500ms ease-in-out'
                       : 'none',
                   '@keyframes timelineResolutionFocus': {
                     '0%': { transform: 'scale(1)' },
@@ -1391,20 +1480,22 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     </Stack>
                   ) : null
                 ) : isCompleted ? (
+                  request.setting === 'internal' ? (
                   <Card
                     variant="outlined"
                     sx={{
                       width: '100%',
                       maxWidth: 460,
                       borderRadius: 2,
-                      bgcolor: '#ffffff',
+                      bgcolor: parentArchived ? 'grey.100' : '#fafcfa',
+                      ...(parentArchived ? { '& .MuiChip-root': { bgcolor: 'grey.200', color: 'text.secondary' }, '& .MuiChip-icon': { color: 'text.secondary' } } : {}),
                       borderColor: 'success.main',
                       boxShadow: '0 4px 14px rgba(46, 125, 50, 0.08)',
                     }}
                   >
                     <CardContent sx={{ p: 2 }}>
                       <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'success.dark' }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: parentArchived ? 'text.secondary' : 'success.dark' }}>
                           Request Completed
                         </Typography>
                         <Chip
@@ -1426,7 +1517,11 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                             <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
                               Seminar Evaluation
                             </Typography>
-                            <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
+                            <Stack
+                              direction="row"
+                              spacing={0.75}
+                              sx={{ minWidth: 0, flexWrap: 'wrap', rowGap: 0.75 }}
+                            >
                               <Button
                                 size="small"
                                 variant="contained"
@@ -1460,7 +1555,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                                 }
                                 target="_blank"
                                 rel="noreferrer"
-                                disabled={!request.participantFeedbackFormId}
+                                disabled={readOnly || !request.participantFeedbackFormId}
                                 sx={{
                                   textTransform: 'none',
                                   fontWeight: 700,
@@ -1519,6 +1614,20 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       </Stack>
                     </CardContent>
                   </Card>
+                  ) : (
+                    <Chip
+                      icon={<CheckCircleIcon />}
+                      label="Complete"
+                      color="success"
+                      sx={{
+                        fontWeight: 700,
+                        py: 2.5,
+                        px: 2,
+                        fontSize: '1rem',
+                        borderRadius: 2,
+                      }}
+                    />
+                  )
                 ) : (
                   <Chip
                     icon={<CancelIcon />}
@@ -1539,7 +1648,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         </Box>
       </Container>
 
-      {!isConcluded &&
+      {!readOnly && !isConcluded &&
         (request.isStopped
           ? canControlStopper
           : role === 'admin' || role === 'employee' || role === 'employee-department') && (
@@ -1564,14 +1673,30 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         )}
 
       {/* Add Status Update Dialog */}
+      <Dialog open={Boolean(viewingUpdate)} onClose={() => setViewingUpdate(null)} fullWidth maxWidth="md">
+        <DialogTitle sx={{ fontWeight: 800 }}>Progress Update</DialogTitle>
+        <DialogContent dividers><Stack spacing={2}>
+          <Typography variant="body2" color="text.secondary">{viewingUpdate?.authorName} ? {viewingUpdate && formatDateTime(viewingUpdate.createdAt)}</Typography>
+          <Typography sx={{ whiteSpace: 'pre-wrap' }}>{viewingUpdate?.statusUpdate}</Typography>
+          {viewingUpdate?.remarks && <Typography sx={{ whiteSpace: 'pre-wrap' }}>{viewingUpdate.remarks}</Typography>}
+          <ReadOnlyDynamicField field={{ name: 'Attachments', type: 'file' }} value={viewingUpdate?.files} />
+          {definitions.map((field) => <ReadOnlyDynamicField key={field.id} field={field} value={getDynamicFieldValue(viewingUpdate?.additionalInfo || {}, field)} />)}
+        </Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setViewingUpdate(null)}>Close</Button></DialogActions>
+      </Dialog>
       <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle sx={{ fontWeight: 800 }}>Add Status Update</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5} sx={{ pt: 0.5 }}>
+            {error && (
+              <Alert id="status-form-error" tabIndex={-1} severity="error" onClose={() => setError('')}>
+                {error}
+              </Alert>
+            )}
             {/* Dynamic Fields Section (at top) */}
             {form.addStopper ? (
               <Stack spacing={2} sx={{ pt: 1 }}>
                 <TextField
+                  id="status-field-stopper"
                   required
                   autoFocus
                   fullWidth
@@ -1579,7 +1704,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   minRows={2}
                   label="Stopper Reason"
                   value={form.statusUpdate}
-                  onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
+                  onChange={(event) => {
+                    setForm((current) => ({ ...current, statusUpdate: event.target.value }));
+                    setFieldErrors((current) => ({ ...current, stopper: '' }));
+                  }}
+                  error={Boolean(fieldErrors.stopper)}
+                  helperText={fieldErrors.stopper}
                 />
                 <Button
                   component="label"
@@ -1613,6 +1743,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                 ) : (
                   <Stack spacing={2}>
                     <TextField
+                      id="status-field-statusUpdate"
                       required
                       autoFocus
                       fullWidth
@@ -1620,7 +1751,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       minRows={2}
                       label="Status Update"
                       value={form.statusUpdate}
-                      onChange={(event) => setForm((current) => ({ ...current, statusUpdate: event.target.value }))}
+                      onChange={(event) => {
+                        setForm((current) => ({ ...current, statusUpdate: event.target.value }));
+                        setFieldErrors((current) => ({ ...current, statusUpdate: '' }));
+                      }}
+                      error={Boolean(fieldErrors.statusUpdate)}
+                      helperText={fieldErrors.statusUpdate}
                     />
                     <TextField
                       fullWidth
@@ -1637,7 +1773,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
             {/* Fixed Form Controls at Bottom */}
             {!form.addStopper && (
-              <Stack spacing={1}>
+              <Stack id="status-field-statusMark" spacing={1}>
                 <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
                   Status Mark <Box component="span" sx={{ color: 'error.main' }}>*</Box>
                 </Typography>
@@ -1698,6 +1834,11 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     Denied
                   </ToggleButton>
                 </ToggleButtonGroup>
+                {fieldErrors.statusMark && (
+                  <Typography variant="caption" color="error">
+                    {fieldErrors.statusMark}
+                  </Typography>
+                )}
               </Stack>
             )}
 
@@ -1707,9 +1848,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                   <Checkbox
                     checked={hasDeductedBudget ? false : form.subtractsRequestedAmount}
                     disabled={hasDeductedBudget}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, subtractsRequestedAmount: event.target.checked }))
-                    }
+                    onChange={(event) => {
+                      if (event.target.checked) setDeductionWarningOpen(true);
+                      else setForm((current) => ({ ...current, subtractsRequestedAmount: false }));
+                    }}
                     color="primary"
                   />
                 }
@@ -1747,8 +1889,13 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             variant="contained"
             onClick={handleInitiateSave}
             disabled={
-              saving ||
-              (form.addStopper ? !form.statusUpdate.trim() : !form.statusMark)
+              readOnly || saving ||
+              Object.values(fieldErrors).some(Boolean) ||
+              (form.addStopper
+                ? !form.statusUpdate.trim()
+                : !form.statusMark ||
+                  !requiredStatusFieldsComplete ||
+                  (definitions.length === 0 && !form.statusUpdate.trim()))
             }
             sx={{ fontWeight: 700, borderRadius: 2 }}
           >
@@ -1757,6 +1904,14 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         </DialogActions>
       </Dialog>
 
+      <Dialog open={deductionWarningOpen} onClose={() => setDeductionWarningOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Permanent Budget Deduction</DialogTitle>
+        <DialogContent dividers><Typography>This is a one-time deduction. Once saved, the amount cannot be restored, even if the request is deleted.</Typography></DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button autoFocus onClick={() => setDeductionWarningOpen(false)}>Cancel</Button>
+          <Button variant="contained" color="warning" onClick={() => { setForm((current) => ({ ...current, subtractsRequestedAmount: true })); setDeductionWarningOpen(false); }}>Continue</Button>
+        </DialogActions>
+      </Dialog>
       {/* Modal for Adjusting & Confirming Deducted Budget */}
       <Dialog
         open={deductModalOpen}
@@ -1768,16 +1923,38 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: 'rgba(46, 125, 50, 0.1)', display: 'flex' }}>
             <PaymentsIcon color="primary" />
           </Box>
-          Confirm Balance Deduction
+          Confirm Permanent Deduction
         </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5} sx={{ py: 1 }}>
+            {error && (
+              <Alert id="status-deduction-error" tabIndex={-1} severity="error" onClose={() => setError('')}>
+                {error}
+              </Alert>
+            )}
             <TextField
+              id="status-field-deductedAmount"
               label="Deducted Amount"
               type="number"
               fullWidth
               value={editableDeductedAmount}
-              onChange={(e) => setEditableDeductedAmount(e.target.value)}
+              onChange={(e) => {
+                setEditableDeductedAmount(e.target.value);
+                setFieldErrors((current) => ({ ...current, deductedAmount: '' }));
+              }}
+              error={
+                Boolean(fieldErrors.deductedAmount) ||
+                Number(editableDeductedAmount) <= 0 ||
+                (capdev !== null && Number(editableDeductedAmount) > Number(capdev.budget))
+              }
+              helperText={
+                fieldErrors.deductedAmount ||
+                (Number(editableDeductedAmount) <= 0
+                  ? 'Enter an amount greater than ₱0.00.'
+                  : capdev && Number(editableDeductedAmount) > Number(capdev.budget)
+                    ? `Exceeds the remaining balance (${formatCurrency(capdev.budget)}).`
+                    : '')
+              }
               slotProps={{
                 input: {
                   startAdornment: <InputAdornment position="start">₱</InputAdornment>,
@@ -1785,6 +1962,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               }}
             />
 
+            <Typography color="warning.dark">This deduction cannot be restored.</Typography>
             {/* Live Calculation Preview */}
             <Card variant="outlined" sx={{ bgcolor: '#fafcfa', borderRadius: 2 }}>
               <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
@@ -1829,14 +2007,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               </CardContent>
             </Card>
 
-            {Number(editableDeductedAmount) <= 0 && (
-              <Alert severity="warning">Please enter a valid deduction amount greater than ₱0.00.</Alert>
-            )}
-            {capdev && Number(editableDeductedAmount) > Number(capdev.budget) && (
-              <Alert severity="error">
-                The entered amount exceeds the remaining CapDev balance ({formatCurrency(capdev.budget)}).
-              </Alert>
-            )}
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
@@ -1880,14 +2050,19 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           )}
         </DialogTitle>
         <DialogContent dividers>
+          {error && (
+            <Alert id="status-conclude-error" tabIndex={-1} severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          )}
           <Typography variant="body1" sx={{ py: 1, fontWeight: 500 }}>
             {concludeAction === 'completed'
-              ? `Finalize Request #${requestId} as Complete?`
-              : `Finalize Request #${requestId} as Denied?`}
+              ? `Finalize ${request.requestorName || 'Requestor'}'s request as Complete?`
+              : `Finalize ${request.requestorName || 'Requestor'}'s request as Denied?`}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
-          <Button onClick={() => setConcludeDialogOpen(false)} disabled={concluding} color="inherit" sx={{ fontWeight: 600 }}>
+          <Button onClick={() => setConcludeDialogOpen(false)} disabled={readOnly || concluding} color="inherit" sx={{ fontWeight: 600 }}>
             Cancel
           </Button>
           <Button
@@ -1907,7 +2082,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       </Dialog>
 
       {/* Generated Google Forms Completion Modal */}
-      <Dialog open={formsModalOpen} onClose={() => setFormsModalOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={formsModalOpen && request.setting === 'internal'} onClose={() => setFormsModalOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: 'rgba(46, 125, 50, 0.12)', display: 'flex' }}>
             <CheckCircleIcon color="success" />
@@ -1939,7 +2114,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       Seminar Evaluation Form
                     </Typography>
                   </Stack>
-                  <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+                  <Stack direction="row" spacing={1} sx={{ minWidth: 0, flexWrap: 'wrap', rowGap: 1 }}>
                     <Button
                       variant="contained"
                       color="primary"
@@ -2023,12 +2198,6 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         summary={evaluationSummary}
         onClose={() => setSummaryModalOpen(false)}
         onRefresh={() => void loadEvaluationSummary()}
-      />
-      <ActionErrorDialog
-        open={Boolean(error)}
-        title="Unable to Complete Action"
-        message={error}
-        onClose={() => setError('')}
       />
     </Box>
   );

@@ -13,7 +13,6 @@ import {
 import {
   Box,
   Button,
-  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -357,7 +356,7 @@ function RequestDraftModal({
                 onChange={(e) => onUpdateDraft({ ...draft, setting: e.target.value as 'internal' | 'external' })}
                 disabled={submitting}
               >
-                <MenuItem value="internal">Internal</MenuItem>
+                <MenuItem value="internal">In-House</MenuItem>
                 <MenuItem value="external">External</MenuItem>
               </TextField>
             </Grid>

@@ -1,3 +1,4 @@
+import { ARCHIVED_READ_ONLY } from '@/lib/archive-policy';
 import { db } from '@/db';
 import { withTransaction } from '@/db/transaction';
 import { claimRequestFolder } from '@/lib/request-storage';
@@ -10,7 +11,7 @@ import {
   auditLogs,
   notifications,
 } from '@/db/schema';
-import { and, desc, eq, getTableColumns } from 'drizzle-orm';
+import { isNull, and, desc, eq, getTableColumns } from 'drizzle-orm';
 import { dynamicFieldStorageKey, getDynamicFieldValue, getInvalidComboboxFields } from '@/lib/dynamic-fields';
 
 export type AppRole = 'admin' | 'employee' | 'employee-department' | 'viewer' | 'viewer-full';
@@ -153,6 +154,7 @@ export async function findCapdevByAipCodeService(access: UserAccess, aipCode: st
     success: true as const,
     capdev: {
       id: capdev.id,
+      archivedAt: capdev.archivedAt,
       aipCode: capdev.aipCode,
       department: capdev.department,
       description: capdev.description,
@@ -183,7 +185,7 @@ export async function getRequestFormSchemaService(_access?: UserAccess, setting?
       type: 'select',
       options: ['internal', 'external'],
       isRequired: true,
-      description: 'Internal or External training/activity setting.',
+      description: 'In-House or External training/activity setting.',
     },
     {
       name: 'requestedBudget',
@@ -331,6 +333,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   }
 
   const capdev = capdevResult.capdev;
+  if (capdev.archivedAt) return { success: false as const, error: ARCHIVED_READ_ONLY };
   const requestedBudgetNum = Number(validateMoney(input.requestedBudget));
   const remainingBudgetNum = Number(capdev.remainingBudget);
 
@@ -400,6 +403,8 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   }
 
   const created = await withTransaction(async (tx) => {
+  const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, capdev.id)).for('update');
+  if (!parent || parent.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
   const [record] = await tx
     .insert(requests)
     .values({
@@ -423,13 +428,14 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
     action: 'created',
     entityType: 'request',
     entityId: created.id,
-    entityLabel: `Request #${created.id}`,
+    entityLabel: `${created.requestorName || 'Requestor'}'s request`,
     details: {
       capdevId: created.capdevId,
       capdevAipCode: capdev.aipCode,
       setting: created.setting,
       requestedBudget: created.requestedBudget,
       requestorName: created.requestorName,
+      requestDescription: created.description,
       createdVia: 'chatbot_mcp',
     },
   });
@@ -438,7 +444,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
     actorId: access.userId,
     capdevId: created.capdevId,
     requestId: created.id,
-    title: `New Requisition: ${created.setting || 'CapDev Request'}`,
+    title: `New Requisition: ${created.setting === 'internal' ? 'In-House' : created.setting === 'external' ? 'External' : 'CapDev Request'}`,
     message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
     link: `/portal/capdev/${created.capdevId}/requests#request-record-${created.id}`,
     type: 'new_request',
@@ -636,7 +642,7 @@ export async function listAvailableCapdevProjectsService(
   const limit = Math.min(Math.max(options?.limit || 15, 1), 50);
   const dept = (access.role === 'admin' && options?.department) ? options.department.trim() : access.department;
 
-  const conditions = [];
+  const conditions = [isNull(capdevs.archivedAt)];
   if (access.role !== 'admin' && access.role !== 'viewer-full') {
     conditions.push(eq(capdevs.department, dept));
   } else if (options?.department) {

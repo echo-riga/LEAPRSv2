@@ -51,6 +51,10 @@ export default function FileFieldChecklist({
   const [open, setOpen] = useState(false);
   const fileCount = existingFiles.length + pendingFiles.length;
   const hasFiles = fileCount > 0;
+  const handleSelectFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    onSelectFiles?.(event);
+    setOpen(false);
+  };
 
   return (
     <>
@@ -157,7 +161,7 @@ export default function FileFieldChecklist({
           {editable && onSelectFiles && (
             <Button component="label" variant="contained" startIcon={<AttachFileIcon />}>
               Add Files
-              <input hidden type="file" multiple onChange={onSelectFiles} />
+              <input hidden type="file" multiple onChange={handleSelectFiles} />
             </Button>
           )}
         </DialogActions>

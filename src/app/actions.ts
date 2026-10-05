@@ -1,13 +1,17 @@
 'use server';
 
 import { db } from '@/db';
-import { withTransaction } from '@/db/transaction';
+import { withTransaction, type Transaction } from '@/db/transaction';
 import { requestStorageFolders, mcpOAuthGrants } from '@/db/schema';
+import { deleteRequestRecords } from '@/lib/request-deletion';
 import { writeRequestStatusUpdate } from '@/lib/request-budget';
 import { validateRequestInput, validateMoney } from '@/lib/request-validation';
 import { claimRequestFolder } from '@/lib/request-storage';
 import { limitVerification, verificationCode, verificationHash, consumeRateLimit } from '@/lib/security';
 import { manilaDate, manilaDateBoundary } from '@/lib/manila-date';
+import { auditChanges, requestLabel } from '@/lib/audit-description';
+import { ARCHIVED_READ_ONLY, isArchiveReadOnly } from '@/lib/archive-policy';
+import { isAllowedSignupEmail, SIGNUP_EMAIL_ERROR } from '@/lib/signup-email';
 import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, statusUpdateFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
 import { sql, count, and, eq, getTableColumns, lte, gte, asc, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
@@ -69,8 +73,8 @@ async function readMaintenanceMode() {
 async function getCurrentAccess(): Promise<UserAccess | null> {
   const { data: session } = await auth.getSession();
   if (!session?.user) return null;
-  const [storedUser] = await db.select({ role: users.role, department: users.department }).from(users).where(eq(users.id, session.user.id)).limit(1);
-  if (!storedUser) return null;
+  const [storedUser] = await db.select({ role: users.role, department: users.department, archivedAt: users.archivedAt }).from(users).where(eq(users.id, session.user.id)).limit(1);
+  if (!storedUser || storedUser.archivedAt) return null;
   const role = VALID_ROLES.includes(storedUser.role as AppRole) ? storedUser.role as AppRole : 'employee';
   if (role !== 'admin' && await readMaintenanceMode()) return null;
   return {
@@ -240,7 +244,7 @@ async function getActorSnapshot(access: UserAccess) {
 }
 
 async function writeAuditLog(access: UserAccess, entry: {
-  action: 'created' | 'updated' | 'deleted' | 'status_changed' | 'stopped' | 'resumed';
+  action: 'created' | 'updated' | 'deleted' | 'archived' | 'restored' | 'status_changed' | 'stopped' | 'resumed';
   entityType: 'capdev' | 'request' | 'status_update' | 'user' | 'capdev_field' | 'request_field' | 'status_update_field' | 'system_setting';
   entityId?: string | number | null;
   entityLabel: string;
@@ -248,6 +252,11 @@ async function writeAuditLog(access: UserAccess, entry: {
 }) {
   const actor = await getActorSnapshot(access);
   const details = { ...(entry.details || {}) };
+  const requestId = entry.entityType === 'request' ? Number(entry.entityId) : details.requestId;
+  if ((entry.entityType === 'request' || entry.entityType === 'status_update') && typeof requestId === 'number' && Number.isFinite(requestId)) {
+    const [request] = await db.select({ requestorName: requests.requestorName, capdevId: requests.capdevId, description: requests.description }).from(requests).where(eq(requests.id, requestId)).limit(1);
+    if (request) { details.requestorName ??= request.requestorName; details.capdevId ??= request.capdevId; details.requestDescription ??= request.description; }
+  }
   if (typeof details.capdevId === 'number' && typeof details.capdevAipCode !== 'string') {
     const [capdev] = await db.select({ aipCode: capdevs.aipCode }).from(capdevs).where(eq(capdevs.id, details.capdevId)).limit(1);
     if (capdev) details.capdevAipCode = capdev.aipCode;
@@ -257,7 +266,7 @@ async function writeAuditLog(access: UserAccess, entry: {
     action: entry.action,
     entityType: entry.entityType,
     entityId: entry.entityId == null ? null : String(entry.entityId),
-    entityLabel: entry.entityLabel,
+    entityLabel: entry.entityType === 'request' || entry.entityType === 'status_update' ? requestLabel(details.requestorName) : entry.entityLabel,
     details,
   });
 }
@@ -281,6 +290,8 @@ export async function getAuditLogs(input: { search?: string; action?: string; en
         ilike(auditLogs.actorEmail, pattern),
         ilike(auditLogs.entityLabel, pattern),
         ilike(auditLogs.entityId, pattern),
+        sql`${auditLogs.details}->>'requestorName' ILIKE ${pattern}`,
+        sql`EXISTS (SELECT 1 FROM ${requests} WHERE ${requests.requestorName} ILIKE ${pattern} AND ${requests.id}::text = CASE WHEN ${auditLogs.entityType} = 'request' THEN ${auditLogs.entityId} WHEN ${auditLogs.entityType} = 'status_update' THEN ${auditLogs.details}->>'requestId' END)`,
       )!);
     }
     const where = conditions.length ? and(...conditions) : undefined;
@@ -296,10 +307,19 @@ export async function getAuditLogs(input: { search?: string; action?: string; en
       ? await db.select({ id: capdevs.id, aipCode: capdevs.aipCode }).from(capdevs).where(inArray(capdevs.id, capdevIds))
       : [];
     const aipCodesByCapdevId = new Map(capdevRows.map((capdev) => [capdev.id, capdev.aipCode]));
+    const requestIds = Array.from(new Set(logs.flatMap((log) => {
+      const details = log.details && typeof log.details === 'object' ? log.details as Record<string, unknown> : {};
+      const id = log.entityType === 'request' ? Number(log.entityId) : details.requestId;
+      return (log.entityType === 'request' || log.entityType === 'status_update') && typeof id === 'number' && Number.isFinite(id) ? [id] : [];
+    })));
+    const requestRows = requestIds.length ? await db.select({ id: requests.id, requestorName: requests.requestorName }).from(requests).where(inArray(requests.id, requestIds)) : [];
+    const names = new Map(requestRows.map((request) => [request.id, request.requestorName]));
     const enrichedLogs = logs.map((log) => {
       const details = log.details && typeof log.details === 'object' && !Array.isArray(log.details) ? log.details as Record<string, unknown> : {};
       const capdevAipCode = typeof details.capdevId === 'number' ? aipCodesByCapdevId.get(details.capdevId) : undefined;
-      return capdevAipCode ? { ...log, details: { ...details, capdevAipCode } } : log;
+      const requestId = log.entityType === 'request' ? Number(log.entityId) : details.requestId;
+      const requestorName = typeof requestId === 'number' ? names.get(requestId) : undefined;
+      return { ...log, details: { ...details, ...(capdevAipCode ? { capdevAipCode } : {}), ...(requestorName && !details.requestorName ? { requestorName } : {}) } };
     });
     return { success: true as const, logs: enrichedLogs, total: totals[0]?.value || 0 };
   } catch (error) {
@@ -326,12 +346,18 @@ async function getAccessibleCapdev(access: UserAccess, capdevId: number) {
 }
 
 async function getAccessibleRequest(access: UserAccess, requestId: number) {
-  const [record] = await db.select({ request: getTableColumns(requests), capdevDepartment: capdevs.department }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(eq(requests.id, requestId)).limit(1);
+  const [record] = await db.select({ request: getTableColumns(requests), capdevDepartment: capdevs.department, parentArchivedAt: capdevs.archivedAt }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(eq(requests.id, requestId)).limit(1);
   if (!record) return null;
-  if (access.role === 'employee') return record.request.userId === access.userId ? record.request : null;
-  if (access.role === 'employee-department') return record.request;
-  if (access.role === 'viewer') return record.capdevDepartment === access.department ? record.request : null;
-  return record.request;
+  const request = { ...record.request, parentArchivedAt: record.parentArchivedAt };
+  if (access.role === 'employee') return request.userId === access.userId ? request : null;
+  if (access.role === 'viewer') return record.capdevDepartment === access.department ? request : null;
+  return request;
+}
+
+async function getWritableRequest(access: UserAccess, requestId: number) {
+  const record = await getAccessibleRequest(access, requestId);
+  if (record && isArchiveReadOnly(record, { archivedAt: record.parentArchivedAt })) throw new Error(ARCHIVED_READ_ONLY);
+  return record;
 }
 
 export async function getCurrentUserAccess() {
@@ -447,6 +473,7 @@ export async function getOrCreateUserRole(userId: string): Promise<AppRole | 'pe
     if (approval?.status === 'pending') return 'pending-approval';
     if (approval?.status === 'rejected') return 'rejected';
     if (approval?.status === 'accepted') return 'employee-department';
+    if (!isAllowedSignupEmail(session.user.email)) return 'rejected';
 
     const role = 'employee';
 
@@ -543,7 +570,7 @@ export async function saveDepartmentOptions(options: string[], updatedById: stri
   if (!access || access.role !== 'admin') return unauthorized;
   const cleaned = cleanDepartmentOptions(options);
   const [existing] = await db
-    .select({ id: capdevFieldDefinitions.id })
+    .select({ id: capdevFieldDefinitions.id, options: capdevFieldDefinitions.options })
     .from(capdevFieldDefinitions)
     .where(eq(capdevFieldDefinitions.name, '__department_options__'))
     .limit(1);
@@ -567,7 +594,7 @@ export async function saveDepartmentOptions(options: string[], updatedById: stri
       updatedById,
     });
   }
-  await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'Department options', details: config });
+  await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityLabel: 'Department options', details: { ...config, changes: auditChanges(parseDepartmentOptionsConfig(existing?.options), config, { included: 'Available departments', excluded: 'Hidden departments' }) } });
   return { success: true };
 }
 
@@ -576,6 +603,7 @@ export async function completeSelfRegistration(input: { role: string; department
   const role = input.role as (typeof SELF_REGISTRATION_ROLES)[number];
   const department = (input.department || '').trim() || 'Unassigned';
   if (!session?.user) return unauthorized;
+  if (!isAllowedSignupEmail(session.user.email)) return { success: false, error: SIGNUP_EMAIL_ERROR };
   if (!SELF_REGISTRATION_ROLES.includes(role) || department.length > 255) {
     return { success: false, error: 'Provide a valid role.' };
   }
@@ -633,7 +661,7 @@ export async function getAllUsers() {
   }
 }
 
-export type DirectoryUser = { id: string; name: string | null; email: string; createdAt: Date; role: string; department: string };
+export type DirectoryUser = { id: string; name: string | null; email: string; createdAt: Date; role: string; department: string; isArchived: boolean; archivedAt: Date | null };
 
 export type PendingRoleApproval = typeof roleApprovalRequests.$inferSelect;
 
@@ -682,16 +710,18 @@ export async function getUserManagementCounts() {
   }
 
   try {
-    const [authUsersList, pendingApprovals] = await Promise.all([
+    const [authUsersList, appUsers, pendingApprovals] = await Promise.all([
       fetchAuthUsersList(),
+      db.select({ id: users.id, archivedAt: users.archivedAt }).from(users),
       db.select({ userId: roleApprovalRequests.userId }).from(roleApprovalRequests).where(eq(roleApprovalRequests.status, 'pending')),
     ]);
 
+    const appUsersById = new Map(appUsers.map((user) => [user.id, user]));
     const pendingUserIds = new Set(pendingApprovals.map((approval) => approval.userId));
 
     return {
       success: true as const,
-      activeUsers: authUsersList.filter((user) => !pendingUserIds.has(user.id)).length,
+      activeUsers: authUsersList.filter((user) => !pendingUserIds.has(user.id) && !appUsersById.get(user.id)?.archivedAt).length,
       pendingApprovals: pendingApprovals.length,
     };
   } catch (error) {
@@ -759,6 +789,8 @@ export async function getUsersDirectory(): Promise<DirectoryUser[]> {
       createdAt: user.createdAt,
       role: appUsersById.get(user.id)?.role || 'employee',
       department: appUsersById.get(user.id)?.department || 'Unassigned',
+      isArchived: Boolean(appUsersById.get(user.id)?.archivedAt),
+      archivedAt: appUsersById.get(user.id)?.archivedAt || null,
     }));
   } catch (error) {
     console.error('Failed to fetch Neon Auth users:', error);
@@ -770,8 +802,14 @@ export async function updateUserRole(userId: string, newRole: string, department
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin' || !VALID_ROLES.includes(newRole as AppRole)) return unauthorized;
+    const [[previous], authUsersList] = await Promise.all([
+      db.select().from(users).where(eq(users.id, userId)).limit(1),
+      fetchAuthUsersList(),
+    ]);
+    const target = authUsersList.find((user) => user.id === userId);
+    if (previous?.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
     await db.update(users).set({ role: newRole, ...(department ? { department } : {}) }).where(eq(users.id, userId));
-    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: userId, details: { role: newRole, ...(department ? { department } : {}) } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: target?.name || target?.email || userId, details: { role: newRole, ...(department ? { department } : {}), changes: auditChanges(previous || {}, { ...previous, role: newRole, ...(department ? { department } : {}) }, { role: 'Role', department: 'Department' }) } });
     return { success: true };
   } catch (error) {
     console.error('Failed to update user role:', error);
@@ -787,10 +825,16 @@ export async function updateDirectoryUser(userId: string, input: { name: string;
     return { success: false, error: 'Department is required for the Department Viewer role.' };
   }
   try {
+    const [[previous], authUsersList] = await Promise.all([
+      db.select().from(users).where(eq(users.id, userId)).limit(1),
+      fetchAuthUsersList(),
+    ]);
+    const target = authUsersList.find((user) => user.id === userId);
+    if (previous?.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
     const { error } = await auth.admin.updateUser({ userId, data: { name: input.name, email: input.email } });
     if (error) return { success: false, error: error.message || 'Unable to update the Neon Auth user.' };
     await db.update(users).set({ role: input.role, department }).where(eq(users.id, userId));
-    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department, changes: auditChanges({ ...previous, name: target?.name, email: target?.email }, { ...input, department }, { name: 'Name', email: 'Email', role: 'Role', department: 'Department' }) } });
     return { success: true };
   } catch (error) {
     console.error('Failed to update user directory record:', error);
@@ -836,21 +880,7 @@ export async function createDirectoryUser(input: { name: string; email: string; 
   }
 }
 
-export async function deleteUser(userId: string) {
-  try {
-    const access = await getCurrentAccess();
-    if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
-    const [target] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-    await db.delete(users).where(eq(users.id, userId));
-    await writeAuditLog(access, { action: 'deleted', entityType: 'user', entityId: userId, entityLabel: userId, details: target ? { role: target.role, department: target.department } : {} });
-    return { success: true };
-  } catch (error) {
-    console.error('Failed to delete user from DB:', error);
-    return { success: false, error: 'Database delete failed' };
-  }
-}
-
-export async function deleteDirectoryUser(userId: string) {
+export async function archiveDirectoryUser(userId: string) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
   try {
@@ -858,22 +888,79 @@ export async function deleteDirectoryUser(userId: string) {
       fetchAuthUsersList(),
       db.select().from(users).where(eq(users.id, userId)).limit(1),
     ]);
-    const targetAuthUser = authUsersList.find((user) => user.id === userId);
-    try {
-      const { error } = await auth.admin.removeUser({ userId });
-      if (error) throw new Error(error.message);
-    } catch {
-      await db.execute(sql`DELETE FROM neon_auth.session WHERE "userId" = ${userId}`);
-      await db.execute(sql`DELETE FROM neon_auth.account WHERE "userId" = ${userId}`);
-      await db.execute(sql`DELETE FROM neon_auth.user WHERE id = ${userId}`);
-    }
-    await db.delete(users).where(eq(users.id, userId));
     const target = targetRows[0];
-    await writeAuditLog(access, { action: 'deleted', entityType: 'user', entityId: userId, entityLabel: targetAuthUser?.name || targetAuthUser?.email || userId, details: { email: targetAuthUser?.email || null, role: target?.role || null, department: target?.department || null } });
-    return { success: true };
+    if (!target) return { success: false as const, error: 'User not found.' };
+    if (target.archivedAt) return { success: true as const };
+    const targetAuthUser = authUsersList.find((user) => user.id === userId);
+    const archivedAt = new Date();
+    await db.update(users).set({ archivedAt }).where(eq(users.id, userId));
+    await writeAuditLog(access, {
+      action: 'archived', entityType: 'user', entityId: userId,
+      entityLabel: targetAuthUser?.name || targetAuthUser?.email || userId,
+      details: { email: targetAuthUser?.email || null, role: target.role, department: target.department },
+    });
+    return { success: true as const, archivedAt };
   } catch (error) {
-    console.error('Failed to delete user directory record:', error);
-    return { success: false, error: 'Unable to delete the user.' };
+    console.error('Failed to archive user:', error);
+    return { success: false as const, error: 'Unable to archive the user.' };
+  }
+}
+
+export async function restoreDirectoryUser(userId: string) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return unauthorized;
+  try {
+    const actor = await getActorSnapshot(access);
+    return await withTransaction(async (tx) => {
+      const [target] = await tx.select().from(users).where(eq(users.id, userId)).for('update');
+      const identity = await tx.execute(sql`SELECT name, email FROM neon_auth.user WHERE id = ${userId}`);
+      const targetAuthUser = identity.rows[0] as { name: string | null; email: string } | undefined;
+      if (!target || !targetAuthUser) return { success: false as const, error: 'User not found.' };
+      if (!target.archivedAt) return { success: true as const };
+      await tx.update(users).set({ archivedAt: null }).where(eq(users.id, userId));
+      await tx.insert(auditLogs).values({
+        ...actor,
+        action: 'restored', entityType: 'user', entityId: userId,
+        entityLabel: targetAuthUser.name || targetAuthUser.email,
+        details: { email: targetAuthUser.email, role: target.role, department: target.department },
+      });
+      return { success: true as const };
+    });
+  } catch (error) {
+    console.error('Failed to restore user:', error);
+    return { success: false as const, error: 'Unable to restore the user.' };
+  }
+}
+
+export async function deleteArchivedDirectoryUser(userId: string) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
+  try {
+    const actor = await getActorSnapshot(access);
+    return await withTransaction(async (tx) => {
+      // Share the row lock with restoration so only archived accounts can be deleted.
+      const [target] = await tx.select().from(users).where(eq(users.id, userId)).for('update');
+      if (!target) return { success: false as const, error: 'User not found.' };
+      if (!target.archivedAt) return { success: false as const, error: 'Archive this user before deleting permanently.' };
+      const identity = await tx.execute(sql`SELECT name, email FROM neon_auth.user WHERE id = ${userId}`);
+      const targetAuthUser = identity.rows[0] as { name: string | null; email: string } | undefined;
+      if (!targetAuthUser) return { success: false as const, error: 'User not found.' };
+      await tx.execute(sql`DELETE FROM neon_auth.session WHERE "userId" = ${userId}`);
+      await tx.execute(sql`DELETE FROM neon_auth.account WHERE "userId" = ${userId}`);
+      await tx.execute(sql`DELETE FROM neon_auth.user WHERE id = ${userId}`);
+      await tx.delete(mcpOAuthGrants).where(eq(mcpOAuthGrants.userId, userId));
+      // Retain the archived application row for existing request and history references.
+      await tx.insert(auditLogs).values({
+        ...actor,
+        action: 'deleted', entityType: 'user', entityId: userId,
+        entityLabel: targetAuthUser.name || targetAuthUser.email,
+        details: { permanentlyDeleted: true, email: targetAuthUser.email, role: target.role, department: target.department },
+      });
+      return { success: true as const };
+    });
+  } catch (error) {
+    console.error('Failed to permanently delete archived user:', error);
+    return { success: false as const, error: 'Unable to permanently delete the user.' };
   }
 }
 
@@ -918,6 +1005,82 @@ async function getMissingRequiredCapdevFields(additionalInfo: Record<string, unk
     .map((field) => field.name);
 }
 
+async function changeResourceArchive(kind: 'capdev' | 'request' | 'status_update', id: number, archived: boolean) {
+  const access = await getCurrentAccess();
+  if (!access || !Number.isSafeInteger(id)) return unauthorized;
+  try {
+    const actor = await getActorSnapshot(access);
+    let requestId: number | undefined;
+    if (kind === 'capdev') {
+      if (access.role !== 'admin' || !await getAccessibleCapdev(access, id)) return unauthorized;
+    } else {
+      if (!canManageRequests(access)) return unauthorized;
+      if (kind === 'status_update') {
+        const [update] = await db.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, id));
+        if (!update) return { success: false as const, error: 'Progress update not found.' };
+        requestId = update.requestId;
+      } else requestId = id;
+      if (!await getAccessibleRequest(access, requestId)) return unauthorized;
+    }
+    const table = sql.identifier(kind === 'capdev' ? 'capdevs' : kind === 'request' ? 'requests' : 'request_status_updates');
+    return await withTransaction(async (tx) => {
+      let parentRequest: typeof requests.$inferSelect | undefined;
+      if (requestId) {
+        [parentRequest] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
+        if (!parentRequest || (access.role === 'employee' && parentRequest.userId !== access.userId)) return unauthorized;
+        const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, parentRequest.capdevId)).for('update');
+        if (parent?.archivedAt || (kind === 'status_update' && parentRequest.archivedAt)) return { success: false as const, error: 'Restore the parent record first.' };
+      }
+      const result = await tx.execute(sql`SELECT * FROM ${table} WHERE id = ${id} FOR UPDATE`);
+      const target = result.rows[0];
+      if (!target) return { success: false as const, error: 'Record not found.' };
+      if (Boolean(target.archived_at) === archived) return { success: true as const };
+      const archivedAt = archived ? new Date() : null;
+      await tx.execute(sql`UPDATE ${table} SET archived_at = ${archivedAt} WHERE id = ${id}`);
+      const entityLabel = kind === 'capdev' ? String(target.aip_code) : requestLabel(parentRequest?.requestorName);
+      await tx.insert(auditLogs).values({ ...actor, action: archived ? 'archived' : 'restored', entityType: kind, entityId: String(id), entityLabel,
+        details: { ...(parentRequest ? { requestId: parentRequest.id, capdevId: parentRequest.capdevId, requestorName: parentRequest.requestorName } : {}), ...(kind === 'status_update' ? { statusUpdate: target.status_update } : {}) } });
+      return { success: true as const, archivedAt };
+    });
+  } catch (error) {
+    console.error('Failed to change resource archive:', error);
+    return { success: false as const, error: 'Unable to change the archive status.' };
+  }
+}
+
+export async function archiveCapdev(id: number) { return changeResourceArchive('capdev', id, true); }
+export async function restoreCapdev(id: number) { return changeResourceArchive('capdev', id, false); }
+export async function archiveRequest(id: number) { return changeResourceArchive('request', id, true); }
+export async function restoreRequest(id: number) { return changeResourceArchive('request', id, false); }
+export async function archiveRequestStatusUpdate(id: number) { return changeResourceArchive('status_update', id, true); }
+export async function restoreRequestStatusUpdate(id: number) { return changeResourceArchive('status_update', id, false); }
+
+export async function deleteRequestStatusUpdate(id: number) {
+  const access = await getCurrentAccess();
+  if (!access || !canManageRequests(access)) return unauthorized;
+  try {
+    const [update] = await db.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, id));
+    const request = update ? await getAccessibleRequest(access, update.requestId) : null;
+    if (!update || !request) return unauthorized;
+    const actor = await getActorSnapshot(access);
+    return await withTransaction(async (tx) => {
+      const [current] = await tx.select().from(requests).where(eq(requests.id, request.id)).for('update');
+      const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update');
+      const [target] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, id)).for('update');
+      if (!current || !target || (access.role === 'employee' && current.userId !== access.userId)) return unauthorized;
+      if (!target.archivedAt && !isArchiveReadOnly(current, parent)) return { success: false as const, error: 'Archive this progress update before deleting permanently.' };
+      if (current.activeStopperId === id) await tx.update(requests).set({ isStopped: false, activeStopperId: null, updatedAt: new Date(), updatedById: access.userId }).where(eq(requests.id, current.id));
+      await tx.delete(requestStatusUpdates).where(or(eq(requestStatusUpdates.id, id), eq(requestStatusUpdates.stopperId, id)));
+      await tx.insert(auditLogs).values({ ...actor, action: 'deleted', entityType: 'status_update', entityId: String(id), entityLabel: requestLabel(current.requestorName),
+        details: { requestId: current.id, capdevId: current.capdevId, requestorName: current.requestorName, statusUpdate: target.statusUpdate } });
+      return { success: true as const };
+    });
+  } catch (error) {
+    console.error('Failed to permanently delete progress update:', error);
+    return { success: false as const, error: 'Unable to permanently delete the progress update.' };
+  }
+}
+
 export async function getAllCapdevs() {
   try {
     const access = await getCurrentAccess();
@@ -931,7 +1094,7 @@ export async function getAllCapdevs() {
 
 export type CapdevPageFilters = { departments: string[]; initialMin: string; initialMax: string; remainingMin: string; remainingMax: string; dateFrom: string; dateTo: string; sort: string };
 
-export async function getCapdevPage(input: { page: number; search: string; filters: CapdevPageFilters; focusId?: number }) {
+export async function getCapdevPage(input: { page: number; search: string; filters: CapdevPageFilters; focusId?: number; archived?: boolean }) {
   const access = await getCurrentAccess();
   if (!access) return { success: false as const, records: [], departments: [], total: 0, page: 1, error: 'You must be signed in.' };
   try {
@@ -941,6 +1104,8 @@ export async function getCapdevPage(input: { page: number; search: string; filte
     const departments = Array.from(new Set(departmentRows.map((row) => row.department.trim() || 'None')));
     if (!departments.includes('None')) departments.unshift('None');
     const focus = input.focusId ? await getAccessibleCapdev(access, input.focusId) : null;
+    const archiveScope = focus?.archivedAt || (!focus && input.archived) ? isNotNull(capdevs.archivedAt) : isNull(capdevs.archivedAt);
+    conditions.push(archiveScope);
     const ascending = !focus && input.filters.sort === 'oldest';
     if (!focus) {
       if (typeof input.search !== 'string' || input.search.length > 300) throw new Error('Invalid search.');
@@ -967,13 +1132,13 @@ export async function getCapdevPage(input: { page: number; search: string; filte
     const total = Number(totalRow.total);
     let page = Math.max(1, Math.min(Number.isSafeInteger(input.page) ? input.page : 1, Math.max(1, Math.ceil(total / 6))));
     if (focus) {
-      const [before] = await db.select({ total: count() }).from(capdevs).where(and(scope,
+      const [before] = await db.select({ total: count() }).from(capdevs).where(and(scope, archiveScope,
         sql`(${capdevs.createdAt}, ${capdevs.id}) > (SELECT created_at, id FROM capdevs WHERE id = ${focus.id})`));
       page = Math.floor(Number(before.total) / 6) + 1;
     }
     const records = await db.select().from(capdevs).where(where)
       .orderBy(ascending ? asc(capdevs.createdAt) : desc(capdevs.createdAt), ascending ? asc(capdevs.id) : desc(capdevs.id)).limit(6).offset((page - 1) * 6);
-    return { success: true as const, records, departments, total, page };
+    return { success: true as const, records, departments, total, page, archived: Boolean(focus ? focus.archivedAt : input.archived) };
   } catch (error) {
     console.error('Failed to fetch project page:', error);
     return { success: false as const, records: [], departments: [], total: 0, page: 1, error: 'Unable to load projects. Check your filters and try again.' };
@@ -1198,7 +1363,14 @@ export async function generateMonitoringSheet(input: { capdevIds: number[]; capd
         const field = fields[offset];
         const record = field?.source === 'capdev' ? capdev : request;
         const additionalInfo = field?.source === 'capdev' ? capdevInfo : requestInfo;
-        cell.value = field ? monitoringCellValue(field.key ? record?.[field.key as keyof typeof record] : getDynamicFieldValue(additionalInfo, { id: field.id!, name: field.name })) : '';
+        const rawValue = field?.key
+          ? record?.[field.key as keyof typeof record]
+          : field
+            ? getDynamicFieldValue(additionalInfo, { id: field.id!, name: field.name })
+            : '';
+        cell.value = field?.key === 'setting' && rawValue === 'internal'
+          ? 'In-House'
+          : monitoringCellValue(rawValue);
       }
       for (let column = 2 + capacityColumns; column < cursor; column += 1) {
         const cell = sheet.getCell(row, column);
@@ -1262,13 +1434,19 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     if (selectionError) return { success: false, error: selectionError };
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
+    const [previous] = await db.select().from(capdevs).where(eq(capdevs.id, id)).limit(1);
+    if (!previous) return { success: false, error: 'CapDev project not found.' };
+    if (previous.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
     const [updated] = await db
       .update(capdevs)
       .set({ aipCode: data.aipCode, description: data.description, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', additionalInfo: data.additionalInfo, updatedById: access.userId, updatedAt: new Date() })
-      .where(eq(capdevs.id, id))
+      .where(and(eq(capdevs.id, id), isNull(capdevs.archivedAt)))
       .returning();
     if (!updated) return { success: false, error: 'CapDev project not found.' };
-    await writeAuditLog(access, { action: 'updated', entityType: 'capdev', entityId: updated.id, entityLabel: updated.aipCode, details: { department: updated.department } });
+    const changes = auditChanges(previous, updated, { aipCode: 'AIP code', description: 'Description', department: 'Department' });
+    const fields = await getCapdevFieldDefinitions();
+    for (const field of fields) changes.push(...auditChanges({ value: getDynamicFieldValue((previous.additionalInfo || {}) as Record<string, unknown>, field) }, { value: getDynamicFieldValue((updated.additionalInfo || {}) as Record<string, unknown>, field) }, { value: field.name }));
+    await writeAuditLog(access, { action: 'updated', entityType: 'capdev', entityId: updated.id, entityLabel: updated.aipCode, details: { department: updated.department, changes } });
     return { success: true, capdev: updated };
   } catch (error) {
     console.error('Failed to update CapDev project:', error);
@@ -1306,10 +1484,15 @@ export async function deleteCapdev(id: number) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    const target = await getAccessibleCapdev(access, id);
+    if (!target?.archivedAt) return { success: false, error: 'Archive this CapDev project before deleting permanently.' };
     const actor = await getActorSnapshot(access);
-    // Delete child records first, then the project, in one database statement.
-    // The dependencies between the CTEs ensure PostgreSQL respects the foreign keys.
-    const result = await db.execute(sql`
+    return await withTransaction(async (tx) => {
+      const [current] = await tx.select().from(capdevs).where(eq(capdevs.id, id)).for('update');
+      if (!current?.archivedAt) return { success: false, error: 'Archive this CapDev project before deleting permanently.' };
+      // Delete child records first, then the project, in one database statement.
+      // The dependencies between the CTEs ensure PostgreSQL respects the foreign keys.
+      const result = await tx.execute(sql`
       WITH deleted_status_updates AS (
         DELETE FROM request_status_updates
         WHERE request_id IN (SELECT id FROM requests WHERE capdev_id = ${id})
@@ -1335,9 +1518,10 @@ export async function deleteCapdev(id: number) {
         RETURNING id
       )
       SELECT id FROM inserted_audit
-    `);
-    if (result.rows.length === 0) return { success: false, error: 'CapDev project not found.' };
-    return { success: true };
+      `);
+      if (result.rows.length === 0) return { success: false, error: 'CapDev project not found.' };
+      return { success: true };
+    });
   } catch (error) {
     console.error('Failed to delete CapDev project:', error);
     return { success: false, error: 'Database delete failed' };
@@ -1408,6 +1592,8 @@ export async function saveCapdevFieldDefinition(data: {
     if (!access || access.role !== 'admin') return unauthorized;
     if (!hasComboboxOptions(data.type, data.options)) return { success: false, error: 'Suggestions-only comboboxes require at least one non-empty option.' };
     if (data.id) {
+      const [previous] = await db.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.id, data.id)).limit(1);
+      if (!previous) return { success: false, error: 'Form field not found.' };
       await db
         .update(capdevFieldDefinitions)
         .set({
@@ -1423,7 +1609,7 @@ export async function saveCapdevFieldDefinition(data: {
           updatedAt: new Date(),
         })
         .where(eq(capdevFieldDefinitions.id, data.id));
-      await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityId: data.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
+      await writeAuditLog(access, { action: 'updated', entityType: 'capdev_field', entityId: data.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired, changes: auditChanges(previous, { ...data, options: data.options || null, placeholder: data.placeholder || null, columnPosition: data.columnPosition || 'left' }, { name: 'Field name', type: 'Field type', options: 'Choices', isRequired: 'Required', width: 'Field width', columnPosition: 'Column', placeholder: 'Placeholder' }) } });
       return { success: true, id: data.id };
     } else {
       const existing = await db
@@ -1545,6 +1731,8 @@ export async function saveRequestFieldDefinition(data: {
     if (!hasComboboxOptions(data.type, data.options)) return { success: false, error: 'Suggestions-only comboboxes require at least one non-empty option.' };
     if (!isRequestSetting(data.setting)) return { success: false, error: 'Invalid request setting.' };
     if (data.id) {
+      const [previous] = await db.select().from(requestFieldDefinitions).where(eq(requestFieldDefinitions.id, data.id)).limit(1);
+      if (!previous) return { success: false, error: 'Form field not found.' };
       await db
         .update(requestFieldDefinitions)
         .set({
@@ -1560,7 +1748,7 @@ export async function saveRequestFieldDefinition(data: {
           updatedAt: new Date(),
         })
         .where(and(eq(requestFieldDefinitions.id, data.id), eq(requestFieldDefinitions.setting, data.setting)));
-      await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityId: data.id, entityLabel: data.name, details: { setting: data.setting, type: data.type, section: data.section, isRequired: data.isRequired } });
+      await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityId: data.id, entityLabel: data.name, details: { setting: data.setting, type: data.type, section: data.section, isRequired: data.isRequired, changes: auditChanges(previous, { ...data, options: data.options || null, placeholder: data.placeholder || null, columnPosition: data.columnPosition || 'left' }, { name: 'Field name', type: 'Field type', options: 'Choices', isRequired: 'Required', width: 'Field width', columnPosition: 'Column', placeholder: 'Placeholder' }) } });
       return { success: true, id: data.id };
     }
 
@@ -1635,7 +1823,7 @@ export async function updateRequestFieldsOrder(
       WHERE field.id = ordered.id
         AND field.setting = ${setting}
     `);
-    await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityLabel: `${setting === 'internal' ? 'Internal' : 'External'} request field layout`, details: { setting, fieldLayout } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'request_field', entityLabel: `${setting === 'internal' ? 'In-House' : 'External'} request field layout`, details: { setting, fieldLayout } });
     return { success: true };
   } catch (error) {
     console.error('Failed to reorder Request fields:', error);
@@ -1727,6 +1915,8 @@ export async function saveStatusUpdateFieldDefinition(data: {
     if (!access || access.role !== 'admin') return unauthorized;
     if (!hasComboboxOptions(data.type, data.options)) return { success: false, error: 'Suggestions-only comboboxes require at least one non-empty option.' };
     if (data.id) {
+      const [previous] = await db.select().from(statusUpdateFieldDefinitions).where(eq(statusUpdateFieldDefinitions.id, data.id)).limit(1);
+      if (!previous) return { success: false, error: 'Form field not found.' };
       await db
         .update(statusUpdateFieldDefinitions)
         .set({
@@ -1742,7 +1932,7 @@ export async function saveStatusUpdateFieldDefinition(data: {
           updatedAt: new Date(),
         })
         .where(eq(statusUpdateFieldDefinitions.id, data.id));
-      await writeAuditLog(access, { action: 'updated', entityType: 'status_update_field', entityId: data.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired } });
+      await writeAuditLog(access, { action: 'updated', entityType: 'status_update_field', entityId: data.id, entityLabel: data.name, details: { type: data.type, section: data.section, isRequired: data.isRequired, changes: auditChanges(previous, { ...data, options: data.options || null, placeholder: data.placeholder || null, columnPosition: data.columnPosition || 'left' }, { name: 'Field name', type: 'Field type', options: 'Choices', isRequired: 'Required', width: 'Field width', columnPosition: 'Column', placeholder: 'Placeholder' }) } });
       return { success: true, id: data.id };
     } else {
       const existing = await db
@@ -1863,7 +2053,7 @@ export async function getRequestsByCapdev(capdevId: number) {
 
     return filtered.map((req) => ({
       ...req,
-      hasDeductedBudget: deductedIds.has(req.id),
+      hasDeductedBudget: Boolean(req.budgetDeductedAt) || deductedIds.has(req.id),
       isComplete: req.status === 'completed' || completedIds.has(req.id),
     }));
   } catch (error) {
@@ -1888,7 +2078,9 @@ export async function createRequest(data: RequestInput) {
     if (!access || !canManageRequests(access)) return unauthorized;
     const validated = validateRequestInput(data);
     data = { ...data, ...validated };
-    if (!await getAccessibleCapdev(access, data.capdevId)) return unauthorized;
+    const parent = await getAccessibleCapdev(access, data.capdevId);
+    if (!parent) return unauthorized;
+    if (parent.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
     const selectionError = await validateComboboxValues('request', data.additionalInfo, data.setting);
     if (selectionError) return { success: false, error: selectionError };
     const { data: session } = await auth.getSession();
@@ -1899,6 +2091,8 @@ export async function createRequest(data: RequestInput) {
     const missing = schema.dynamicFields.filter((field) => field.isRequired && !hasRequiredValue(getDynamicFieldValue(validated.additionalInfo, field), field.type));
     if (missing.length) return { success: false, error: 'Complete the required fields: ' + missing.map((field) => field.name).join(', ') };
     const created = await withTransaction(async (tx) => {
+      const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, validated.capdevId)).for('update');
+      if (!parent || parent.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
       const [record] = await tx.insert(requests).values({
       capdevId: validated.capdevId, setting: validated.setting, description: validated.description,
       requestedBudget: validated.requestedBudget, additionalInfo: {}, status: 'in_progress',
@@ -1915,7 +2109,7 @@ export async function createRequest(data: RequestInput) {
       actorId: access.userId,
       capdevId: created.capdevId,
       requestId: created.id,
-      title: `New Requisition: ${created.setting || 'CapDev Request'}`,
+      title: `New Requisition: ${created.setting === 'internal' ? 'In-House' : created.setting === 'external' ? 'External' : 'CapDev Request'}`,
       message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
       link: `/portal/capdev/${created.capdevId}/requests#request-record-${created.id}`,
       type: 'new_request',
@@ -1933,25 +2127,32 @@ export async function updateRequest(id: number, data: RequestInput) {
     if (!access || !canManageRequests(access)) return unauthorized;
     const validated = validateRequestInput(data);
     data = { ...data, ...validated };
-    const existing = await getAccessibleRequest(access, id);
+    const existing = await getWritableRequest(access, id);
     if (!existing) return { success: false, error: 'Request not found.' };
     const selectionError = await validateComboboxValues('request', data.additionalInfo, data.setting);
     if (selectionError) return { success: false, error: selectionError };
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, existing.capdevId)).limit(1);
     const [deduction] = await db.select({ id: requestStatusUpdates.id }).from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
-    if (deduction && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested budget cannot be changed after it has been deducted.' };
-    if (!deduction && (!capdev || Number(data.requestedBudget) > Number(capdev.budget))) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
+    if ((existing.budgetDeductedAt || deduction) && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested budget cannot be changed after it has been deducted.' };
+    if (!existing.budgetDeductedAt && !deduction && (!capdev || Number(data.requestedBudget) > Number(capdev.budget))) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
     const schema = await getRequestFormSchemaService(access, validated.setting);
     const missing = schema.dynamicFields.filter((field) => field.isRequired && !hasRequiredValue(getDynamicFieldValue(validated.additionalInfo, field), field.type));
     if (missing.length) return { success: false, error: 'Complete the required fields: ' + missing.map((field) => field.name).join(', ') };
+    let changes: ReturnType<typeof auditChanges> = [];
     const updated = await withTransaction(async (tx) => {
       const [current] = await tx.select().from(requests).where(eq(requests.id, id)).for('update');
       if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error('Request not found.');
+      const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
       const [deducted] = await tx.select().from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
-      if (deducted && validated.requestedBudget !== String(current.requestedBudget) && Number(validated.requestedBudget) !== Number(current.requestedBudget)) throw new Error('Requested budget cannot be changed after deduction.');
-      if (!deducted) {
+      if ((current.budgetDeductedAt || deducted) && validated.requestedBudget !== String(current.requestedBudget) && Number(validated.requestedBudget) !== Number(current.requestedBudget)) throw new Error('Requested budget cannot be changed after deduction.');
+      if (!current.budgetDeductedAt && !deducted) {
         const [balance] = await tx.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, current.capdevId));
         if (!balance || Number(validated.requestedBudget) > Number(balance.budget)) throw new Error('Requested budget exceeds the remaining CapDev budget.');
+      }
+      changes = auditChanges(current, validated, { setting: 'Request type', description: 'Description', requestedBudget: 'Requested budget' });
+      for (const field of schema.dynamicFields) {
+        changes.push(...auditChanges({ value: getDynamicFieldValue((current.additionalInfo || {}) as Record<string, unknown>, field) }, { value: getDynamicFieldValue(validated.additionalInfo, field) }, { value: field.name }));
       }
       await claimRequestFolder(tx, access.userId, id, validated.additionalInfo);
       const [saved] = await tx.update(requests).set({ setting: validated.setting, description: validated.description,
@@ -1960,7 +2161,7 @@ export async function updateRequest(id: number, data: RequestInput) {
       return saved;
     });
     if (!updated) return { success: false, error: 'Request not found.' };
-    await writeAuditLog(access, { action: 'updated', entityType: 'request', entityId: updated.id, entityLabel: `Request #${updated.id}`, details: { capdevId: updated.capdevId, setting: updated.setting, requestedBudget: updated.requestedBudget } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'request', entityId: updated.id, entityLabel: `Request #${updated.id}`, details: { capdevId: updated.capdevId, requestorName: updated.requestorName, setting: updated.setting, requestedBudget: updated.requestedBudget, changes } });
     return { success: true, request: updated };
   } catch (error) {
     console.error('Failed to update request:', error);
@@ -1973,12 +2174,18 @@ export async function deleteRequest(id: number) {
     const access = await getCurrentAccess();
     const existing = access ? await getAccessibleRequest(access, id) : null;
     if (!access || !canManageRequests(access) || !existing) return unauthorized;
+    if (!existing.archivedAt && !existing.parentArchivedAt) return { success: false, error: 'Archive this request before deleting permanently.' };
     const actor = await getActorSnapshot(access);
+    return await withTransaction(async (tx) => {
+      const [current] = await tx.select().from(requests).where(eq(requests.id, id)).for('update');
+      if (!current || (access.role === 'employee' && current.userId !== access.userId)) return unauthorized;
+      const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (!isArchiveReadOnly(current, parent)) return { success: false, error: 'Archive this request before deleting permanently.' };
 
-    const [storageFolder] = await db.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, id)).limit(1);
-    const driveFolderId = storageFolder?.folderId;
+      const [storageFolder] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, id)).limit(1);
+      const driveFolderId = storageFolder?.folderId;
 
-    if (typeof driveFolderId === 'string' && driveFolderId.trim()) {
+      if (typeof driveFolderId === 'string' && driveFolderId.trim()) {
       try {
         const accessToken = await getGoogleDriveAccessToken();
         if (storageFolder.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID) throw new Error('Untrusted storage root.');
@@ -1991,61 +2198,13 @@ export async function deleteRequest(id: number) {
       } catch (err) {
         console.warn('Could not delete Google Drive folder for request:', err);
       }
-    }
+      }
 
-    // Delete child records first, restore any amount previously deducted by this
-    // request, then delete the request in one atomic database execution.
-    const result = await db.execute(sql`
-      WITH deleted_status_updates AS (
-        DELETE FROM request_status_updates
-        WHERE request_id = ${id}
-        RETURNING id, subtracts_requested_amount
-      ),
-      deleted_request AS (
-        DELETE FROM requests
-        WHERE id = ${id}
-          AND (SELECT COUNT(*) FROM deleted_status_updates) >= 0
-        RETURNING id, capdev_id, setting, requestor_name, requested_budget
-      ),
-      restored_capdev AS (
-        UPDATE capdevs
-        SET budget = capdevs.budget + deleted_request.requested_budget,
-            updated_at = NOW()
-        FROM deleted_request
-        WHERE capdevs.id = deleted_request.capdev_id
-          AND EXISTS (
-            SELECT 1
-            FROM deleted_status_updates
-            WHERE subtracts_requested_amount = true
-          )
-        RETURNING capdevs.id
-      ),
-      inserted_audit AS (
-        INSERT INTO audit_logs (actor_id, actor_name, actor_email, action, entity_type, entity_id, entity_label, details)
-        SELECT ${actor.actorId}, ${actor.actorName}, ${actor.actorEmail}, 'deleted', 'request', deleted_request.id::text, 'Request #' || deleted_request.id,
-          jsonb_build_object(
-            'capdevId', deleted_request.capdev_id,
-            'capdevAipCode', capdev.aip_code,
-            'setting', deleted_request.setting,
-            'requestorName', deleted_request.requestor_name,
-            'restoredBudget', CASE
-              WHEN EXISTS (
-                SELECT 1
-                FROM deleted_status_updates
-                WHERE subtracts_requested_amount = true
-              ) THEN deleted_request.requested_budget
-              ELSE 0
-            END
-          )
-        FROM deleted_request
-        INNER JOIN capdevs AS capdev ON capdev.id = deleted_request.capdev_id
-        WHERE (SELECT COUNT(*) FROM restored_capdev) >= 0
-        RETURNING id
-      )
-      SELECT id FROM inserted_audit
-    `);
-    if (result.rows.length === 0) return { success: false, error: 'Request not found.' };
-    return { success: true };
+      // Delete records atomically; committed budget deductions remain permanent.
+      const result = await deleteRequestRecords(tx, id, actor);
+      if (result.rows.length === 0) return { success: false, error: 'Request not found.' };
+      return { success: true };
+    });
   } catch (error) {
     console.error('Failed to delete request:', error);
     return { success: false, error: 'Database delete failed' };
@@ -2137,12 +2296,14 @@ async function verifyManagedDriveFolder(accessToken: string, folderId: string, r
 async function ensureRequestGoogleDriveFolder(accessToken: string, access: UserAccess, context?: RequestUploadContext): Promise<string> {
   const rootParentFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
   if (!rootParentFolderId) throw new Error('Google Drive storage is not configured.');
-  if (context?.requestId !== undefined && (!Number.isSafeInteger(context.requestId) || !await getAccessibleRequest(access, context.requestId))) throw new Error(unauthorized.error);
+  if (context?.requestId !== undefined && (!Number.isSafeInteger(context.requestId) || !await getWritableRequest(access, context.requestId))) throw new Error(unauthorized.error);
   return withTransaction(async (tx) => {
     let req: typeof requests.$inferSelect | undefined;
     if (context?.requestId) {
       [req] = await tx.select().from(requests).where(eq(requests.id, context.requestId)).for('update');
       if (!req || (access.role === 'employee' && req.userId !== access.userId)) throw new Error(unauthorized.error);
+      const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, req.capdevId)).for('update');
+      if (isArchiveReadOnly(req, parent)) throw new Error(ARCHIVED_READ_ONLY);
       const [folder] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, req.id));
       if (folder) {
         if (folder.rootFolderId !== rootParentFolderId) throw new Error('Invalid attachment folder.');
@@ -2281,7 +2442,14 @@ export async function getRequestStatusUpdates(requestId: number) {
   }
 }
 
-async function ensureRequestEvaluationForms(request: typeof requests.$inferSelect) {
+async function ensureRequestEvaluationForms(request: typeof requests.$inferSelect, tx?: Transaction): Promise<{ participantFeedbackFormId: string | null; participantFeedbackFormUrl: string | null }> {
+  if (!tx) return withTransaction(async (transaction) => {
+    const [current] = await transaction.select().from(requests).where(eq(requests.id, request.id)).for('update');
+    if (!current) throw new Error('Request not found.');
+    const [parent] = await transaction.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+    if (isArchiveReadOnly(current, parent)) return { participantFeedbackFormId: current.participantFeedbackFormId, participantFeedbackFormUrl: current.participantFeedbackFormUrl };
+    return ensureRequestEvaluationForms(current, transaction);
+  });
   const [capdev] = await db.select({ aipCode: capdevs.aipCode }).from(capdevs).where(eq(capdevs.id, request.capdevId)).limit(1);
   if (!capdev) throw new Error('The request CapDev project was not found.');
 
@@ -2296,7 +2464,7 @@ async function ensureRequestEvaluationForms(request: typeof requests.$inferSelec
     const form = await createRequestEvaluationForm({ requestId: request.id, aipCode: capdev.aipCode });
     participantFeedbackFormId = form.formId;
     participantFeedbackFormUrl = form.responderUrl;
-    await db.update(requests).set({
+    await tx.update(requests).set({
       participantFeedbackFormId,
       participantFeedbackFormUrl,
       supervisorEvaluationFormId: null,
@@ -2316,7 +2484,10 @@ export async function getOrCreateRequestEvaluationForms(requestId: number) {
     const request = access ? await getAccessibleRequest(access, requestId) : null;
     if (!request) return { success: false as const, error: unauthorized.error };
     if (request.status !== 'completed') return { success: false as const, error: 'Evaluation forms are available after completion.' };
-    const forms = await ensureRequestEvaluationForms(request);
+    if (request.setting !== 'internal') return { success: false as const, error: 'Evaluation forms are available for In-House requests only.' };
+    const forms = isArchiveReadOnly(request, { archivedAt: request.parentArchivedAt })
+      ? { participantFeedbackFormId: request.participantFeedbackFormId, participantFeedbackFormUrl: request.participantFeedbackFormUrl }
+      : await ensureRequestEvaluationForms(request);
     return { success: true as const, forms };
   } catch (error) {
     console.error('Failed to prepare request evaluation forms:', error);
@@ -2332,7 +2503,10 @@ export async function getRequestEvaluationSummary(
     const request = access ? await getAccessibleRequest(access, requestId) : null;
     if (!request) return { success: false, error: unauthorized.error };
     if (request.status !== 'completed') return { success: false, error: 'Evaluation summaries are available after completion.' };
-    const forms = await ensureRequestEvaluationForms(request);
+    if (request.setting !== 'internal') return { success: false, error: 'Evaluation summaries are available for In-House requests only.' };
+    const forms = isArchiveReadOnly(request, { archivedAt: request.parentArchivedAt })
+      ? { participantFeedbackFormId: request.participantFeedbackFormId, participantFeedbackFormUrl: request.participantFeedbackFormUrl }
+      : await ensureRequestEvaluationForms(request);
     const formId = forms.participantFeedbackFormId;
     if (!formId) return { success: false, error: 'The evaluation form is unavailable.' };
     return { success: true, summary: await getEvaluationSummary(formId) };
@@ -2347,24 +2521,24 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return unauthorized;
     if (status !== 'completed' && status !== 'denied') return { success: false, error: 'Invalid request status.' };
-    const req = await getAccessibleRequest(access, requestId);
+    const req = await getWritableRequest(access, requestId);
     if (!req) return unauthorized;
     if (req.isStopped && access.role === 'employee') {
       return { success: false, error: 'This request is stopped. Progress must be resumed before you can complete or deny it.' };
     }
 
-    const forms = status === 'completed' ? await ensureRequestEvaluationForms(req) : null;
+    const forms = await withTransaction(async (tx) => {
+      const [current] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
+      if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error(unauthorized.error);
+      const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
+      if (current.isStopped && access.role === 'employee') throw new Error('This request is stopped.');
+      const forms = status === 'completed' && current.setting === 'internal' ? await ensureRequestEvaluationForms(current, tx) : null;
+      await tx.update(requests).set({ status, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, requestId));
+      return forms;
+    });
 
-    await db
-      .update(requests)
-      .set({
-        status,
-        updatedById: access.userId,
-        updatedAt: new Date(),
-      })
-      .where(eq(requests.id, requestId));
-
-    await writeAuditLog(access, { action: 'status_changed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { capdevId: req.capdevId, status } });
+    await writeAuditLog(access, { action: 'status_changed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { capdevId: req.capdevId, requestorName: req.requestorName, previousStatus: req.status, status } });
 
     void createNotification({
       actorId: access.userId,
@@ -2387,22 +2561,27 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
 export async function stopRequestProgress(data: StopRequestInput) {
   try {
     const access = await getCurrentAccess();
-    if (!access || !canControlRequestStop(access) || !await getAccessibleRequest(access, data.requestId)) return unauthorized;
+    if (!access || !canControlRequestStop(access) || !await getWritableRequest(access, data.requestId)) return unauthorized;
     if (!data.reason.trim()) return { success: false, error: 'A stopper reason is required.' };
     const { data: session } = await auth.getSession();
-    const [request] = await db.select().from(requests).where(eq(requests.id, data.requestId)).limit(1);
-    if (!request || request.status === 'completed' || request.status === 'denied') return { success: false, error: 'This request is already concluded.' };
-    if (request.isStopped) return { success: false, error: 'This request is already stopped.' };
+    const { request, stopper } = await withTransaction(async (tx) => {
+      const [request] = await tx.select().from(requests).where(eq(requests.id, data.requestId)).for('update');
+      const [parent] = request ? await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update') : [];
+      if (isArchiveReadOnly(request, parent)) throw new Error(ARCHIVED_READ_ONLY);
+      if (!request || request.status === 'completed' || request.status === 'denied') throw new Error('This request is already concluded.');
+      if (request.isStopped) throw new Error('This request is already stopped.');
 
-    const [stopper] = await db.insert(requestStatusUpdates).values({
+      const [stopper] = await tx.insert(requestStatusUpdates).values({
       requestId: data.requestId,
       userId: access.userId,
       authorName: session?.user?.name || session?.user?.email || 'Staff member',
       statusUpdate: data.reason.trim(),
       files: data.files || [],
       isStopper: true,
-    }).returning();
-    await db.update(requests).set({ isStopped: true, activeStopperId: stopper.id, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, data.requestId));
+      }).returning();
+      await tx.update(requests).set({ isStopped: true, activeStopperId: stopper.id, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, data.requestId));
+      return { request, stopper };
+    });
     await writeAuditLog(access, { action: 'stopped', entityType: 'request', entityId: data.requestId, entityLabel: `Request #${data.requestId}`, details: { reason: data.reason.trim(), statusUpdateId: stopper.id } });
     void createNotification({
       actorId: access.userId,
@@ -2424,12 +2603,19 @@ export async function stopRequestProgress(data: StopRequestInput) {
 export async function resumeRequestProgress(requestId: number) {
   try {
     const access = await getCurrentAccess();
-    if (!access || !canControlRequestStop(access) || !await getAccessibleRequest(access, requestId)) return unauthorized;
+    if (!access || !canControlRequestStop(access) || !await getWritableRequest(access, requestId)) return unauthorized;
     const { data: session } = await auth.getSession();
-    const [request] = await db.select().from(requests).where(eq(requests.id, requestId)).limit(1);
-    if (!request?.isStopped || !request.activeStopperId) return { success: false, error: 'This request is not stopped.' };
-    await db.insert(requestStatusUpdates).values({ requestId, userId: access.userId, authorName: session?.user?.name || session?.user?.email || 'Staff member', statusUpdate: 'Progress resumed.', isResume: true, stopperId: request.activeStopperId });
-    await db.update(requests).set({ isStopped: false, activeStopperId: null, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, requestId));
+    const request = await withTransaction(async (tx) => {
+      const [request] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
+      const [parent] = request ? await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update') : [];
+      if (isArchiveReadOnly(request, parent)) throw new Error(ARCHIVED_READ_ONLY);
+      if (!request?.isStopped || !request.activeStopperId) throw new Error('This request is not stopped.');
+      const [activeStopper] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, request.activeStopperId));
+      if (activeStopper?.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
+      await tx.insert(requestStatusUpdates).values({ requestId, userId: access.userId, authorName: session?.user?.name || session?.user?.email || 'Staff member', statusUpdate: 'Progress resumed.', isResume: true, stopperId: request.activeStopperId });
+      await tx.update(requests).set({ isStopped: false, activeStopperId: null, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, requestId));
+      return request;
+    });
     await writeAuditLog(access, { action: 'resumed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { stopperId: request.activeStopperId } });
     void createNotification({
       actorId: access.userId,
@@ -2451,7 +2637,7 @@ export async function resumeRequestProgress(requestId: number) {
 export async function createRequestStatusUpdate(data: StatusUpdateInput) {
   try {
     const access = await getCurrentAccess();
-    if (!access || !canManageRequests(access) || !await getAccessibleRequest(access, data.requestId)) return unauthorized;
+    if (!access || !canManageRequests(access) || !await getWritableRequest(access, data.requestId)) return unauthorized;
     for (const flag of [data.markAsComplete, data.subtractsRequestedAmount, data.isStopperResponse]) {
       if (flag !== undefined && typeof flag !== 'boolean') return { success: false, error: 'Invalid status update options.' };
     }
@@ -2501,6 +2687,9 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
       entityLabel: `Status update for Request #${data.requestId}`,
       details: {
         requestId: data.requestId,
+        requestorName: existingReq[0].requestorName,
+        statusUpdate: data.statusUpdate,
+        remarks: data.remarks || null,
         capdevId: existingReq[0].capdevId,
         statusMark: data.statusMark || null,
         isStopperResponse,
@@ -2727,6 +2916,7 @@ export async function requestSignupVerificationCode(rawEmail: string): Promise<{
   const generic = { success: true, message: 'If this email can be registered, a verification code has been sent. Please wait before requesting another.' };
   try {
     const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!isAllowedSignupEmail(email)) return { success: false, error: SIGNUP_EMAIL_ERROR };
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 255) return { success: false, error: 'Please enter a valid email address.' };
     if (!await limitVerification('signup-send', email, true)) return generic;
     const existing = await db.execute(sql`SELECT id FROM neon_auth.user WHERE LOWER(email) = ${email} LIMIT 1`);
@@ -2747,6 +2937,7 @@ export async function requestSignupVerificationCode(rawEmail: string): Promise<{
 export async function verifySignupCode(rawEmail: string, rawCode: string) {
   try {
     const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!isAllowedSignupEmail(email)) return { success: false, error: SIGNUP_EMAIL_ERROR };
     if (!email || email.length > 255) return { success: false, error: 'Invalid or expired verification code.' };
     if (!await limitVerification('signup-verify', email)) return { success: false, error: 'Too many attempts. Please try again later.' };
     const code = typeof rawCode === 'string' ? rawCode.trim() : '';

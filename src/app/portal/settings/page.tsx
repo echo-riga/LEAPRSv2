@@ -168,15 +168,23 @@ export default function SettingsPage() {
       description: 'Configure custom dynamic fields, form layout, and layout options for request forms.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
-          <Chip label={`${counts.internalRequestFieldsCount} Internal Fields`} size="small" variant="outlined" color="primary" />
+          <Chip label={`${counts.internalRequestFieldsCount} In-House Fields`} size="small" variant="outlined" color="primary" />
           <Chip label={`${counts.externalRequestFieldsCount} External Fields`} size="small" variant="outlined" color="primary" />
         </Stack>
       ),
       footer: (
-        <Stack direction="row" spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
-          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/settings/request?setting=external')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Configure External Fields</Button>
-          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/settings/request?setting=internal')} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Configure Internal Fields</Button>
-        </Stack>
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+            columnGap: 2,
+            rowGap: 1,
+            alignItems: 'center',
+          }}
+        >
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/settings/request?setting=external')} sx={{ justifyContent: 'flex-start', p: 0, minWidth: 0, fontWeight: '700', whiteSpace: 'nowrap', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Configure External Fields</Button>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/settings/request?setting=internal')} sx={{ justifyContent: 'flex-start', p: 0, minWidth: 0, fontWeight: '700', whiteSpace: 'nowrap', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Configure In-House Fields</Button>
+        </Box>
       ),
     },
     {
@@ -221,7 +229,12 @@ export default function SettingsPage() {
 
         <Grid container spacing={3}>
           {settingsComponents.map((item, index) => (
-            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={index}>
+            <Grid
+              size={item.title === 'Request Configuration'
+                ? { xs: 12, sm: 12, md: 6, xl: 4 }
+                : { xs: 12, sm: 6, md: 4 }}
+              key={index}
+            >
               <Card
                 variant="outlined"
                 sx={{

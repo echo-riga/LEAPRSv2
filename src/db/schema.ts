@@ -23,6 +23,7 @@ export const users = pgTable('users', {
   id: text('id').primaryKey(),
   role: varchar('role', { length: 50 }).default('employee').notNull(),
   department: varchar('department', { length: 255 }).default('Unassigned').notNull(),
+  archivedAt: timestamp('archived_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -99,6 +100,7 @@ export const capdevFieldDefinitions = pgTable('capdev_field_definitions', {
 
 // Capdev projects
 export const capdevs = pgTable('capdevs', {
+  archivedAt: timestamp('archived_at'),
   id: serial('id').primaryKey(),
   aipCode: varchar('aip_code', { length: 100 }).notNull().unique(),
   description: text('description').notNull().default(''),
@@ -153,6 +155,8 @@ export const statusUpdateFieldDefinitions = pgTable('status_update_field_definit
 
 // Requests
 export const requests = pgTable('requests', {
+  archivedAt: timestamp('archived_at'),
+  budgetDeductedAt: timestamp('budget_deducted_at'),
   id: serial('id').primaryKey(),
   capdevId: integer('capdev_id').references(() => capdevs.id).notNull(),
   userId: text('user_id').references(() => users.id).notNull(),
@@ -178,6 +182,7 @@ export const requests = pgTable('requests', {
 
 // Request Status Updates (Timeline logs)
 export const requestStatusUpdates = pgTable('request_status_updates', {
+  archivedAt: timestamp('archived_at'),
   id: serial('id').primaryKey(),
   requestId: integer('request_id').references(() => requests.id).notNull(),
   userId: text('user_id').references(() => users.id).notNull(), // AUTHOR of the update

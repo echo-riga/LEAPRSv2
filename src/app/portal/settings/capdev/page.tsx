@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  Alert,
   Container,
   Box,
   Typography,
@@ -33,18 +34,19 @@ import {
 } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
 import { FormConfigSkeleton } from '@/components/Skeletons';
+import DeleteConfirmationDialog from '@/components/DeleteConfirmationDialog';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
 import { hasComboboxOptions } from '@/lib/dynamic-fields';
 import DynamicTableField from '@/components/DynamicTableField';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
+import { focusFormError } from '@/lib/form-error-focus';
 import {
   EmptyHalfFieldDropSlot,
   FieldDropIndicator,
   getHalfFieldLayout,
   useFieldReorder,
 } from '@/components/FieldReorder';
-import ActionErrorDialog from '@/components/ActionErrorDialog';
 import {
   getCurrentUserAccess,
   getDepartmentOptions,
@@ -88,6 +90,7 @@ export default function CapdevConfigPage() {
   const router = useRouter();
   const session = authClient.useSession();
   const [fields, setFields] = useState<Field[]>([]);
+  const [deletingField, setDeletingField] = useState<Field | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | string | null>(null);
 
@@ -100,6 +103,10 @@ export default function CapdevConfigPage() {
   const [configurationSaved, setConfigurationSaved] = useState(false);
   const [hasPendingDeletion, setHasPendingDeletion] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const showConfigurationError = (message: string) => {
+    setErrorMessage(message);
+    focusFormError('capdev-configuration-error');
+  };
   const configurationSaveTimeout = useRef<number | null>(null);
 
   useEffect(() => () => {
@@ -254,28 +261,26 @@ export default function CapdevConfigPage() {
     clearEditingState(field.key);
   };
 
-  const handleDeleteFieldDirect = async (originalIndex: number) => {
-    const fieldToDelete = fields[originalIndex];
-    if (fieldToDelete.isTemp) {
-      setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
-      clearEditingState(fieldToDelete.key);
-      return;
-    }
-    if (!fieldToDelete.id) return;
-    setSavingId(fieldToDelete.id);
-    try {
-      const result = await deleteCapdevFieldDefinition(fieldToDelete.id, currentUserId);
-      if (result.success) {
-        setFields((prev) => prev.filter((_, idx) => idx !== originalIndex));
-        clearEditingState(fieldToDelete.key);
+  const handleDeleteFieldDirect = (originalIndex: number) => {
+    setDeletingField(fields[originalIndex] || null);
+  };
+
+  const confirmDeleteField = async () => {
+    if (!deletingField) return;
+    if (!deletingField.isTemp) {
+      if (!deletingField.id) throw new Error('Form field not found.');
+      setSavingId(deletingField.id);
+      try {
+        const result = await deleteCapdevFieldDefinition(deletingField.id, currentUserId);
+        if (!result.success) throw new Error(result.error || 'Unable to delete field.');
         setHasPendingDeletion(true);
         setConfigurationSaved(false);
+      } finally {
+        setSavingId(null);
       }
-    } catch (error) {
-      console.error('Delete failed:', error);
-    } finally {
-      setSavingId(null);
     }
+    setFields((current) => current.filter((field) => field.key !== deletingField.key));
+    clearEditingState(deletingField.key);
   };
 
   // Options builder (used inside the inline editor for "text" fields)
@@ -307,6 +312,7 @@ export default function CapdevConfigPage() {
     }
     setIsSavingConfiguration(true);
     setConfigurationSaved(false);
+    setErrorMessage('');
     try {
       const savedFields = await Promise.all(draftFields.map(async (field) => {
         const result = await saveCapdevFieldDefinition({
@@ -337,9 +343,13 @@ export default function CapdevConfigPage() {
         setConfigurationSaved(true);
         if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
         configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
+      } else {
+        const failed = savedFields.find(({ result }) => !result.success || !result.id);
+        showConfigurationError(failed?.result.error || 'Unable to save field configuration.');
       }
     } catch (error) {
       console.error('Configuration save failed:', error);
+      showConfigurationError(error instanceof Error ? error.message : 'Unable to save field configuration.');
     } finally {
       setIsSavingConfiguration(false);
     }
@@ -705,6 +715,12 @@ export default function CapdevConfigPage() {
           Configure required and optional fields, then drag to set their order.
         </Typography>
 
+        {errorMessage && (
+          <Alert id="capdev-configuration-error" tabIndex={-1} severity="error" onClose={() => setErrorMessage('')} sx={{ mb: 3 }}>
+            {errorMessage}
+          </Alert>
+        )}
+
         <Card
           variant="outlined"
           sx={{
@@ -953,6 +969,7 @@ export default function CapdevConfigPage() {
           </CardContent>
         </Card>
       </Container>
+      <DeleteConfirmationDialog open={Boolean(deletingField)} title="Delete Form Field?" recordLabel={deletingField?.name || 'Untitled field'} onClose={() => setDeletingField(null)} onConfirm={confirmDeleteField} />
       <Button
         variant="contained"
         size="large"
