@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import EmailNotificationSettings from '@/components/EmailNotificationSettings';
+import { NOTIFICATION_FILTERS, type NotificationFilterType } from '@/lib/notification-types';
 import {
   Badge,
   Box,
@@ -35,18 +37,6 @@ import {
   markAllNotificationsAsRead,
   type NotificationItem,
 } from '@/app/actions';
-
-const NOTIFICATION_FILTERS = [
-  { type: 'inactivity_reminder', label: 'Inactivity Reminders' },
-  { type: 'new_request', label: 'Request Submissions' },
-  { type: 'status_update', label: 'Status Updates' },
-  { type: 'completed', label: 'Completed Requests' },
-  { type: 'denied', label: 'Denied Requests' },
-  { type: 'capdev_created', label: 'CapDev Creation' },
-  { type: 'role_approval', label: 'Role Approvals' },
-] as const;
-
-type NotificationFilterType = (typeof NOTIFICATION_FILTERS)[number]['type'];
 
 function formatRelativeTime(dateInput: Date | string): string {
   const date = new Date(dateInput);
@@ -294,6 +284,7 @@ export default function NotificationsMenu() {
               />
             )}
           </Stack>
+          <EmailNotificationSettings />
           {unreadCount > 0 && (
             <Button
               size="small"

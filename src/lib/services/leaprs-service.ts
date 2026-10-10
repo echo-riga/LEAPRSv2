@@ -1,4 +1,5 @@
 import { ARCHIVED_READ_ONLY } from '@/lib/archive-policy';
+import { scheduleNotificationEmails } from '@/lib/notification-email';
 import { db } from '@/db';
 import { withTransaction } from '@/db/transaction';
 import { claimRequestFolder } from '@/lib/request-storage';
@@ -124,6 +125,7 @@ export async function emitNotification(input: {
     link: input.link,
     type: input.type,
   });
+  scheduleNotificationEmails();
 }
 
 /**
@@ -445,7 +447,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
     capdevId: created.capdevId,
     requestId: created.id,
     title: `New Requisition: ${created.setting === 'internal' ? 'In-House' : created.setting === 'external' ? 'External' : 'CapDev Request'}`,
-    message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+    message: `${created.requestorName || 'Requestor'} submitted a request for ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
     link: `/portal/capdev/${created.capdevId}/requests#request-record-${created.id}`,
     type: 'new_request',
   });

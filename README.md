@@ -82,6 +82,44 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Deploy on Vercel
 
+### Notification emails
+
+In-app notifications also send individual emails to involved active users' registered
+account addresses through Resend. Each user saves their own seven notification-type
+preferences in Notifications → Configure Email Notifications; administrators can
+open the same preferences from Settings → System Settings. All types default to
+enabled. Preferences do not change the in-app filters, verification codes, or
+password reset emails. Permissions and preferences are rechecked before sending.
+
+Apply the additive schema before deploying:
+
+```powershell
+node --use-system-ca scripts/migrate-notification-email.mjs
+```
+
+Existing notifications are excluded from email delivery. New events use durable
+per-user delivery records and stable Resend idempotency keys. Provider failures
+retry on subsequent notification refreshes or scheduled runs (five attempts, within
+20 hours of the first attempt). Email failures do not roll back business actions.
+Sent means Resend accepted the message, not guaranteed inbox placement.
+
+Configure server-only `RESEND_API_KEY`, `RESEND_FROM`, and
+`APP_URL=https://leaprs-v2.vercel.app` in the deployment environment. On Vercel the
+production project URL is also supported as a fallback. Events trigger delivery
+after the request completes; portal notification refreshes also drain pending mail.
+Inactivity reminders retain their existing on-demand creation behavior.
+
+For reminders and retries while the portal is closed, schedule an authenticated
+GET to `/api/notifications/email` with `Authorization: Bearer <CRON_SECRET>`.
+Set a separate strong `CRON_SECRET` in the server environment and configure your
+scheduler (e.g. Vercel Cron) to invoke the route at the desired interval. The route
+creates due reminders and drains up to 20 deliveries per run. No schedule is
+enabled by this code alone; choose an interval supported by your hosting plan.
+
+Validate using `node --use-system-ca --experimental-strip-types --test
+scripts/notification-email-database.test.mjs scripts/request-reminders-database.test.mjs`.
+Tests use disposable database schemas and a mocked email provider.
+
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

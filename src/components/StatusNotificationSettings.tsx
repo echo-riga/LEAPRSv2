@@ -61,11 +61,11 @@ export default function StatusNotificationSettings() {
         onClick={() => void handleOpen()}
         sx={{ p: 0, minWidth: 0, fontWeight: 700, '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}
       >
-        Configure Notifications
+        Configure Inactivity Reminders
       </Button>
       <Dialog open={open} onClose={() => { if (!saving) setOpen(false); }} fullWidth maxWidth="sm" aria-labelledby="status-notification-settings-title">
         <DialogTitle id="status-notification-settings-title" sx={{ fontWeight: 800 }}>
-          Status Update Notifications
+          Inactivity Reminders
         </DialogTitle>
         <DialogContent dividers sx={{ py: 3 }}>
           <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start', mb: 3 }}>
@@ -99,7 +99,7 @@ export default function StatusNotificationSettings() {
           <Button variant="contained" disabled={!valid || !loaded || loading || saving} onClick={() => void handleSave()}>{saving ? 'Saving...' : 'Save'}</Button>
         </DialogActions>
       </Dialog>
-      <ActionErrorDialog open={Boolean(error)} title="Notification Settings" message={error} onClose={() => setError('')} />
+      <ActionErrorDialog open={Boolean(error)} title="Inactivity Reminders" message={error} onClose={() => setError('')} />
     </>
   );
 }

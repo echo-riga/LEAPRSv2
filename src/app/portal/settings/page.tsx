@@ -18,6 +18,7 @@ import {
 } from '@mui/material';
 import { SettingsGridSkeleton } from '@/components/Skeletons';
 import StatusNotificationSettings from '@/components/StatusNotificationSettings';
+import EmailNotificationSettings from '@/components/EmailNotificationSettings';
 import {
   People as PeopleIcon,
   Build as MaintenanceIcon,
@@ -64,8 +65,6 @@ export default function SettingsPage() {
         if (access.success) setRole(access.role);
         setAccessLoading(false);
       });
-    } else if (!session.isPending) {
-      setAccessLoading(false);
     }
   }, [session.data, session.isPending]);
 
@@ -76,7 +75,7 @@ export default function SettingsPage() {
     }
   }, [session.isPending, session.data, router]);
 
-  if (session.isPending || accessLoading) {
+  if (session.isPending || (session.data && accessLoading)) {
     return <SettingsGridSkeleton />;
   }
 
@@ -121,12 +120,15 @@ export default function SettingsPage() {
       ),
     },
     {
-      title: 'Maintenance Mode',
+      title: 'System Settings',
       icon: <MaintenanceIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'Temporarily restrict portal access to administrators only.',
-      control: (
-        <Box sx={{ mt: 1.5 }}>
+      description: 'Manage maintenance mode and email notifications.',
+      footer: (
+        <Box>
+          <Stack direction="row" useFlexGap spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
+          <EmailNotificationSettings />
           <FormControlLabel
+            sx={{ m: 0 }}
             control={
               <Switch
                 checked={maintenanceMode}
@@ -143,10 +145,11 @@ export default function SettingsPage() {
                   color: maintenanceMode ? 'error.main' : 'text.secondary',
                 }}
               >
-                {maintenanceMode ? 'Active (Admins only)' : 'Inactive (All roles online)'}
+                Maintenance Mode
               </Typography>
             }
           />
+          </Stack>
           {maintenanceError && <Typography variant="caption" color="error">{maintenanceError}</Typography>}
         </Box>
       ),
@@ -292,7 +295,7 @@ export default function SettingsPage() {
                   <Typography
                     variant="body2"
                     color="text.secondary"
-                    sx={{ flexGrow: item.title === 'Maintenance Mode' ? 0 : 1 }}
+                    sx={{ flexGrow: 1 }}
                   >
                     {item.description}
                   </Typography>
@@ -301,6 +304,7 @@ export default function SettingsPage() {
 
                   {(item.footer || item.actionText) && <>
                     <Divider sx={{ my: 2 }} />
+                    <Box sx={{ minHeight: 38, display: 'flex', alignItems: 'center', '& > *': { width: item.footer ? '100%' : 'auto' } }}>
                     {item.footer || <Button
                       variant="text"
                       color="primary"
@@ -316,6 +320,7 @@ export default function SettingsPage() {
                     >
                       {item.actionText}
                     </Button>}
+                    </Box>
                   </>}
                 </CardContent>
               </Card>

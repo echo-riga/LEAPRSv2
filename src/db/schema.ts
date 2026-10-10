@@ -243,10 +243,36 @@ export const notifications = pgTable('notifications', {
   link: text('link').notNull(),
   type: varchar('type', { length: 50 }).default('status_update').notNull(),
   reminderKey: varchar('reminder_key', { length: 100 }),
+  emailEligible: boolean('email_eligible').default(true).notNull(),
   isRead: boolean('is_read').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
   uniqueIndex('notifications_reminder_key_idx').on(table.reminderKey),
+]);
+
+export const emailNotificationPreferences = pgTable('email_notification_preferences', {
+  userId: text('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  enabledTypes: jsonb('enabled_types').$type<string[]>().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export type NotificationEmailPayload = { from: string; to: string; subject: string; text: string };
+export const notificationEmailDeliveries = pgTable('notification_email_deliveries', {
+  id: serial('id').primaryKey(),
+  notificationId: integer('notification_id').notNull().references(() => notifications.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  payload: jsonb('payload').$type<NotificationEmailPayload>().notNull(),
+  status: varchar('status', { length: 20 }).default('pending').notNull(),
+  attempts: integer('attempts').default(0).notNull(),
+  claimToken: text('claim_token'),
+  claimedAt: timestamp('claimed_at'),
+  firstAttemptAt: timestamp('first_attempt_at'),
+  nextAttemptAt: timestamp('next_attempt_at').defaultNow().notNull(),
+  sentAt: timestamp('sent_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('notification_email_deliveries_notification_id_user_id_key').on(table.notificationId, table.userId),
+  index('notification_email_pending_idx').on(table.status, table.nextAttemptAt),
 ]);
 
 // Immutable activity history. Actor and entity values are snapshots by design,

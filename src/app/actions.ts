@@ -1,6 +1,11 @@
 'use server';
 
 import { db } from '@/db';
+import { notificationAudienceCondition } from '@/lib/notification-audience';
+import { requestNotificationWording } from '@/lib/notification-wording';
+import { scheduleNotificationEmails } from '@/lib/notification-email';
+import { emailNotificationPreferences } from '@/db/schema';
+import { DEFAULT_EMAIL_TYPES, validateEmailTypes } from '@/lib/notification-types';
 import { withTransaction, type Transaction } from '@/db/transaction';
 import { requestStorageFolders, mcpOAuthGrants } from '@/db/schema';
 import { deleteRequestRecords } from '@/lib/request-deletion';
@@ -13,7 +18,7 @@ import { auditChanges, requestLabel } from '@/lib/audit-description';
 import { ARCHIVED_READ_ONLY, isArchiveReadOnly } from '@/lib/archive-policy';
 import { isAllowedSignupEmail, SIGNUP_EMAIL_ERROR } from '@/lib/signup-email';
 import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, statusUpdateFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
-import { sql, count, and, eq, getTableColumns, lte, gte, asc, desc, or, isNull, isNotNull, ne, ilike, inArray, type SQL } from 'drizzle-orm';
+import { sql, count, and, eq, getTableColumns, lte, gte, asc, desc, or, isNull, isNotNull, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail, sendSignupVerificationEmail } from '@/lib/email';
 import {
@@ -28,7 +33,7 @@ import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { headers } from 'next/headers';
-import { activeReminderCondition, getRequestInactivitySummaries, readInactivityDays, syncRequestReminders } from '@/lib/request-reminders';
+import { getRequestInactivitySummaries, readInactivityDays, syncRequestReminders } from '@/lib/request-reminders';
 import { DEFAULT_INACTIVITY_DAYS, INACTIVITY_SETTING_KEY, inactivityMessage, validInactivityDays } from '@/lib/request-inactivity';
 import { getDynamicFieldValue, getInvalidComboboxFields, hasComboboxOptions } from '@/lib/dynamic-fields';
 import { PORTAL_CHATBOT_GUIDE } from '@/lib/portal-chatbot-guide';
@@ -1419,7 +1424,7 @@ export async function createCapdev(data: CapdevInput) {
     if (existing) return { success: false, error: `A CapDev project with AIP Code ${aipCode} already exists.` };
     const [created] = await db.insert(capdevs).values({ ...data, aipCode, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', updatedById: access.userId, initialBudget: data.budget }).returning();
     await writeAuditLog(access, { action: 'created', entityType: 'capdev', entityId: created.id, entityLabel: created.aipCode, details: { department: created.department, initialBudget: created.initialBudget } });
-    void createNotification({
+    await createNotification({
       actorId: access.userId,
       capdevId: created.id,
       title: `New CapDev Project: ${created.aipCode}`,
@@ -2147,12 +2152,12 @@ export async function createRequest(data: RequestInput) {
       return saved;
     });
     await writeAuditLog(access, { action: 'created', entityType: 'request', entityId: created.id, entityLabel: `Request #${created.id}`, details: { capdevId: created.capdevId, setting: created.setting, requestedBudget: created.requestedBudget, requestorName: created.requestorName } });
-    void createNotification({
+    await createNotification({
       actorId: access.userId,
       capdevId: created.capdevId,
       requestId: created.id,
       title: `New Requisition: ${created.setting === 'internal' ? 'In-House' : created.setting === 'external' ? 'External' : 'CapDev Request'}`,
-      message: `${created.requestorName || 'Staff'} submitted request #${created.id} for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+      message: `${created.requestorName || 'Requestor'} submitted a request for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
       link: `/portal/capdev/${created.capdevId}/requests#request-record-${created.id}`,
       type: 'new_request',
     });
@@ -2582,13 +2587,13 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
 
     await writeAuditLog(access, { action: 'status_changed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { capdevId: req.capdevId, requestorName: req.requestorName, previousStatus: req.status, status } });
 
-    void createNotification({
+    await createNotification({
       actorId: access.userId,
       userId: req.userId || null,
       capdevId: req.capdevId,
       requestId,
-      title: `Request #${requestId} ${status === 'completed' ? 'Completed' : 'Denied'}`,
-      message: `Request #${requestId} was resolved as ${status}.`,
+      title: `${req.requestorName || 'Requestor'} · Request ${status === 'completed' ? 'Completed' : 'Denied'}`,
+      message: `The request for ${req.requestorName || 'Requestor'} was resolved as ${status}.`,
       link: `/portal/capdev/${req.capdevId}/requests/${requestId}/status#request-status-resolution`,
       type: status,
     });
@@ -2625,12 +2630,12 @@ export async function stopRequestProgress(data: StopRequestInput) {
       return { request, stopper };
     });
     await writeAuditLog(access, { action: 'stopped', entityType: 'request', entityId: data.requestId, entityLabel: `Request #${data.requestId}`, details: { reason: data.reason.trim(), statusUpdateId: stopper.id } });
-    void createNotification({
+    await createNotification({
       actorId: access.userId,
       userId: request.userId,
       capdevId: request.capdevId,
       requestId: data.requestId,
-      title: `Request #${data.requestId} Stopped`,
+      title: `${request.requestorName || 'Requestor'} · Request Stopped`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'} stopped progress: ${data.reason.trim().slice(0, 90)}`,
       link: `/portal/capdev/${request.capdevId}/requests/${data.requestId}/status#request-status-update-${stopper.id}`,
       type: 'status_update',
@@ -2659,12 +2664,12 @@ export async function resumeRequestProgress(requestId: number) {
       return request;
     });
     await writeAuditLog(access, { action: 'resumed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { stopperId: request.activeStopperId } });
-    void createNotification({
+    await createNotification({
       actorId: access.userId,
       userId: request.userId,
       capdevId: request.capdevId,
       requestId,
-      title: `Request #${requestId} Resumed`,
+      title: `${request.requestorName || 'Requestor'} · Request Resumed`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'} resumed progress.`,
       link: `/portal/capdev/${request.capdevId}/requests/${requestId}/status#request-status-update-${request.activeStopperId}`,
       type: 'status_update',
@@ -2741,14 +2746,14 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
     });
 
     // 3. Send notification (notifies request owner or other staff, never the actor who posted the status update)
-    void createNotification({
+    await createNotification({
       actorId: access.userId,
       userId: existingReq[0].userId !== access.userId ? existingReq[0].userId : null,
       capdevId: existingReq[0].capdevId,
       requestId: data.requestId,
       title: data.statusMark
-        ? `Request #${data.requestId} Update: [${data.statusMark.toUpperCase()}]`
-        : `Status Update on Request #${data.requestId}`,
+        ? `${existingReq[0].requestorName || 'Requestor'} · Update: [${data.statusMark.toUpperCase()}]`
+        : `${existingReq[0].requestorName || 'Requestor'} · Status Update`,
       message: `${session?.user?.name || session?.user?.email || 'Staff'}: ${data.statusUpdate.slice(0, 90)}`,
       link: `/portal/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status#request-status-update-${isStopperResponse ? data.stopperId : createdUpdate.id}`,
       type: 'status_update',
@@ -2775,46 +2780,29 @@ export type NotificationItem = {
   createdAt: Date | string;
 };
 
-const REQUEST_NOTIFICATION_TYPES = ['new_request', 'status_update', 'completed', 'denied', 'inactivity_reminder'];
-const ALL_NOTIFICATION_TYPES = ['capdev_created', ...REQUEST_NOTIFICATION_TYPES];
-const OWNER_NOTIFICATION_TYPES = ['status_update', 'completed', 'denied', 'inactivity_reminder'];
-
-function notificationAudienceCondition(access: UserAccess): SQL {
-  const hasLiveRecord = or(
-    and(isNotNull(notifications.requestId), isNotNull(requests.id)),
-    and(isNull(notifications.requestId), isNotNull(notifications.capdevId), isNotNull(capdevs.id)),
-  )!;
-  const isAnotherUsersAction = and(
-    isNotNull(notifications.actorId),
-    ne(notifications.actorId, access.userId),
-  )!;
-
-  let isInvolved: SQL;
-  if (access.role === 'admin') {
-    isInvolved = inArray(notifications.type, REQUEST_NOTIFICATION_TYPES);
-  } else if (access.role === 'employee') {
-    isInvolved = and(
-      inArray(notifications.type, OWNER_NOTIFICATION_TYPES),
-      eq(requests.userId, access.userId),
-    )!;
-  } else if (access.role === 'employee-department') {
-    isInvolved = inArray(notifications.type, REQUEST_NOTIFICATION_TYPES);
-  } else if (access.role === 'viewer') {
-    isInvolved = and(
-      inArray(notifications.type, ALL_NOTIFICATION_TYPES),
-      eq(capdevs.department, access.department),
-    )!;
-  } else {
-    isInvolved = inArray(notifications.type, ALL_NOTIFICATION_TYPES);
+export async function getEmailNotificationPreferences() {
+  try {
+    const access = await getCurrentAccess();
+    if (!access) return { success: false as const, error: unauthorized.error };
+    const [preference] = await db.select().from(emailNotificationPreferences)
+      .where(eq(emailNotificationPreferences.userId, access.userId)).limit(1);
+    return { success: true as const, enabledTypes: validateEmailTypes(preference?.enabledTypes ?? DEFAULT_EMAIL_TYPES) };
+  } catch {
+    return { success: false as const, error: 'Unable to load email preferences.' };
   }
+}
 
-  const standardVisibility = and(hasLiveRecord, isInvolved, or(
-    and(ne(notifications.type, 'inactivity_reminder'), isAnotherUsersAction),
-    activeReminderCondition(),
-  ))!;
-  return access.role === 'admin'
-    ? or(eq(notifications.type, 'role_approval'), standardVisibility)!
-    : standardVisibility;
+export async function saveEmailNotificationPreferences(types: unknown) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access) return { success: false as const, error: unauthorized.error };
+    const enabledTypes = validateEmailTypes(types);
+    await db.insert(emailNotificationPreferences).values({ userId: access.userId, enabledTypes })
+      .onConflictDoUpdate({ target: emailNotificationPreferences.userId, set: { enabledTypes, updatedAt: new Date() } });
+    return { success: true as const };
+  } catch {
+    return { success: false as const, error: 'Unable to save email preferences.' };
+  }
 }
 
 export async function getNotifications(): Promise<{ success: boolean; notifications: NotificationItem[]; unreadCount: number }> {
@@ -2823,13 +2811,14 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
     if (!access) return { success: false, notifications: [], unreadCount: 0 };
 
     await syncRequestReminders(access);
+    scheduleNotificationEmails();
 
     const userReads = await db.select({ notificationId: notificationReads.notificationId })
       .from(notificationReads)
       .where(eq(notificationReads.userId, access.userId));
     const readIds = new Set(userReads.map(r => r.notificationId));
 
-    const rows = await db.select({ notification: getTableColumns(notifications) })
+    const rows = await db.select({ notification: getTableColumns(notifications), requestorName: requests.requestorName })
       .from(notifications)
       .leftJoin(requests, eq(notifications.requestId, requests.id))
       .leftJoin(capdevs, eq(notifications.capdevId, capdevs.id))
@@ -2840,15 +2829,15 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
     const reminderRequestIds = rows.filter(({ notification }) => notification.type === 'inactivity_reminder')
       .map(({ notification }) => notification.requestId).filter((id): id is number => id !== null);
     const inactivity = await getRequestInactivitySummaries(reminderRequestIds);
-    const formatted: NotificationItem[] = rows.map(({ notification: n }) => ({
+    const formatted: NotificationItem[] = rows.map(({ notification: n, requestorName }) => ({
       id: n.id,
       userId: n.userId,
       actorId: n.actorId,
       capdevId: n.capdevId,
       requestId: n.requestId,
-      title: n.title,
+      title: requestNotificationWording(n.title, requestorName),
       message: n.type === 'inactivity_reminder' && n.requestId && inactivity.has(n.requestId)
-        ? inactivityMessage(inactivity.get(n.requestId)!.days) : n.message,
+        ? inactivityMessage(inactivity.get(n.requestId)!.days) : requestNotificationWording(n.message, requestorName),
       link: n.link,
       type: n.type,
       isRead: n.isRead || readIds.has(n.id),
@@ -2935,6 +2924,7 @@ async function createNotification(data: {
       link: data.link,
       type: data.type || 'status_update',
     }).returning();
+    scheduleNotificationEmails();
     return { success: true, notification: created };
   } catch (error) {
     console.error('Failed to create notification:', error);

@@ -19,12 +19,12 @@ registerHooks({ resolve(specifier, ctx, nextResolve) {
 } });
 const { syncRequestReminders, getRequestInactivitySummaries, activeReminderCondition, readInactivityDays } = await import('../src/lib/request-reminders.ts');
 const { requests, capdevs, notifications } = await import('../src/db/schema.ts');
-const source = readFileSync(new URL('../src/app/actions.ts', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../src/lib/notification-audience.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('actions.ts', source, ts.ScriptTarget.Latest, true);
 const declarations = ast.statements.filter((node) => ts.isVariableStatement(node) && node.declarationList.declarations.some((d) => ['REQUEST_NOTIFICATION_TYPES', 'ALL_NOTIFICATION_TYPES', 'OWNER_NOTIFICATION_TYPES'].includes(d.name.getText(ast))));
 const audienceNode = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'notificationAudienceCondition');
 assert.ok(audienceNode);
-const compiled = ts.transpileModule([...declarations, audienceNode].map((node) => node.getText(ast)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
+const compiled = ts.transpileModule([...declarations, audienceNode].map((node) => node.getText(ast).replace(/^export /, '')).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 const audience = new Function('deps', 'const { and, eq, inArray, isNotNull, isNull, ne, or, requests, capdevs, notifications, activeReminderCondition } = deps; ' + compiled + '\nreturn notificationAudienceCondition;')({ and, eq, inArray, isNotNull, isNull, ne, or, requests, capdevs, notifications, activeReminderCondition });
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const schemaName = 'reminder_test_' + randomUUID().replaceAll('-', '');
