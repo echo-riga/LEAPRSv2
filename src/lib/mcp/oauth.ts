@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { db } from '@/db';
+import { withTransaction, type Transaction } from '@/db/transaction';
 import { mcpOAuthClients, mcpOAuthGrants, systemSettings, users } from '@/db/schema';
 import { validateClientRegistration } from '@/lib/mcp/client-registration';
 import { auth } from '@/lib/auth/server';
@@ -95,9 +96,13 @@ export async function getBearerAccess(authorization: string | null): Promise<Use
 
 export async function issueGrant(kind: 'code' | 'access' | 'refresh', identity: {
   userId: string; name: string; email: string | null;
-}, clientId: string, resource: string, lifetimeMs: number, redirectUri?: string, codeChallenge?: string) {
+}, clientId: string, resource: string, lifetimeMs: number, redirectUri?: string, codeChallenge?: string, tx?: Transaction): Promise<string> {
+  if (!tx) return withTransaction(async transaction => {
+    await lockOAuthClient(transaction, clientId);
+    return issueGrant(kind, identity, clientId, resource, lifetimeMs, redirectUri, codeChallenge, transaction);
+  });
   const token = randomToken();
-  await db.insert(mcpOAuthGrants).values({
+  await tx.insert(mcpOAuthGrants).values({
     tokenHash: tokenHash(token), kind, userId: identity.userId,
     userName: identity.name, userEmail: identity.email, clientId, resource,
     redirectUri, codeChallenge, expiresAt: new Date(Date.now() + lifetimeMs),
@@ -105,8 +110,21 @@ export async function issueGrant(kind: 'code' | 'access' | 'refresh', identity: 
   return token;
 }
 
-export async function consumeGrant(token: string, kind: 'code' | 'refresh', clientId: string) {
-  const [grant] = await db.delete(mcpOAuthGrants).where(and(
+export async function lockOAuthClient(tx: Transaction, clientId: string) {
+  const [client] = await tx.select().from(mcpOAuthClients).where(eq(mcpOAuthClients.clientId, clientId)).for('update');
+  if (!client) throw new Error('OAuth client no longer exists.');
+}
+
+export async function revokeClientGrants(userId: string, clientId: string) {
+  await withTransaction(async tx => {
+    // Token exchange takes this same lock, so refresh cannot recreate revoked grants.
+    await lockOAuthClient(tx, clientId);
+    await tx.delete(mcpOAuthGrants).where(and(eq(mcpOAuthGrants.userId, userId), eq(mcpOAuthGrants.clientId, clientId)));
+  });
+}
+
+export async function consumeGrant(token: string, kind: 'code' | 'refresh', clientId: string, tx?: Transaction) {
+  const [grant] = await (tx || db).delete(mcpOAuthGrants).where(and(
     eq(mcpOAuthGrants.tokenHash, tokenHash(token)),
     eq(mcpOAuthGrants.kind, kind),
     eq(mcpOAuthGrants.clientId, clientId),

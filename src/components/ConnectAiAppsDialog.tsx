@@ -6,6 +6,7 @@ import { Check, ContentCopy, ChevronRight } from '@mui/icons-material';
 import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Skeleton, Stack, Tab, Tabs, Typography } from '@mui/material';
 import { getMcpConnectionInfo } from '@/app/mcp-connection-actions';
 import { AI_APP_GUIDES } from '@/lib/ai-app-guides';
+import ConnectedAiAppsDialog from '@/components/ConnectedAiAppsDialog';
 
 export default function ConnectAiAppsDialog() {
   const [open, setOpen] = useState(false);
@@ -45,6 +46,7 @@ export default function ConnectAiAppsDialog() {
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md" aria-labelledby="connect-ai-apps-title">
         <DialogTitle id="connect-ai-apps-title" sx={{ fontWeight: 800 }}>Connect to AI Apps</DialogTitle>
         <DialogContent dividers sx={{ py: 3 }}>
+          <Box sx={{ mb: 2 }}><ConnectedAiAppsDialog /></Box>
           <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Server URL</Typography>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' }, mb: 2 }}>
             <Box sx={{ flex: 1, minWidth: 0, bgcolor: 'background.default', border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>

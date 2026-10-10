@@ -69,7 +69,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'get_my_requests_summary',
-    description: 'Gets the current user or department summary metrics (counts by status) and a list of recent request IDs with titles and statuses.',
+    description: 'Summarizes accessible requests using portal permissions, with full counts by status and recent requestors.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -79,7 +79,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
         },
         status: {
           type: 'string',
-          enum: ['in_progress', 'complete', 'stopped'],
+          enum: ['in_progress', 'completed', 'denied', 'stopped'],
           description: 'Optional status filter.',
         },
       },
@@ -93,7 +93,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
       properties: {
         department: {
           type: 'string',
-          description: 'Department name (optional, only admins can query other departments).',
+          description: 'Optional department name; follows portal project permissions.',
         },
       },
     },
@@ -110,7 +110,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
         },
         department: {
           type: 'string',
-          description: 'Optional department filter for admins.',
+          description: 'Optional department filter within the permitted projects.',
         },
       },
     },

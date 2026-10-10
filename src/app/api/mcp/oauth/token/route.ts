@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { consumeGrant, getOAuthClient, getUserAccess, issueGrant, oauthConfig, pkceChallenge, secretMatches, tokenHash } from '@/lib/mcp/oauth';
+import { consumeGrant, getOAuthClient, getUserAccess, issueGrant, lockOAuthClient, oauthConfig, pkceChallenge, secretMatches, tokenHash } from '@/lib/mcp/oauth';
+import { withTransaction } from '@/db/transaction';
 
 function error(code: string, status = 400) {
   return Response.json({ error: code }, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -31,27 +32,30 @@ export async function POST(req: NextRequest) {
   const resource = String(form.get('resource') || config.resource);
   if (resource !== config.resource) return error('invalid_target');
 
-  let grant;
-  if (grantType === 'authorization_code') {
-    const code = form.get('code');
-    const verifier = form.get('code_verifier');
-    const redirectUri = form.get('redirect_uri');
-    if (typeof code !== 'string' || typeof verifier !== 'string' || typeof redirectUri !== 'string' ||
-        !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return error('invalid_request');
-    grant = await consumeGrant(code, 'code', clientId);
-    if (!grant || grant.redirectUri !== redirectUri || !grant.codeChallenge ||
-        !secretMatches(pkceChallenge(verifier), grant.codeChallenge)) return error('invalid_grant');
-  } else if (grantType === 'refresh_token') {
-    const refreshToken = form.get('refresh_token');
-    if (typeof refreshToken !== 'string') return error('invalid_request');
-    grant = await consumeGrant(refreshToken, 'refresh', clientId);
-    if (!grant) return error('invalid_grant');
-  } else return error('unsupported_grant_type');
+  return withTransaction(async tx => {
+    await lockOAuthClient(tx, clientId);
+    let grant;
+    if (grantType === 'authorization_code') {
+      const code = form.get('code');
+      const verifier = form.get('code_verifier');
+      const redirectUri = form.get('redirect_uri');
+      if (typeof code !== 'string' || typeof verifier !== 'string' || typeof redirectUri !== 'string' ||
+          !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return error('invalid_request');
+      grant = await consumeGrant(code, 'code', clientId, tx);
+      if (!grant || grant.redirectUri !== redirectUri || !grant.codeChallenge ||
+          !secretMatches(pkceChallenge(verifier), grant.codeChallenge)) return error('invalid_grant');
+    } else if (grantType === 'refresh_token') {
+      const refreshToken = form.get('refresh_token');
+      if (typeof refreshToken !== 'string') return error('invalid_request');
+      grant = await consumeGrant(refreshToken, 'refresh', clientId, tx);
+      if (!grant) return error('invalid_grant');
+    } else return error('unsupported_grant_type');
 
-  if (grant.resource !== resource) return error('invalid_target');
-  const identity = { userId: grant.userId, name: grant.userName, email: grant.userEmail };
-  if (!await getUserAccess(identity.userId, identity.name, identity.email)) return error('invalid_grant');
-  const accessToken = await issueGrant('access', identity, clientId, resource, 60 * 60_000);
-  const refreshToken = await issueGrant('refresh', identity, clientId, resource, 30 * 24 * 60 * 60_000);
-  return Response.json({ access_token: accessToken, token_type: 'Bearer', expires_in: 3600, refresh_token: refreshToken, scope: 'mcp' }, { headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } });
+    if (grant.resource !== resource) return error('invalid_target');
+    const identity = { userId: grant.userId, name: grant.userName, email: grant.userEmail };
+    if (!await getUserAccess(identity.userId, identity.name, identity.email)) return error('invalid_grant');
+    const accessToken = await issueGrant('access', identity, clientId, resource, 60 * 60_000, undefined, undefined, tx);
+    const refreshToken = await issueGrant('refresh', identity, clientId, resource, 30 * 24 * 60 * 60_000, undefined, undefined, tx);
+    return Response.json({ access_token: accessToken, token_type: 'Bearer', expires_in: 3600, refresh_token: refreshToken, scope: 'mcp' }, { headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } });
+  });
 }

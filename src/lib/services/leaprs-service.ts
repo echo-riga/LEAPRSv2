@@ -1,5 +1,7 @@
 import { ARCHIVED_READ_ONLY } from '@/lib/archive-policy';
+import { validatePendingAttachments } from '@/lib/background-attachments';
 import { scheduleNotificationEmails } from '@/lib/notification-email';
+import { insertNotificationEvent } from '@/lib/notification-events';
 import { db } from '@/db';
 import { withTransaction } from '@/db/transaction';
 import { claimRequestFolder } from '@/lib/request-storage';
@@ -10,9 +12,9 @@ import {
   requestFieldDefinitions,
   requestStatusUpdates,
   auditLogs,
-  notifications,
 } from '@/db/schema';
-import { isNull, and, desc, eq, getTableColumns } from 'drizzle-orm';
+import { isNull, and, desc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
+import { capdevAccessScope, requestAccessScope } from '@/lib/access-scope';
 import { dynamicFieldStorageKey, getDynamicFieldValue, getInvalidComboboxFields } from '@/lib/dynamic-fields';
 
 export type AppRole = 'admin' | 'employee' | 'employee-department' | 'viewer' | 'viewer-full';
@@ -74,6 +76,12 @@ export function canManageRequests(access: UserAccess) {
   return access.role === 'admin' || access.role === 'employee' || access.role === 'employee-department';
 }
 
+// The portal also treats a completed timeline entry as a completed request.
+const requestIsComplete = sql<boolean>`(${requests.status} = 'completed' or exists (
+  select 1 from ${requestStatusUpdates} where ${requestStatusUpdates.requestId} = ${requests.id}
+  and ${requestStatusUpdates.markAsComplete} = true
+))`;
+
 export async function writeAuditLogEntry(
   access: UserAccess,
   entry: {
@@ -103,29 +111,6 @@ export async function writeAuditLogEntry(
     entityLabel: entry.entityLabel,
     details,
   });
-}
-
-export async function emitNotification(input: {
-  actorId?: string;
-  userId?: string;
-  capdevId?: number;
-  requestId?: number;
-  title: string;
-  message: string;
-  link: string;
-  type: string;
-}) {
-  await db.insert(notifications).values({
-    actorId: input.actorId || null,
-    userId: input.userId || null,
-    capdevId: input.capdevId || null,
-    requestId: input.requestId || null,
-    title: input.title,
-    message: input.message,
-    link: input.link,
-    type: input.type,
-  });
-  scheduleNotificationEmails();
 }
 
 /**
@@ -352,8 +337,8 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
 
   // Validate dynamic required fields
   const schema = await getRequestFormSchemaService(access, input.setting);
-  const additionalInfo = validateRequestInput({ capdevId: capdev.id, setting: input.setting,
-    description: input.description || '', requestedBudget: input.requestedBudget, additionalInfo: input.dynamicFields || {} }).additionalInfo;
+  const additionalInfo = validatePendingAttachments(validateRequestInput({ capdevId: capdev.id, setting: input.setting,
+    description: input.description || '', requestedBudget: input.requestedBudget, additionalInfo: input.dynamicFields || {} }).additionalInfo, access.userId);
   const invalidSelections = getInvalidComboboxFields(schema.dynamicFields, additionalInfo);
   if (invalidSelections.length) return { success: false as const, error: 'Select a configured option for: ' + invalidSelections.join(', ') + '.' };
   // Attach sourceFile or attachments if provided
@@ -405,25 +390,34 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   }
 
   const created = await withTransaction(async (tx) => {
-  const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, capdev.id)).for('update');
-  if (!parent || parent.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
-  const [record] = await tx
-    .insert(requests)
-    .values({
-      capdevId: capdev.id,
-      userId: access.userId,
-      requestorName: access.name || access.email || 'Requestor',
-      setting: input.setting,
-      description: input.description || '',
-      requestedBudget: String(requestedBudgetNum),
-      additionalInfo: {},
-      status: 'in_progress',
-      updatedById: access.userId,
-    })
-    .returning();
-  await claimRequestFolder(tx, access.userId, record.id, additionalInfo);
-  const [saved] = await tx.update(requests).set({ additionalInfo }).where(eq(requests.id, record.id)).returning();
-  return saved;
+    const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, capdev.id)).for('update');
+    if (!parent || parent.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
+    const [record] = await tx
+      .insert(requests)
+      .values({
+        capdevId: capdev.id,
+        userId: access.userId,
+        requestorName: access.name || access.email || 'Requestor',
+        setting: input.setting,
+        description: input.description || '',
+        requestedBudget: String(requestedBudgetNum),
+        additionalInfo: {},
+        status: 'in_progress',
+        updatedById: access.userId,
+      })
+      .returning();
+    await claimRequestFolder(tx, access.userId, record.id, additionalInfo);
+    const [saved] = await tx.update(requests).set({ additionalInfo }).where(eq(requests.id, record.id)).returning();
+    await insertNotificationEvent(tx, {
+      actorId: access.userId,
+      capdevId: saved.capdevId,
+      requestId: saved.id,
+      title: `New Requisition: ${saved.setting === 'internal' ? 'In-House' : saved.setting === 'external' ? 'External' : 'CapDev Request'}`,
+      message: `${saved.requestorName || 'Requestor'} submitted a request for ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+      link: `/portal/capdev/${saved.capdevId}/requests#request-record-${saved.id}`,
+      type: 'new_request',
+    });
+    return saved;
   });
 
   await writeAuditLogEntry(access, {
@@ -442,15 +436,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
     },
   });
 
-  void emitNotification({
-    actorId: access.userId,
-    capdevId: created.capdevId,
-    requestId: created.id,
-    title: `New Requisition: ${created.setting === 'internal' ? 'In-House' : created.setting === 'external' ? 'External' : 'CapDev Request'}`,
-    message: `${created.requestorName || 'Requestor'} submitted a request for ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-    link: `/portal/capdev/${created.capdevId}/requests#request-record-${created.id}`,
-    type: 'new_request',
-  });
+  scheduleNotificationEmails();
 
   return {
     success: true as const,
@@ -465,7 +451,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
  */
 export async function getRequestStatusService(access: UserAccess, requestId: number) {
   const [record] = await db
-    .select({ request: getTableColumns(requests), capdevDepartment: capdevs.department, aipCode: capdevs.aipCode })
+    .select({ request: getTableColumns(requests), capdevDepartment: capdevs.department, aipCode: capdevs.aipCode, isComplete: requestIsComplete })
     .from(requests)
     .innerJoin(capdevs, eq(requests.capdevId, capdevs.id))
     .where(eq(requests.id, requestId))
@@ -500,8 +486,9 @@ export async function getRequestStatusService(access: UserAccess, requestId: num
       setting: record.request.setting,
       description: record.request.description,
       requestedBudget: String(record.request.requestedBudget),
-      status: record.request.status,
-      isStopped: record.request.isStopped,
+      status: record.isComplete ? 'completed' : record.request.status,
+      isComplete: record.isComplete,
+      isStopped: record.request.isStopped && !record.isComplete && record.request.status === 'in_progress',
       createdAt: record.request.createdAt,
       updatedAt: record.request.updatedAt,
       feedbackUrl: record.request.participantFeedbackFormUrl,
@@ -531,16 +518,15 @@ export async function getMyRequestsSummaryService(
 ) {
   const limit = Math.min(Math.max(options?.limit || 10, 1), 50);
 
-  // Build filter based on role
-  const conditions = [];
-  if (access.role === 'employee') {
-    conditions.push(eq(requests.userId, access.userId));
-  } else if (access.role === 'viewer' || access.role === 'employee-department') {
-    conditions.push(eq(capdevs.department, access.department));
-  }
-
+  const conditions: Array<SQL | undefined> = [requestAccessScope(access), isNull(requests.archivedAt), isNull(capdevs.archivedAt)];
   if (options?.status) {
-    conditions.push(eq(requests.status, options.status));
+    const status = options.status === 'complete' ? 'completed' : options.status;
+    if (!['in_progress', 'completed', 'denied', 'stopped'].includes(status)) throw new Error('Invalid request status filter.');
+    conditions.push(status === 'stopped'
+      ? and(eq(requests.status, 'in_progress'), eq(requests.isStopped, true), sql`not ${requestIsComplete}`)
+      : status === 'completed' ? requestIsComplete
+      : status === 'in_progress' ? and(eq(requests.status, status), eq(requests.isStopped, false), sql`not ${requestIsComplete}`)
+      : and(eq(requests.status, status), sql`not ${requestIsComplete}`));
   }
 
   const rows = await db
@@ -548,6 +534,7 @@ export async function getMyRequestsSummaryService(
       request: getTableColumns(requests),
       capdevDepartment: capdevs.department,
       aipCode: capdevs.aipCode,
+      isComplete: requestIsComplete,
     })
     .from(requests)
     .innerJoin(capdevs, eq(requests.capdevId, capdevs.id))
@@ -555,29 +542,34 @@ export async function getMyRequestsSummaryService(
     .orderBy(desc(requests.createdAt))
     .limit(limit);
 
-  const total = rows.length;
-  const inProgress = rows.filter((r) => r.request.status === 'in_progress' && !r.request.isStopped).length;
-  const stopped = rows.filter((r) => r.request.isStopped).length;
-  const complete = rows.filter((r) => r.request.status === 'complete').length;
+  const [totals] = await db.select({
+    total: sql<number>`count(*)::int`,
+    inProgress: sql<number>`count(*) filter (where ${requests.status} = 'in_progress' and not ${requests.isStopped} and not ${requestIsComplete})::int`,
+    stopped: sql<number>`count(*) filter (where ${requests.status} = 'in_progress' and ${requests.isStopped} and not ${requestIsComplete})::int`,
+    complete: sql<number>`count(*) filter (where ${requestIsComplete})::int`,
+    denied: sql<number>`count(*) filter (where ${requests.status} = 'denied' and not ${requestIsComplete})::int`,
+  }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(and(...conditions));
 
   return {
     success: true as const,
     summary: {
-      totalFound: total,
-      inProgressCount: inProgress,
-      stoppedCount: stopped,
-      completeCount: complete,
+      totalFound: Number(totals.total),
+      inProgressCount: Number(totals.inProgress),
+      stoppedCount: Number(totals.stopped),
+      completeCount: Number(totals.complete),
+      deniedCount: Number(totals.denied),
       userDepartment: access.department,
       userRole: access.role,
     },
     requests: rows.map((r) => ({
       id: r.request.id,
+      requestorName: r.request.requestorName,
       capdevAipCode: r.aipCode,
       department: r.capdevDepartment,
       setting: r.request.setting,
       description: r.request.description || 'No description',
       requestedBudget: String(r.request.requestedBudget),
-      status: r.request.isStopped ? 'stopped' : r.request.status,
+      status: r.isComplete ? 'completed' : r.request.isStopped && r.request.status === 'in_progress' ? 'stopped' : r.request.status,
       createdAt: r.request.createdAt.toISOString().split('T')[0],
     })),
   };
@@ -591,7 +583,8 @@ export async function getDepartmentBudgetBalanceService(
   access: UserAccess,
   targetDepartment?: string
 ) {
-  const dept = (access.role === 'admin' && targetDepartment) ? targetDepartment.trim() : access.department;
+  const dept = targetDepartment?.trim() || access.department;
+  if (access.role === 'viewer' && dept !== access.department) throw new Error('You do not have permission to view this department.');
 
   const deptCapdevs = await db
     .select({
@@ -602,7 +595,7 @@ export async function getDepartmentBudgetBalanceService(
       description: capdevs.description,
     })
     .from(capdevs)
-    .where(eq(capdevs.department, dept));
+    .where(and(eq(capdevs.department, dept), isNull(capdevs.archivedAt), capdevAccessScope(access)));
 
   let totalInitial = 0;
   let totalRemaining = 0;
@@ -642,14 +635,9 @@ export async function listAvailableCapdevProjectsService(
   options?: { limit?: number; department?: string }
 ) {
   const limit = Math.min(Math.max(options?.limit || 15, 1), 50);
-  const dept = (access.role === 'admin' && options?.department) ? options.department.trim() : access.department;
-
-  const conditions = [isNull(capdevs.archivedAt)];
-  if (access.role !== 'admin' && access.role !== 'viewer-full') {
-    conditions.push(eq(capdevs.department, dept));
-  } else if (options?.department) {
-    conditions.push(eq(capdevs.department, options.department.trim()));
-  }
+  const dept = options?.department?.trim();
+  if (access.role === 'viewer' && dept && dept !== access.department) throw new Error('You do not have permission to view this department.');
+  const conditions = [isNull(capdevs.archivedAt), capdevAccessScope(access), dept ? eq(capdevs.department, dept) : undefined];
 
   const rows = await db
     .select({
@@ -668,7 +656,7 @@ export async function listAvailableCapdevProjectsService(
   return {
     success: true as const,
     total: rows.length,
-    departmentFilter: access.role !== 'admin' && access.role !== 'viewer-full' ? dept : (options?.department || 'All'),
+    departmentFilter: access.role === 'viewer' ? access.department : (dept || 'All'),
     projects: rows.map((p) => ({
       id: p.id,
       aipCode: p.aipCode,
