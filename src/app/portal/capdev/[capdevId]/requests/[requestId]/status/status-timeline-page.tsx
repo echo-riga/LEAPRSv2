@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Add as AddIcon,
   VisibilityOutlined as VisibilityIcon,
@@ -18,6 +18,7 @@ import {
   Payments as PaymentsIcon,
   PlayArrow as ResumeIcon,
   PushPin as StopperIcon,
+  NotificationsActiveRounded as ReminderIcon,
 } from '@mui/icons-material';
 import {
   Alert,
@@ -74,6 +75,7 @@ import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import type { EvaluationSummary } from '@/lib/google-forms';
 import FileFieldChecklist from '@/components/FileFieldChecklist';
 import { focusFormError } from '@/lib/form-error-focus';
+import { orderedStatusValues, showPrimaryStatus, showStandaloneRemarks } from '@/lib/status-update-display';
 
 type DynamicField = {
   id: number;
@@ -87,7 +89,10 @@ type DynamicField = {
   placeholder: string | null;
 };
 
+import { inactivityMessage, type RequestInactivity } from '@/lib/request-inactivity';
+
 type RequestSummary = {
+  inactivity: RequestInactivity | null;
   budgetDeductedAt: Date | string | null;
   archivedAt: Date | string | null;
   requestorName: string | null;
@@ -302,6 +307,9 @@ function ConnectorLeft({ toResolution = false }: { toResolution?: boolean }) {
 
 export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: number; requestId: number }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const reminderQuery = searchParams.get('reminder');
+  const [reminderRequested, setReminderRequested] = useState(false);
   const session = authClient.useSession();
   const [request, setRequest] = useState<RequestSummary | null>(null);
   const [viewingUpdate, setViewingUpdate] = useState<StatusUpdate | null>(null);
@@ -333,8 +341,25 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [timelineFocus, setTimelineFocus] = useState<TimelineFocusRequest | null>(null);
 
   useEffect(() => {
+    if (reminderQuery === '1') void Promise.resolve().then(() => setReminderRequested(true));
+  }, [reminderQuery]);
+
+  const closeReminder = () => {
+    setReminderRequested(false);
+    const latestUpdateId = request?.inactivity?.latestUpdateId;
+    if (latestUpdateId && updates.some((update) => update.id === latestUpdateId)) {
+      setTimelineFocus({ targetId: 'request-status-update-' + latestUpdateId, nonce: Date.now() });
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete('reminder');
+    if (url.hash === '#request-status-start') url.hash = '';
+    router.replace(url.pathname + url.search + url.hash, { scroll: false });
+  };
+
+  useEffect(() => {
     const focusTarget = (targetId: string) => {
       if (
+        targetId !== 'request-status-start' &&
         targetId !== 'request-status-resolution' &&
         !targetId.startsWith('request-status-update-')
       ) return;
@@ -348,7 +373,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     };
 
     const handleNotificationFocus = (event: Event) => {
-      const detail = (event as CustomEvent<{ targetId?: string }>).detail;
+      const detail = (event as CustomEvent<{ targetId?: string; reminder?: boolean }>).detail;
+      setReminderRequested(Boolean(detail?.reminder));
       if (detail?.targetId) focusTarget(detail.targetId);
     };
 
@@ -369,7 +395,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   }, [requestId]);
 
   useEffect(() => {
-    if (!timelineFocus || loading) return;
+    if (!timelineFocus || loading || reminderRequested) return;
     const target = document.getElementById(timelineFocus.targetId);
     if (!target) return;
 
@@ -379,7 +405,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     }, 2500);
 
     return () => window.clearTimeout(timeoutId);
-  }, [loading, timelineFocus, updates]);
+  }, [loading, reminderRequested, timelineFocus, updates]);
 
   useEffect(() => {
     if (session.data) {
@@ -434,6 +460,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       }
       setRequest({
         id: requestData.id,
+        inactivity: requestData.inactivity,
         archivedAt: requestData.archivedAt,
         budgetDeductedAt: requestData.budgetDeductedAt,
         requestorName: requestData.requestorName,
@@ -461,6 +488,18 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
 
   useEffect(() => {
     void Promise.resolve().then(loadData);
+  }, [loadData]);
+
+  useEffect(() => {
+    const refresh = () => { void loadData(); };
+    const interval = window.setInterval(refresh, 30_000);
+    window.addEventListener('leaprs:reminder-settings-changed', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('leaprs:reminder-settings-changed', refresh);
+      window.removeEventListener('focus', refresh);
+    };
   }, [loadData]);
 
   const hasDeductedBudget = useMemo(
@@ -968,9 +1007,26 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   }
 
   const allCardsCount = visibleUpdates.length + 1;
+  const viewingFields = orderedStatusValues(viewingUpdate?.additionalInfo || {}, definitions);
+  const viewingAttachmentIds = new Set(viewingFields.flatMap(([, value]) => getAttachments(value).map((file) => file.id)));
+  const viewingStandaloneFiles = getAttachments(viewingUpdate?.files).filter((file) => !viewingAttachmentIds.has(file.id));
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px)' }}>
+      <Dialog open={reminderRequested && Boolean(request.inactivity)} onClose={closeReminder} maxWidth="xs" fullWidth aria-labelledby="inactivity-reminder-title">
+        <DialogTitle id="inactivity-reminder-title" sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 800 }}>
+          <ReminderIcon color="error" />
+          No Progress
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography color="error.main" sx={{ fontWeight: 600 }}>
+            {request.inactivity ? inactivityMessage(request.inactivity.days) : ''}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button variant="contained" onClick={closeReminder}>Understood</Button>
+        </DialogActions>
+      </Dialog>
       <Container maxWidth={false} sx={{ p: 0, width: '100%', flexGrow: 1 }}>
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
@@ -1011,6 +1067,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           </Alert>
         )}
 
+
         <Box
           sx={{
             display: 'grid',
@@ -1036,35 +1093,17 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             const stopperResponses = isStopper
               ? updates.filter((item) => item.isStopperResponse && item.stopperId === update.id)
               : [];
+            const isInactive = !archived && Boolean(request.inactivity && (
+              request.inactivity.latestUpdateId === update.id ||
+              stopperResponses.some((response) => response.id === request.inactivity?.latestUpdateId)
+            ));
             const wasResumed = isStopper && updates.some((item) => item.isResume && item.stopperId === update.id);
             const isActiveStopper = isStopper && request.isStopped && request.activeStopperId === update.id;
 
             // Extra dynamic fields (beyond statusUpdate, remarks, and standard attachments) in additionalInfo
-            const extraFields = update.additionalInfo
-              ? Object.entries(update.additionalInfo).filter(([key, val]) => {
-                  if (!val) return false;
-                  const matchingDef = definitions.find((d) => dynamicFieldStorageKey(d) === key || d.name === key);
-                  if (matchingDef) {
-                    const lower = matchingDef.name.trim().toLowerCase();
-                    if (
-                      lower === 'status update' ||
-                      lower === 'status' ||
-                      lower === 'remarks' ||
-                      lower === 'remark' ||
-                      lower === 'attachments' ||
-                      lower === 'attachment' ||
-                      lower === 'files' ||
-                      lower === 'attach files'
-                    ) return false;
-                  }
-                  return true;
-                })
-              : [];
-            const hidePrimaryStatus = !isStopper && (
-              extraFields.some(([, value]) =>
-                typeof value === 'string' && value.trim() === update.statusUpdate.trim()
-              ) || (extraFields.length > 0 && update.statusUpdate === 'Status updated')
-            );
+            const extraFields = orderedStatusValues(update.additionalInfo || {}, definitions);
+            const hidePrimaryStatus = !showPrimaryStatus(update.statusUpdate, extraFields, isStopper);
+            const showRemarks = showStandaloneRemarks(update.remarks, extraFields);
             const dynamicAttachmentIds = new Set(
               extraFields.flatMap(([, value]) => getAttachments(value).map((file) => file.id))
             );
@@ -1084,6 +1123,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                 <Card
                   variant="outlined"
                   sx={{
+                    position: 'relative',
+                    overflow: 'visible',
                     borderRadius: 2,
                     bgcolor: archived ? 'grey.100' : '#fafcfa',
                     ...(archived ? { '& .MuiChip-root': { bgcolor: 'grey.200', color: 'text.secondary', borderColor: 'grey.400' }, '& .MuiChip-icon': { color: 'text.secondary' } } : {}),
@@ -1091,9 +1132,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     display: 'flex',
                     flexDirection: 'column',
                     transition: 'all 0.2s',
-                    borderColor: isStopper ? 'error.main' : undefined,
+                    borderColor: isInactive || isStopper ? 'error.main' : undefined,
                     animation:
-                      timelineFocus?.targetId === `request-status-update-${update.id}`
+                      !reminderRequested && (timelineFocus?.targetId === `request-status-update-${update.id}` || stopperResponses.some((response) => timelineFocus?.targetId === `request-status-update-${response.id}`))
                         ? 'timelineCardFocus 2500ms ease-in-out'
                         : 'none',
                     '@keyframes timelineCardFocus': {
@@ -1104,10 +1145,22 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     },
                     '&:hover': {
                       boxShadow: '0 4px 12px rgba(0,0,0,0.04)',
-                      borderColor: isStopper ? 'error.dark' : 'primary.main',
+                      borderColor: isInactive || isStopper ? 'error.dark' : 'primary.main',
                     },
                   }}
                 >
+                  {isInactive && request.inactivity && (
+                    <Tooltip title={inactivityMessage(request.inactivity.days)}>
+                      <IconButton
+                        color="error"
+                        aria-label={inactivityMessage(request.inactivity.days) + ' Open reminder'}
+                        onClick={() => setReminderRequested(true)}
+                        sx={{ position: 'absolute', top: -18, right: -12, zIndex: 2, width: 44, height: 44, borderRadius: 2, bgcolor: '#fafcfa', '&:hover': { bgcolor: '#fceeee' } }}
+                      >
+                        <ReminderIcon sx={{ fontSize: 34 }} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   <CardContent sx={{ p: 2.75, flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
                     <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start', mb: 2 }}>
                       <Box
@@ -1185,7 +1238,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                         {update.statusUpdate}
                       </Typography>
                     )}
-                    {update.remarks && (
+                    {showRemarks && (
                       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                         {update.remarks}
                       </Typography>
@@ -1199,6 +1252,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                             (d) => dynamicFieldStorageKey(d) === k || d.name === k
                           );
                           const label = matchingDef?.name || k;
+                          if (matchingDef?.type === 'date') {
+                            return <ReadOnlyDynamicField key={k} field={matchingDef} value={v} />;
+                          }
                           if (matchingDef?.type === 'table') {
                             return (
                               <DynamicTableField
@@ -1272,7 +1328,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                     {isStopper && stopperResponses.length > 0 && (
                       <Stack spacing={1} sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
                         {stopperResponses.map((response) => (
-                          <Box key={response.id} sx={response.archivedAt || parentArchived ? { bgcolor: 'grey.100', color: 'text.secondary', borderRadius: 1, p: 1 } : undefined}>
+                          <Box key={response.id} id={`request-status-update-${response.id}`} sx={response.archivedAt || parentArchived ? { bgcolor: 'grey.100', color: 'text.secondary', borderRadius: 1, p: 1 } : undefined}>
                             <Typography variant="caption" color="text.secondary">
                               {response.authorName || 'Employee'} · {formatDateTime(response.createdAt)}
                             </Typography>
@@ -1677,10 +1733,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         <DialogTitle sx={{ fontWeight: 800 }}>Progress Update</DialogTitle>
         <DialogContent dividers><Stack spacing={2}>
           <Typography variant="body2" color="text.secondary">{viewingUpdate?.authorName} ? {viewingUpdate && formatDateTime(viewingUpdate.createdAt)}</Typography>
-          <Typography sx={{ whiteSpace: 'pre-wrap' }}>{viewingUpdate?.statusUpdate}</Typography>
-          {viewingUpdate?.remarks && <Typography sx={{ whiteSpace: 'pre-wrap' }}>{viewingUpdate.remarks}</Typography>}
-          <ReadOnlyDynamicField field={{ name: 'Attachments', type: 'file' }} value={viewingUpdate?.files} />
-          {definitions.map((field) => <ReadOnlyDynamicField key={field.id} field={field} value={getDynamicFieldValue(viewingUpdate?.additionalInfo || {}, field)} />)}
+          {viewingUpdate && showPrimaryStatus(viewingUpdate.statusUpdate, viewingFields, viewingUpdate.isStopper) && (
+            <Typography sx={{ whiteSpace: 'pre-wrap' }}>{viewingUpdate.statusUpdate}</Typography>
+          )}
+          {viewingUpdate && showStandaloneRemarks(viewingUpdate.remarks, viewingFields) && <Typography sx={{ whiteSpace: 'pre-wrap' }}>{viewingUpdate.remarks}</Typography>}
+          {viewingFields.map(([key, value]) => {
+            const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === key || definition.name === key);
+            return <ReadOnlyDynamicField key={key} field={field || { name: key, type: getAttachments(value).length ? 'file' : 'text' }} value={value} />;
+          })}
+          {viewingStandaloneFiles.length > 0 && <ReadOnlyDynamicField field={{ name: 'Attachments', type: 'file' }} value={viewingStandaloneFiles} />}
         </Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setViewingUpdate(null)}>Close</Button></DialogActions>
       </Dialog>
       <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="sm">

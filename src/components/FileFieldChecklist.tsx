@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AttachFile as AttachFileIcon,
   CheckCircle as CheckCircleIcon,
@@ -37,6 +37,36 @@ type FileFieldChecklistProps = {
   onRemoveExisting?: (fileId: string) => void;
   onRemovePending?: (file: File) => void;
 };
+
+function PendingAttachmentLink({ file }: { file: File }) {
+  const linkRef = useRef<HTMLAnchorElement>(null);
+  const canPreview = /^(application\/pdf|text\/plain|image\/(png|jpeg|gif|webp|avif|bmp|x-icon))$/i.test(file.type);
+
+  useEffect(() => {
+    const previewFile = canPreview ? file : new Blob([file], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(previewFile);
+    const link = linkRef.current;
+    if (link) link.href = url;
+    return () => URL.revokeObjectURL(url);
+  }, [file, canPreview]);
+
+  return (
+    <Button
+      component="a"
+      ref={linkRef}
+      href="#"
+      target="_blank"
+      rel="noopener noreferrer"
+      download={canPreview ? undefined : file.name}
+      aria-label={(canPreview ? 'Preview ' : 'Download ') + file.name}
+      sx={{ justifyContent: 'flex-start', minWidth: 0, flexGrow: 1, px: 0, textTransform: 'none', fontWeight: 700, overflow: 'hidden' }}
+    >
+      <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {file.name}
+      </Box>
+    </Button>
+  );
+}
 
 export default function FileFieldChecklist({
   label,
@@ -138,9 +168,7 @@ export default function FileFieldChecklist({
                 sx={{ alignItems: 'center', border: '1px solid', borderColor: 'primary.light', borderRadius: 2, px: 1.5, py: 1, bgcolor: 'rgba(46, 125, 50, 0.04)' }}
               >
                 <AttachFileIcon color="primary" />
-                <Typography sx={{ flexGrow: 1, minWidth: 0, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {file.name}
-                </Typography>
+                <PendingAttachmentLink file={file} />
                 {editable && onRemovePending && (
                   <IconButton color="error" onClick={() => onRemovePending(file)} aria-label={`Remove ${file.name}`}>
                     <CloseIcon />

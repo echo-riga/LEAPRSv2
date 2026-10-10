@@ -48,7 +48,7 @@ A CapDev is a parent project or educational program.
 ### B. Requests
 Requisitions filed by employees against a specific CapDev.
 * **Fixed Fields (In Codebase)**:
-  * `Setting` (Internal or External)
+  * `Setting` (In-House or External in the UI; `internal` or `external` in storage)
   * `Description` (Request title or activity description)
   * `Requested Budget` (Cost estimation)
   * `Requestor Name` (Display name of the submitting user)
@@ -63,7 +63,7 @@ Requisitions filed by employees against a specific CapDev.
   * Stored in `additional_info.googleDriveFolderId`.
 
 ### C. Status Updates (Timeline)
-Chronological logs track request progression. Status updates are **fixed** (not dynamic) and consist of:
+Chronological logs track request progression. Ordinary status updates use configured dynamic fields, displayed in their configured order in both timeline cards and detail dialogs. Stable field IDs preserve values when labels change; historical values from removed fields remain readable after current configured fields. Attachment-only updates are supported and do not display the internal Status updated fallback. Attachment metadata is displayed once, even when stored in both dynamic fields and the aggregate files column. Timeline records also include:
 * Status update text
 * Remarks
 * Multi-file uploads (via Google Drive integration)
@@ -102,8 +102,9 @@ Google Drive is the durable file store; Vercel and the database do not store att
 ### C. Form Configuration & Custom Layouts
 * Admins can configure the forms for CapDev and Requests.
 * Request configuration is split into independent Internal and External field layouts, exposed as separate actions on the Settings page.
-* Dynamic field types supported: `text` (combobox: dropdown + text entry), `number`, `date` (datepicker), `select`, `file` (drag & drop upload), and `table` (editable grid). Table fields occupy a full row.
+* Configurable field types: `text` (free text with optional suggestions), `combobox` (configured suggestions only), `number`, `date` (datepicker), `file`, and `table` (editable grid). Legacy `select` fields remain supported. Suggestions-only comboboxes require at least one configured option and validate submitted values against those options. Table fields occupy a full row.
 * In operational forms, each configured `file` field is presented as a checklist row. Its indicator is checked when one or more existing or pending files are present; selecting the row opens the field's attachment dialog for viewing, adding, or removing files.
+* Pending attachment names are clickable before saving. PDFs, plain text, and supported raster images open locally in a new tab; other formats download for opening. Local object URLs are revoked when attachment links unmount or files change. This does not upload files early; saved attachments retain their Drive links.
 * Dynamic fields support full-width or half-width layout. An unpaired half-width field can occupy either the left or right column (`columnPosition: 'left' | 'right'`). Field order and column position persist in both configuration preview and operational forms.
 * Adding/editing a field is a client-side draft operation. The bottom-right **Save Configuration** action is the explicit persistence point for staged additions, edits, and reordering.
 
@@ -149,6 +150,17 @@ Notifications are event records, visible only while their associated CapDev/requ
 * **Viewer (All Departments)**: Receives CapDev, request, and status activity across all departments.
 * Notification reads are tracked per user via `notification_reads`.
 * Clicking a notification marks it read and routes to its associated record with a highlighted pulsing card.
+* The panel filters up to 30 accessible notifications, prioritizing active inactivity reminders using vertical checkboxes on the left: Inactivity Reminders, Request Submissions, Status Updates, Completed Requests, Denied Requests, CapDev Creation, and Role Approvals. All types are selected initially; filtering does not change audience permissions, the unread badge, or the scope of Mark All Read.
+
+### Status Update Inactivity Reminders
+
+* Settings → Status Update Configuration → Configure Notifications loads and saves the persisted threshold in `system_settings.number_value` under `request_inactivity_days`. Admin-only server actions validate whole numbers from 1 to 365; the default is 7 days. Cancel discards edits, and Save records the change in audit history.
+* Inactivity starts at the latest timeline entry's creation time, including stoppers, responses, and resumes, or at request submission if no timeline entry exists. Count full elapsed 24-hour days. Active in-progress requests become eligible at the configured threshold; concluded, legacy-completed, archived requests and descendants of archived CapDev projects do not remind.
+* Reminder recipients follow request involvement permissions: Admin and Employee (All Department Requests) across departments, Employees for their own requests, department Viewers within their department, and Viewer (All Departments) across departments. Admin is always included, including for their own requests. These are system events, so the actor self-exclusion for ordinary event notifications does not apply.
+* The portal checks for reminders through notification refreshes every 30 seconds and when the panel opens. Creation is on demand; no external cron or delivery service is required for these in-app notifications. Request cards and timelines refresh every 30 seconds and on window focus.
+* Persist one `inactivity_reminder` notification per request/activity episode. A unique `notifications.reminder_key` makes concurrent refreshes idempotent. Reads use the existing per-user `notification_reads` table. New activity, conclusion, archiving, or an increased threshold hides obsolete reminders through live query conditions; a later activity episode can create a new unread reminder.
+* Notifications have an Inactivity Reminders filter. Inactive request cards and the latest activity card have red outlines and prominent red bell buttons on their top-right edges. Clicking the bell on the timeline card opens the same reminder modal. Both links navigate to the timeline and open a compact No Progress modal showing No progress for N days. On dismissal, scroll to the current latest timeline entry and pulse its entire card. Nested stopper responses have their own focus anchor and pulse the containing stopper card. For empty timelines, use the modal without adding a submission card. Ordinary timeline navigation does not open this modal, and closing it consumes the reminder query parameter so refreshes do not reopen it.
+* The additive schema migration is `drizzle/0015_request_inactivity_reminders.sql`; apply it with `node scripts/migrate-request-reminders.mjs` before using the reminder actions.
 
 ### B. Self-Registration & Role Approvals
 
@@ -159,6 +171,7 @@ Notifications are event records, visible only while their associated CapDev/requ
 * Registrations for Employee, Viewer, and Viewer (All Departments) receive their role and profile immediately after email code verification.
 * Registrations for **Employee (All Department Requests)** create a pending record in `role_approval_requests` after email code verification. Admins receive a notification linking to Users Management to accept or reject the request. Acceptance creates the user profile with the requested role; rejection deletes the pending auth account.
 * Password validation enforces **8 to 128 characters** with specific error messaging.
+* In Users Management, an Admin can set an active user's password through the optional New Password field. The edit form forwards a nonempty password to `updateDirectoryUser`, which validates it and calls Neon Auth's `admin.setUserPassword`. A blank password preserves the current credential; archived-user edits are blocked. API failures must be surfaced instead of reporting success. Directory cards mask passwords, and audit history records only whether the password changed, never its value.
 
 ### C. Shared Department Values
 * Department is a fixed important field, not a configurable dynamic field.

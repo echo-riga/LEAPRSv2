@@ -59,6 +59,7 @@ export const mcpOAuthGrants = pgTable('mcp_oauth_grants', {
 export const systemSettings = pgTable('system_settings', {
   key: varchar('key', { length: 100 }).primaryKey(),
   enabled: boolean('enabled').default(false).notNull(),
+  numberValue: integer('number_value'),
   updatedById: text('updated_by_id').references(() => users.id, { onDelete: 'set null' }),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -241,9 +242,12 @@ export const notifications = pgTable('notifications', {
   message: text('message').notNull(),
   link: text('link').notNull(),
   type: varchar('type', { length: 50 }).default('status_update').notNull(),
+  reminderKey: varchar('reminder_key', { length: 100 }),
   isRead: boolean('is_read').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex('notifications_reminder_key_idx').on(table.reminderKey),
+]);
 
 // Immutable activity history. Actor and entity values are snapshots by design,
 // so audit records survive deletion of users, CapDev projects, and requests.

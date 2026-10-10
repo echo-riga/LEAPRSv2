@@ -7,6 +7,9 @@ import {
   Box,
   Button,
   Chip,
+  Checkbox,
+  FormControlLabel,
+  FormGroup,
   IconButton,
   Popover,
   Skeleton,
@@ -24,6 +27,7 @@ import {
   DoneAll as DoneAllIcon,
   NotificationsNoneOutlined as EmptyBellIcon,
   ManageAccountsOutlined as RoleApprovalIcon,
+  NotificationsActiveRounded as ReminderIcon,
 } from '@mui/icons-material';
 import {
   getNotifications,
@@ -31,6 +35,18 @@ import {
   markAllNotificationsAsRead,
   type NotificationItem,
 } from '@/app/actions';
+
+const NOTIFICATION_FILTERS = [
+  { type: 'inactivity_reminder', label: 'Inactivity Reminders' },
+  { type: 'new_request', label: 'Request Submissions' },
+  { type: 'status_update', label: 'Status Updates' },
+  { type: 'completed', label: 'Completed Requests' },
+  { type: 'denied', label: 'Denied Requests' },
+  { type: 'capdev_created', label: 'CapDev Creation' },
+  { type: 'role_approval', label: 'Role Approvals' },
+] as const;
+
+type NotificationFilterType = (typeof NOTIFICATION_FILTERS)[number]['type'];
 
 function formatRelativeTime(dateInput: Date | string): string {
   const date = new Date(dateInput);
@@ -46,6 +62,8 @@ function formatRelativeTime(dateInput: Date | string): string {
 
 function getNotificationIcon(type: string) {
   switch (type) {
+    case 'inactivity_reminder':
+      return <ReminderIcon sx={{ fontSize: 18, color: '#d32f2f' }} />;
     case 'completed':
       return <CompletedIcon sx={{ fontSize: 18, color: '#2e7d32' }} />;
     case 'denied':
@@ -107,6 +125,19 @@ export default function NotificationsMenu() {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [selectedTypes, setSelectedTypes] = useState<NotificationFilterType[]>(
+    () => NOTIFICATION_FILTERS.map((filter) => filter.type)
+  );
+  const allTypesSelected = selectedTypes.length === NOTIFICATION_FILTERS.length;
+  const filteredNotifications = allTypesSelected
+    ? notifications
+    : notifications.filter((item) => selectedTypes.some((type) => type === item.type));
+
+  const toggleType = (type: NotificationFilterType) => {
+    setSelectedTypes((previous) => previous.includes(type)
+      ? previous.filter((selected) => selected !== type)
+      : [...previous, type]);
+  };
 
   const fetchNotifications = useCallback(async () => {
     try {
@@ -125,7 +156,11 @@ export default function NotificationsMenu() {
     const interval = window.setInterval(() => {
       void fetchNotifications();
     }, 30_000);
-    return () => window.clearInterval(interval);
+    window.addEventListener('leaprs:reminder-settings-changed', fetchNotifications);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('leaprs:reminder-settings-changed', fetchNotifications);
+    };
   }, [fetchNotifications]);
 
   const handleOpen = (event: React.MouseEvent<HTMLElement>) => {
@@ -158,7 +193,7 @@ export default function NotificationsMenu() {
       if (hashIndex >= 0) {
         const targetId = decodeURIComponent(destination.slice(hashIndex + 1));
         window.setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('leaprs:notification-focus', { detail: { targetId } }));
+          window.dispatchEvent(new CustomEvent('leaprs:notification-focus', { detail: { targetId, reminder: item.type === 'inactivity_reminder' } }));
         }, 0);
       }
     }
@@ -216,8 +251,9 @@ export default function NotificationsMenu() {
         slotProps={{
           paper: {
             sx: {
-              width: { xs: 320, sm: 390 },
-              maxHeight: 500,
+              width: { xs: 'calc(100vw - 32px)', sm: 720 },
+              maxWidth: 'calc(100vw - 32px)',
+              maxHeight: 'min(640px, calc(100dvh - 96px))',
               borderRadius: 2,
               boxShadow: '0 12px 32px rgba(28, 40, 28, 0.12)',
               border: '1px solid rgba(28, 40, 28, 0.08)',
@@ -236,6 +272,9 @@ export default function NotificationsMenu() {
           sx={{
             px: 2.5,
             py: 1.75,
+            flexShrink: 0,
+            flexWrap: 'wrap',
+            gap: 1,
             alignItems: 'center',
             justifyContent: 'space-between',
             borderBottom: '1px solid rgba(0,0,0,0.06)',
@@ -269,128 +308,171 @@ export default function NotificationsMenu() {
           )}
         </Stack>
 
-        {/* Content list */}
-        <Box sx={{ overflowY: 'auto', flexGrow: 1, maxHeight: 400 }}>
-          {loading && notifications.length === 0 ? (
-            <Stack spacing={1.5} sx={{ p: 2 }}>
-              <Skeleton variant="rounded" height={60} />
-              <Skeleton variant="rounded" height={60} />
-              <Skeleton variant="rounded" height={60} />
-            </Stack>
-          ) : notifications.length === 0 ? (
-            <Stack
-              spacing={1}
-              sx={{
-                py: 6,
-                px: 3,
-                alignItems: 'center',
-                textAlign: 'center',
-                color: 'text.secondary',
-              }}
-            >
-              <EmptyBellIcon sx={{ fontSize: 40, color: 'text.disabled' }} />
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                No notifications yet
-              </Typography>
-              <Typography variant="caption">
-                Updates regarding requisitions and projects will appear here.
-              </Typography>
-            </Stack>
-          ) : (
-            notifications.map((n) => (
-              <Box
-                key={n.id}
-                onClick={() => void handleNotificationClick(n)}
+        <Box sx={{ display: 'flex', height: 500, minHeight: 0, overflow: 'hidden' }}>
+          <Box
+            sx={{
+              px: { xs: 0.5, sm: 1.5 },
+              py: 1,
+              width: { xs: 132, sm: 220 },
+              flexShrink: 0,
+              overflowY: 'auto',
+              borderRight: '1px solid rgba(0,0,0,0.06)',
+              '& .MuiFormControlLabel-label': { fontSize: { xs: '0.8rem', sm: '0.875rem' } },
+              bgcolor: '#fafcfa',
+            }}
+          >
+            <FormGroup aria-label="Filter notifications by type">
+              <FormControlLabel
+                label="All"
+                control={
+                  <Checkbox
+                    checked={allTypesSelected}
+                    indeterminate={selectedTypes.length > 0 && !allTypesSelected}
+                    onChange={(_, checked) => setSelectedTypes(
+                      checked ? NOTIFICATION_FILTERS.map((filter) => filter.type) : []
+                    )}
+                  />
+                }
+                sx={{ minHeight: 44, m: 0, '& .MuiFormControlLabel-label': { fontWeight: 700 } }}
+              />
+              {NOTIFICATION_FILTERS.map((filter) => (
+                <FormControlLabel
+                  key={filter.type}
+                  label={filter.label}
+                  control={
+                    <Checkbox
+                      checked={selectedTypes.includes(filter.type)}
+                      onChange={() => toggleType(filter.type)}
+                    />
+                  }
+                  sx={{ minHeight: 44, m: 0 }}
+                />
+              ))}
+            </FormGroup>
+          </Box>
+  
+          {/* Content list */}
+          <Box sx={{ overflowY: 'auto', flex: 1, minWidth: 0, minHeight: 0 }}>
+            {loading && notifications.length === 0 ? (
+              <Stack spacing={1.5} sx={{ p: 2 }}>
+                <Skeleton variant="rounded" height={60} />
+                <Skeleton variant="rounded" height={60} />
+                <Skeleton variant="rounded" height={60} />
+              </Stack>
+            ) : filteredNotifications.length === 0 ? (
+              <Stack
+                spacing={1}
                 sx={{
-                  p: 2,
-                  display: 'flex',
-                  gap: 1.5,
-                  alignItems: 'flex-start',
-                  cursor: 'pointer',
-                  bgcolor: n.isRead ? '#ffffff' : 'rgba(46, 125, 50, 0.05)',
-                  transition: 'background-color 0.15s ease-in-out',
-                  '&:hover': {
-                    bgcolor: n.isRead ? 'rgba(0,0,0,0.03)' : 'rgba(46, 125, 50, 0.1)',
-                  },
-                  borderBottom: '1px solid rgba(0,0,0,0.05)',
+                  py: 6,
+                  px: 3,
+                  alignItems: 'center',
+                  textAlign: 'center',
+                  color: 'text.secondary',
                 }}
               >
-                {/* Type Icon */}
+                <EmptyBellIcon sx={{ fontSize: 40, color: 'text.disabled' }} />
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  {notifications.length === 0 ? 'No notifications yet'
+                    : selectedTypes.length === 0 ? 'Select a notification type'
+                    : 'No matching notifications'}
+                </Typography>
+              </Stack>
+            ) : (
+              filteredNotifications.map((n) => (
                 <Box
+                  key={n.id}
+                  onClick={() => void handleNotificationClick(n)}
                   sx={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: '8px',
-                    bgcolor: getIconBgColor(n.type),
+                    p: { xs: 1, sm: 2 },
                     display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                    mt: 0.25,
+                    gap: { xs: 0.75, sm: 1.5 },
+                    alignItems: 'flex-start',
+                    cursor: 'pointer',
+                    bgcolor: n.isRead ? '#ffffff' : 'rgba(46, 125, 50, 0.05)',
+                    transition: 'background-color 0.15s ease-in-out',
+                    '&:hover': {
+                      bgcolor: n.isRead ? 'rgba(0,0,0,0.03)' : 'rgba(46, 125, 50, 0.1)',
+                    },
+                    borderBottom: '1px solid rgba(0,0,0,0.05)',
                   }}
                 >
-                  {getNotificationIcon(n.type)}
-                </Box>
-
-                {/* Details */}
-                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                  <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 1 }}>
-                    <Typography
-                      variant="body2"
-                      noWrap
-                      sx={{
-                        fontWeight: n.isRead ? 600 : 800,
-                        color: n.isRead ? 'text.primary' : 'primary.dark',
-                        fontSize: '0.85rem',
-                      }}
-                    >
-                      {n.title}
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        color: 'text.secondary',
-                        fontSize: '0.7rem',
-                        whiteSpace: 'nowrap',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {formatRelativeTime(n.createdAt)}
-                    </Typography>
-                  </Stack>
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      color: 'text.secondary',
-                      fontSize: '0.8rem',
-                      lineHeight: 1.35,
-                      mt: 0.25,
-                      display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    {n.message}
-                  </Typography>
-                </Box>
-
-                {/* Unread indicator dot */}
-                {!n.isRead && (
+                  {/* Type Icon */}
                   <Box
                     sx={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: '50%',
-                      bgcolor: 'primary.main',
+                      width: 34,
+                      height: 34,
+                      borderRadius: '8px',
+                      bgcolor: getIconBgColor(n.type),
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
                       flexShrink: 0,
-                      mt: 0.75,
+                      mt: 0.25,
                     }}
-                  />
-                )}
-              </Box>
-            ))
-          )}
+                  >
+                    {getNotificationIcon(n.type)}
+                  </Box>
+  
+                  {/* Details */}
+                  <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                    <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: { xs: 0.25, sm: 1 }, flexDirection: { xs: 'column', sm: 'row' } }}>
+                      <Typography
+                        variant="body2"
+                        noWrap
+                        sx={{
+                          fontWeight: n.isRead ? 600 : 800,
+                          color: n.isRead ? 'text.primary' : 'primary.dark',
+                          fontSize: '0.85rem',
+                        }}
+                      >
+                        {n.title}
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: 'text.secondary',
+                          fontSize: '0.7rem',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {formatRelativeTime(n.createdAt)}
+                      </Typography>
+                    </Stack>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                        fontSize: '0.8rem',
+                        lineHeight: 1.35,
+                        mt: 0.25,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {n.message}
+                    </Typography>
+                  </Box>
+  
+                  {/* Unread indicator dot */}
+                  {!n.isRead && (
+                    <Box
+                      sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        bgcolor: 'primary.main',
+                        flexShrink: 0,
+                        mt: 0.75,
+                      }}
+                    />
+                  )}
+                </Box>
+              ))
+            )}
+          </Box>
         </Box>
       </Popover>
     </>

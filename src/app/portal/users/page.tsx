@@ -270,6 +270,14 @@ export default function UsersManagementPage() {
       focusFormError('user-field-email');
       return;
     }
+    if (formPassword) {
+      const passwordError = getPasswordValidationError(formPassword);
+      if (passwordError) {
+        setFormPasswordError(passwordError);
+        focusFormError('user-field-password');
+        return;
+      }
+    }
     setFormError('');
 
     if (editingUser) {
@@ -280,15 +288,17 @@ export default function UsersManagementPage() {
         email: formEmail,
         role: formRole,
         department: formDepartment || 'Unassigned',
-        // Only update password if a new one is typed in the field
-        ...(formPassword ? { password: formPassword } : {}),
+        password: '••••••••',
       };
 
       if (!editingUser.isMock) {
-        const result = await updateDirectoryUser(editingUser.id, { name: formName, email: formEmail, role: formRole, department: formDepartment || 'Unassigned' });
+        const result = await updateDirectoryUser(editingUser.id, { name: formName, email: formEmail, role: formRole, department: formDepartment || 'Unassigned', ...(formPassword ? { password: formPassword } : {}) });
         if (!result.success) {
           const message = result.error || 'Unable to update this user.';
-          if (message.toLowerCase().includes('email') || message.toLowerCase().includes('duplicate')) {
+          if (message.toLowerCase().includes('password')) {
+            setFormPasswordError(getFriendlyPasswordError(message, formPassword));
+            focusFormError('user-field-password');
+          } else if (message.toLowerCase().includes('email') || message.toLowerCase().includes('duplicate')) {
             setFormEmailError(message);
             focusFormError('user-field-email');
           } else if (message.toLowerCase().includes('name')) {

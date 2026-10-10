@@ -10,6 +10,7 @@ import {
   Payments as PaymentsIcon,
   Search as SearchIcon,
   VisibilityOutlined as VisibilityIcon,
+  NotificationsActiveRounded as ReminderIcon,
 } from '@mui/icons-material';
 import {
   Alert,
@@ -64,7 +65,10 @@ import { getHalfFieldLayout } from '@/components/FieldReorder';
 import FileFieldChecklist from '@/components/FileFieldChecklist';
 import { focusFormError } from '@/lib/form-error-focus';
 
+import { inactivityMessage, type RequestInactivity } from '@/lib/request-inactivity';
+
 type RequestRecord = {
+  inactivity: RequestInactivity | null;
   archivedAt: Date | string | null;
   id: number;
   capdevId: number;
@@ -243,9 +247,13 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') refreshRequests();
     };
+    const interval = window.setInterval(refreshRequests, 30_000);
+    window.addEventListener('leaprs:reminder-settings-changed', refreshRequests);
     window.addEventListener('focus', refreshRequests);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('leaprs:reminder-settings-changed', refreshRequests);
       window.removeEventListener('focus', refreshRequests);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
@@ -573,8 +581,10 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                   variant="outlined"
                   sx={{
                     position: 'relative',
+                    overflow: 'visible',
                     zIndex: 1,
                     borderRadius: 2,
+                    borderColor: request.inactivity ? 'error.main' : undefined,
                     bgcolor: request.archivedAt || capdev.archivedAt ? 'grey.100' : '#fafcfa',
                     height: '100%',
                     display: 'flex',
@@ -589,9 +599,21 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                       '65%': { transform: 'scale(1.025)', boxShadow: '0 8px 24px rgba(46, 125, 50, 0.2)' },
                       '100%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' },
                     },
-                    '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' },
+                    '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: request.inactivity ? 'error.dark' : 'primary.main' },
                   }}
                 >
+                  {request.inactivity && (
+                    <Tooltip title={inactivityMessage(request.inactivity.days)}>
+                      <IconButton
+                        color="error"
+                        aria-label={inactivityMessage(request.inactivity.days) + ' View last activity'}
+                        onClick={() => router.push(request.inactivity!.link)}
+                        sx={{ position: 'absolute', top: -18, right: -12, zIndex: 2, width: 44, height: 44, borderRadius: 2, bgcolor: '#fafcfa', '&:hover': { bgcolor: '#fceeee' } }}
+                      >
+                        <ReminderIcon sx={{ fontSize: 34 }} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
                     <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', mb: 2 }}>
                       <Box sx={{ bgcolor: request.archivedAt || capdev.archivedAt ? 'grey.200' : 'rgba(46, 125, 50, 0.08)', p: 1.2, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -613,6 +635,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                           sx={{ fontWeight: 700 }}
                         />
                         {request.hasDeductedBudget && <Chip icon={<PaymentsIcon />} label="Amount deducted" color={request.archivedAt || capdev.archivedAt ? 'default' : 'success'} variant="outlined" size="small" sx={{ fontWeight: 700 }} />}
+
                       </Stack>
                     </Stack>
                     <Stack spacing={1.5} sx={{ my: 1 }}>

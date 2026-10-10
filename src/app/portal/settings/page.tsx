@@ -17,6 +17,7 @@ import {
   Divider,
 } from '@mui/material';
 import { SettingsGridSkeleton } from '@/components/Skeletons';
+import StatusNotificationSettings from '@/components/StatusNotificationSettings';
 import {
   People as PeopleIcon,
   Build as MaintenanceIcon,
@@ -196,8 +197,12 @@ export default function SettingsPage() {
           <Chip label={`${counts.statusUpdateFieldsCount} Dynamic Fields`} size="small" variant="outlined" color="primary" />
         </Stack>
       ),
-      actionText: 'Configure Fields',
-      route: '/portal/settings/status-update',
+      footer: (
+        <Stack direction="row" useFlexGap spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
+          <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push('/portal/settings/status-update')} sx={{ p: 0, minWidth: 0, fontWeight: 700, '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>Configure Fields</Button>
+          <StatusNotificationSettings />
+        </Stack>
+      ),
     },
   ].filter((item) => role === 'admin' || item.title === 'Reports & Analytics');
 

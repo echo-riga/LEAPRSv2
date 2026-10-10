@@ -18,6 +18,7 @@ The primary goal of LEAPRS is utility and speed. Seminar coordinators and govern
   - **No Obvious Descriptions**: Never add subtitles explaining what a known item is (e.g., do *not* write "For attendees to rate speakers..." under a "Participant Feedback Form" label, or "Modify this if actual training expenses differed..." under a budget input).
   - **No Verbose Dialog Narratives**: When a dialog title (e.g., "Complete Request") and action button (e.g., "Confirm Complete") already define the action, do not pad the dialog body with obvious narrative text.
   - **Self-Explanatory Controls**: Let clear headings, labeled inputs, and action buttons speak for themselves.
+  - **Unfamiliar Settings**: When the title and control do not explain a setting's purpose, use one short sentence with a relevant icon above the control. Explain the trigger and who it affects; omit repeated recipient chips, routine range hints, and technical implementation text. Show input guidance only when correction is needed.
 - **Legible, Compact Layout**: Rely on clean spacing, clear typography, and structured controls to guide the user rather than descriptive text.
 
 ## 2. UI Consistency Is the Primary Rule
@@ -39,7 +40,7 @@ Before editing an existing page, inspect nearby components on that page and trea
 
 ## 3. White-Green Kiosk Color Palette
 
-The colors are defined in the [Theme Registry](file:///c:/Projects/LEAPRSv2/src/theme/ThemeRegistry.tsx) to ensure a clean, corporate, high-contrast aesthetic:
+The colors are defined in the [Theme Registry](../../../src/theme/ThemeRegistry.tsx) to ensure a clean, corporate, high-contrast aesthetic:
 
 | Token | Color Code | Purpose |
 | :--- | :--- | :--- |
@@ -71,7 +72,7 @@ To prevent users from being bombarded with different layouts, all main operation
 - **Kiosk Full-Screen Layout**: Zero empty margins or huge blank white spaces. Expand content to fill the screen space, showing big content instead of large empty gaps. Avoid standard narrow wrappers; use fluid full-width or high-percentage width layout containers.
 - **Page Alignment Consistency**: Portal page titles and their primary content must share the same left edge as sibling portal pages. Reuse the established portal page content container and its gutters; do not omit it for a page title unless a deliberately narrower, centered reading layout is explicitly required.
 - **Layout Content**: Distinct, independent, eye-friendly soft-white panels (Cards/Papers, using `#fafcfa`) arranged in a grid or stack. For resource listings (e.g. Users), the page layout must always render as a 2-row, 3-column box grid (maximum 6 items per page) on desktop, using pagination to prevent vertical scrolling. Cards must display only core properties (e.g. name, email, role, password) without fluff (such as account status), with actions aligned at the bottom.
-- **Summary Cards vs. Edit Views**: Resource cards/boxes are concise summaries and display fixed, core fields only. Do not render configurable/dynamic fields, uploaded attachments, or long custom values inside those cards. The create/edit dialog is the detailed view: it must display every fixed field and every active configured field, including attachment links for already uploaded files.
+- **Summary Cards vs. Edit Views**: Resource cards/boxes are concise summaries and display fixed, core fields only. Do not render configurable/dynamic fields, uploaded attachments, or long custom values inside those cards. The create/edit dialog is the detailed view: it must display every fixed field and every active configured field, including clickable attachment names for both saved and pending files.
 
 ### Current LEAPRS UI Patterns
 
@@ -84,9 +85,13 @@ Use these as the default patterns when extending existing LEAPRS screens:
 - **Forms and edit dialogs**: Use the established MUI dialog layout, field grid, section dividers, and existing input styles. Read-only metadata belongs as text, not as a disabled input.
 - **Status and state**: Use compact MUI chips in the established green palette for status information. Do not invent alternative badge shapes or placements when a matching chip is already used nearby.
 - **User-facing labels and badges**: Display role and status labels in readable title case through the shared label mapping (for example, `Employee`, never `employee`). Keep lowercase database values internal.
-- **Empty/loading states**: Reuse the existing centered outlined panel with its icon and concise label, and the existing centered spinner treatment.
+- **Empty/loading states**: Reuse the existing centered outlined panel with its icon and concise label. Use the centralized page skeletons for navigation and data loading; reserve spinners for ongoing actions.
 - **Dialogs**: Reuse the existing title, divided content, and bottom-right action row. UI-only future functionality may open a concise placeholder dialog, but its trigger must still match the surrounding page pattern.
-- **Header help chat**: The friendly outlined robot icon sits with the other header utilities and is available to every role. Its popover follows the existing compact white-green styling. The current chatbot is UI-only, so its messages must not imply that it performed a server action or changed data.
+- **Header help chat**: The friendly outlined robot icon sits with the other header utilities and is available to every role. Its popover follows the existing compact white-green styling. It queries live data through authorized tools and can submit a request after the user reviews and confirms an intake draft. Messages must reflect confirmed tool results; do not claim a change before the server succeeds.
+- **Notification panel**: Place vertical type checkboxes in a left sidebar and the notification list on the right. Select all types by default. The All checkbox selects or clears every type and is indeterminate for a partial selection. Keep the panel responsive and allow each column to scroll.
+- **Status update display**: Timeline cards and detail dialogs render populated configured fields in configuration order, including attachments. Do not hardcode Action/Office priority, duplicate configured values as headings or remarks, or show the generic Status updated fallback on attachment-only entries.
+- **Inactive request warnings**: Eligible request cards and the latest activity card have red outlines and a prominent red bell button on the top-right edge. Keep the outline red on hover; only the latest activity is marked, including its containing stopper card when the latest entry is a nested response. Clicking it or an Inactivity Reminder notification opens the timeline and a compact No Progress modal showing No progress for N days. Dismissing the modal scrolls to the latest activity and pulses its entire containing card. Nested stopper responses focus their response anchor and pulse the containing stopper card. With no updates, show only the modal; do not add a submission warning card or permanent inline warning text.
+- **Status notification settings**: Configure Notifications shares the Status Update Configuration card's text-action footer with Configure Fields. The dialog uses a bell icon, one concise purpose sentence, a days input with decrease/increase controls, and Cancel/Save actions. Keep preview badges and repeated recipient summaries out of this dialog.
 
 ### Record Focus and Deep-Link Feedback
 
@@ -178,6 +183,7 @@ export default function StandardPage() {
 
 ### Password Guidance
 
+- User directory cards always mask passwords. The optional New Password field is empty when editing a user; leaving it blank preserves the current credential.
 - Every new/reset password field must show the exact baseline rule: **Use 8 to 128 characters.**
 - On failure, replace the generic security-standards message with only the rule that failed. For a short password, show its current length and how many characters must be added; for a long password, show how many must be removed; report confirmation mismatch separately.
 

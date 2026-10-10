@@ -28,6 +28,8 @@ import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { headers } from 'next/headers';
+import { activeReminderCondition, getRequestInactivitySummaries, readInactivityDays, syncRequestReminders } from '@/lib/request-reminders';
+import { DEFAULT_INACTIVITY_DAYS, INACTIVITY_SETTING_KEY, inactivityMessage, validInactivityDays } from '@/lib/request-inactivity';
 import { getDynamicFieldValue, getInvalidComboboxFields, hasComboboxOptions } from '@/lib/dynamic-fields';
 import { PORTAL_CHATBOT_GUIDE } from '@/lib/portal-chatbot-guide';
 import {
@@ -817,9 +819,16 @@ export async function updateUserRole(userId: string, newRole: string, department
   }
 }
 
-export async function updateDirectoryUser(userId: string, input: { name: string; email: string; role: string; department?: string }) {
+export async function updateDirectoryUser(userId: string, input: { name: string; email: string; role: string; department?: string; password?: string }) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin' || !VALID_ROLES.includes(input.role as AppRole)) return unauthorized;
+  if (input.password !== undefined && typeof input.password !== 'string') {
+    return { success: false, error: 'Please enter a valid password.' };
+  }
+  if (input.password) {
+    const passwordError = getPasswordValidationError(input.password);
+    if (passwordError) return { success: false, error: passwordError };
+  }
   const department = (input.department || '').trim() || 'Unassigned';
   if (input.role === 'viewer' && department === 'Unassigned') {
     return { success: false, error: 'Department is required for the Department Viewer role.' };
@@ -833,8 +842,14 @@ export async function updateDirectoryUser(userId: string, input: { name: string;
     if (previous?.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
     const { error } = await auth.admin.updateUser({ userId, data: { name: input.name, email: input.email } });
     if (error) return { success: false, error: error.message || 'Unable to update the Neon Auth user.' };
+    if (input.password) {
+      const { data, error: passwordError } = await auth.admin.setUserPassword({ userId, newPassword: input.password });
+      if (passwordError || !data) {
+        return { success: false, error: 'Unable to update the password: ' + (passwordError?.message || 'Authentication did not confirm the change.') };
+      }
+    }
     await db.update(users).set({ role: input.role, department }).where(eq(users.id, userId));
-    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department, changes: auditChanges({ ...previous, name: target?.name, email: target?.email }, { ...input, department }, { name: 'Name', email: 'Email', role: 'Role', department: 'Department' }) } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'user', entityId: userId, entityLabel: input.name || input.email, details: { email: input.email, role: input.role, department, passwordChanged: Boolean(input.password), changes: auditChanges({ ...previous, name: target?.name, email: target?.email }, { ...input, department }, { name: 'Name', email: 'Email', role: 'Role', department: 'Department' }) } });
     return { success: true };
   } catch (error) {
     console.error('Failed to update user directory record:', error);
@@ -2027,6 +2042,27 @@ function hasRequiredValue(value: unknown, type: string) {
   return value !== undefined && value !== null && String(value).trim().length > 0;
 }
 
+export async function getRequestInactivitySettings() {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return { ...unauthorized, days: DEFAULT_INACTIVITY_DAYS };
+  try { return { success: true, days: await readInactivityDays() }; }
+  catch { return { success: false, days: DEFAULT_INACTIVITY_DAYS, error: 'Unable to load notification settings.' }; }
+}
+
+export async function saveRequestInactivitySettings(days: number) {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return unauthorized;
+  if (!validInactivityDays(days)) return { success: false, error: 'Enter a whole number from 1 to 365.' };
+  try {
+    const previous = await readInactivityDays();
+    await db.insert(systemSettings).values({ key: INACTIVITY_SETTING_KEY, numberValue: days, updatedById: access.userId })
+      .onConflictDoUpdate({ target: systemSettings.key, set: { numberValue: days, updatedById: access.userId, updatedAt: new Date() } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'system_setting', entityId: INACTIVITY_SETTING_KEY,
+      entityLabel: 'Status Update Notifications', details: { days, previousDays: previous } });
+    return { success: true };
+  } catch { return { success: false, error: 'Unable to save notification settings.' }; }
+}
+
 export async function getRequestsByCapdev(capdevId: number) {
   try {
     const access = await getCurrentAccess();
@@ -2038,6 +2074,7 @@ export async function getRequestsByCapdev(capdevId: number) {
       .orderBy(requests.createdAt);
     const filtered = access.role === 'employee' ? records.filter((request) => request.userId === access.userId) : records;
     if (filtered.length === 0) return [];
+    const inactivity = await getRequestInactivitySummaries(filtered.map((request) => request.id));
 
     const allUpdates = await db
       .select({
@@ -2053,6 +2090,7 @@ export async function getRequestsByCapdev(capdevId: number) {
 
     return filtered.map((req) => ({
       ...req,
+      inactivity: inactivity.get(req.id) ?? null,
       hasDeductedBudget: Boolean(req.budgetDeductedAt) || deductedIds.has(req.id),
       isComplete: req.status === 'completed' || completedIds.has(req.id),
     }));
@@ -2065,7 +2103,11 @@ export async function getRequestsByCapdev(capdevId: number) {
 export async function getRequestById(id: number) {
   try {
     const access = await getCurrentAccess();
-    return access ? await getAccessibleRequest(access, id) : null;
+    if (!access) return null;
+    const request = await getAccessibleRequest(access, id);
+    if (!request) return null;
+    const inactivity = await getRequestInactivitySummaries([id]);
+    return { ...request, inactivity: inactivity.get(id) ?? null };
   } catch (error) {
     console.error('Failed to fetch request:', error);
     return null;
@@ -2733,9 +2775,9 @@ export type NotificationItem = {
   createdAt: Date | string;
 };
 
-const REQUEST_NOTIFICATION_TYPES = ['new_request', 'status_update', 'completed', 'denied'];
+const REQUEST_NOTIFICATION_TYPES = ['new_request', 'status_update', 'completed', 'denied', 'inactivity_reminder'];
 const ALL_NOTIFICATION_TYPES = ['capdev_created', ...REQUEST_NOTIFICATION_TYPES];
-const OWNER_NOTIFICATION_TYPES = ['status_update', 'completed', 'denied'];
+const OWNER_NOTIFICATION_TYPES = ['status_update', 'completed', 'denied', 'inactivity_reminder'];
 
 function notificationAudienceCondition(access: UserAccess): SQL {
   const hasLiveRecord = or(
@@ -2766,7 +2808,10 @@ function notificationAudienceCondition(access: UserAccess): SQL {
     isInvolved = inArray(notifications.type, ALL_NOTIFICATION_TYPES);
   }
 
-  const standardVisibility = and(hasLiveRecord, isAnotherUsersAction, isInvolved)!;
+  const standardVisibility = and(hasLiveRecord, isInvolved, or(
+    and(ne(notifications.type, 'inactivity_reminder'), isAnotherUsersAction),
+    activeReminderCondition(),
+  ))!;
   return access.role === 'admin'
     ? or(eq(notifications.type, 'role_approval'), standardVisibility)!
     : standardVisibility;
@@ -2776,6 +2821,8 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
   try {
     const access = await getCurrentAccess();
     if (!access) return { success: false, notifications: [], unreadCount: 0 };
+
+    await syncRequestReminders(access);
 
     const userReads = await db.select({ notificationId: notificationReads.notificationId })
       .from(notificationReads)
@@ -2787,9 +2834,12 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
       .leftJoin(requests, eq(notifications.requestId, requests.id))
       .leftJoin(capdevs, eq(notifications.capdevId, capdevs.id))
       .where(notificationAudienceCondition(access))
-      .orderBy(desc(notifications.createdAt))
+      .orderBy(desc(sql`CASE WHEN ${notifications.type} = 'inactivity_reminder' THEN 1 ELSE 0 END`), desc(notifications.createdAt))
       .limit(30);
 
+    const reminderRequestIds = rows.filter(({ notification }) => notification.type === 'inactivity_reminder')
+      .map(({ notification }) => notification.requestId).filter((id): id is number => id !== null);
+    const inactivity = await getRequestInactivitySummaries(reminderRequestIds);
     const formatted: NotificationItem[] = rows.map(({ notification: n }) => ({
       id: n.id,
       userId: n.userId,
@@ -2797,7 +2847,8 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
       capdevId: n.capdevId,
       requestId: n.requestId,
       title: n.title,
-      message: n.message,
+      message: n.type === 'inactivity_reminder' && n.requestId && inactivity.has(n.requestId)
+        ? inactivityMessage(inactivity.get(n.requestId)!.days) : n.message,
       link: n.link,
       type: n.type,
       isRead: n.isRead || readIds.has(n.id),
