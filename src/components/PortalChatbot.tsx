@@ -41,6 +41,7 @@ import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
 import { authClient } from '@/lib/auth/client';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
+import ConnectAiAppsDialog from '@/components/ConnectAiAppsDialog';
 import DynamicTableField from '@/components/DynamicTableField';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import type { StatusAttachment } from '@/lib/services/leaprs-service';
@@ -927,8 +928,9 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
         }}
       >
         <Stack sx={{ height: { xs: 500, sm: 560 } }}>
-          <Box sx={{ px: 2, py: 1.5, bgcolor: 'primary.dark', color: 'primary.contrastText' }}>
+          <Box sx={{ px: 2, py: 1.5, bgcolor: 'primary.dark', color: 'primary.contrastText', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
             <Typography sx={{ fontWeight: 800 }}>LEAPRS Help</Typography>
+            <ConnectAiAppsDialog />
           </Box>
 
           <Stack spacing={1.25} sx={{ flexGrow: 1, overflowY: 'auto', p: 1.5, bgcolor: 'background.default' }}>

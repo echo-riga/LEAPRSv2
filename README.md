@@ -12,6 +12,8 @@ Server setup:
 
 User setup:
 
+All active roles can open **LEAPRS Help → Connect to AI Apps** in the portal header to copy the configured MCP URL and read the Claude/ChatGPT setup steps. Actual screenshot assets can be added following `public/mcp-guides/README.md`.
+
 - **Claude:** Customize → Connectors → Add custom connector. Enter the MCP server URL, choose OAuth/sign in, and select **Register automatically** under OAuth client. Do not select a provided client or Claude's published identity: this server supports DCR, not Client ID Metadata Documents (CIMD). Connect, sign in to LEAPRS, and allow access. For Team/Enterprise, an owner may need to add the connector first.
 - **ChatGPT:** Plugins → Add custom MCP server. Enter the MCP URL and choose OAuth. In advanced OAuth settings select automatic/dynamic client registration if a client setup choice is shown; leave any provided client ID and secret blank. Create the plugin, sign in to LEAPRS, and allow access. Install/enable the plugin in a conversation.
 - **Other clients:** Use a remote HTTP MCP client with OAuth discovery, DCR, and S256 PKCE support. An OAuth-compatible client does not necessarily support automatic registration; verify its capabilities.
