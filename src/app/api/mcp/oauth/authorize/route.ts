@@ -42,8 +42,11 @@ export async function GET(req: NextRequest) {
     return new Response('Your LEAPRS account is unavailable or maintenance mode is active.', { status: 403 });
   }
   const nonce = randomToken();
+  // Chromium also applies form-action to redirects after the consent POST.
+  // This URI has already passed the exact configured callback allowlist above.
+  const callbackOrigin = new URL(input.redirectUri).origin;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect Claude to LEAPRS</title><style>body{font:16px system-ui;background:#f6f7f9;color:#17212d;display:grid;place-items:center;min-height:100vh;margin:0}main{background:white;border:1px solid #dce2e8;border-radius:12px;max-width:480px;padding:32px;box-shadow:0 12px 32px #17212d12}h1{font-size:24px;margin-top:0}p{line-height:1.5}button{border:0;border-radius:7px;padding:12px 18px;font:inherit;cursor:pointer}button[name=decision][value=allow]{background:#17487a;color:white}button[name=decision][value=deny]{background:#e9edf1;margin-left:8px}</style></head><body><main><h1>Connect Claude to LEAPRS?</h1><p>Signed in as ${escapeHtml(identity.email || identity.name)}.</p><p>Claude will be able to use your LEAPRS tools with your current role and department permissions, including submitting requests if your role permits it. Only approve if you started this connection in Claude.</p><form method="post"><input type="hidden" name="csrf" value="${nonce}"><button name="decision" value="allow">Allow access</button><button name="decision" value="deny">Cancel</button></form></main></body></html>`;
-  const response = new NextResponse(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } });
+  const response = new NextResponse(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callbackOrigin}; base-uri 'none'; frame-ancestors 'none'`, 'Referrer-Policy': 'no-referrer' } });
   response.cookies.set(COOKIE_NAME, nonce, { httpOnly: true, secure: input.config.base.startsWith('https:'), sameSite: 'lax', path: '/api/mcp/oauth/authorize', maxAge: 600 });
   return response;
 }
@@ -63,6 +66,8 @@ export async function POST(req: NextRequest) {
     ? callback(input.redirectUri, input.state, input.config.base, 'code', await issueGrant('code', identity, input.clientId, input.resource, 5 * 60_000, input.redirectUri, input.challenge))
     : callback(input.redirectUri, input.state, input.config.base, 'error', 'access_denied');
   const response = NextResponse.redirect(target, { status: 303 });
-  response.cookies.delete(COOKIE_NAME);
+  response.headers.set('Cache-Control', 'no-store');
+  response.headers.set('Referrer-Policy', 'no-referrer');
+  response.cookies.set(COOKIE_NAME, '', { path: '/api/mcp/oauth/authorize', maxAge: 0 });
   return response;
 }
