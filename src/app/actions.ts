@@ -1,9 +1,12 @@
 'use server';
 
 import { db } from '@/db';
+import { isPendingAttachment, validatePendingAttachments, replacePendingAttachment, reconcilePendingAttachments, type UploadTarget } from '@/lib/background-attachments';
 import { notificationAudienceCondition } from '@/lib/notification-audience';
 import { requestNotificationWording } from '@/lib/notification-wording';
 import { scheduleNotificationEmails } from '@/lib/notification-email';
+import { insertNotificationEvent } from '@/lib/notification-events';
+import { requestAccessScope } from '@/lib/access-scope';
 import { emailNotificationPreferences } from '@/db/schema';
 import { DEFAULT_EMAIL_TYPES, validateEmailTypes } from '@/lib/notification-types';
 import { withTransaction, type Transaction } from '@/db/transaction';
@@ -353,7 +356,7 @@ async function getAccessibleCapdev(access: UserAccess, capdevId: number) {
 }
 
 async function getAccessibleRequest(access: UserAccess, requestId: number) {
-  const [record] = await db.select({ request: getTableColumns(requests), capdevDepartment: capdevs.department, parentArchivedAt: capdevs.archivedAt }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(eq(requests.id, requestId)).limit(1);
+  const [record] = await db.select({ request: getTableColumns(requests), capdevDepartment: capdevs.department, parentArchivedAt: capdevs.archivedAt }).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(and(eq(requests.id, requestId), requestAccessScope(access))).limit(1);
   if (!record) return null;
   const request = { ...record.request, parentArchivedAt: record.parentArchivedAt };
   if (access.role === 'employee') return request.userId === access.userId ? request : null;
@@ -625,19 +628,22 @@ export async function completeSelfRegistration(input: { role: string; department
     if (existingApproval) return { success: false, error: 'A role request already exists for this account.' };
 
     if (role === 'employee-department') {
-      const [approval] = await db.insert(roleApprovalRequests).values({
-        userId: session.user.id,
-        name: session.user.name || session.user.email || 'Unnamed user',
-        email: session.user.email || '',
-        department,
-        requestedRole: role,
-      }).returning({ id: roleApprovalRequests.id });
-      await createNotification({
-        title: 'Role approval requested',
-        message: `${session.user.name || session.user.email || 'A user'} requested Employee (All Department Requests) access.`,
-        link: `/portal/users?approval=${approval.id}#role-approval-${approval.id}`,
-        type: 'role_approval',
+      await withTransaction(async tx => {
+        const [approval] = await tx.insert(roleApprovalRequests).values({
+          userId: session.user.id,
+          name: session.user.name || session.user.email || 'Unnamed user',
+          email: session.user.email || '',
+          department,
+          requestedRole: role,
+        }).returning({ id: roleApprovalRequests.id });
+        await insertNotificationEvent(tx, {
+          title: 'Role approval requested',
+          message: `${session.user.name || session.user.email || 'A user'} requested Employee (All Department Requests) access.`,
+          link: `/portal/users?approval=${approval.id}#role-approval-${approval.id}`,
+          type: 'role_approval',
+        });
       });
+      scheduleNotificationEmails();
       return { success: true, pendingApproval: true as const };
     }
 
@@ -1411,6 +1417,7 @@ export async function createCapdev(data: CapdevInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo, access.userId) };
     const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;
     if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
       return { success: false, error: 'AIP Code must follow the format: 0000-000-0-0-00-000-000' };
@@ -1422,16 +1429,20 @@ export async function createCapdev(data: CapdevInput) {
     const aipCode = data.aipCode.trim();
     const [existing] = await db.select({ id: capdevs.id }).from(capdevs).where(eq(capdevs.aipCode, aipCode)).limit(1);
     if (existing) return { success: false, error: `A CapDev project with AIP Code ${aipCode} already exists.` };
-    const [created] = await db.insert(capdevs).values({ ...data, aipCode, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', updatedById: access.userId, initialBudget: data.budget }).returning();
-    await writeAuditLog(access, { action: 'created', entityType: 'capdev', entityId: created.id, entityLabel: created.aipCode, details: { department: created.department, initialBudget: created.initialBudget } });
-    await createNotification({
-      actorId: access.userId,
-      capdevId: created.id,
-      title: `New CapDev Project: ${created.aipCode}`,
-      message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-      link: `/portal#capdev-record-${created.id}`,
-      type: 'capdev_created',
+    const created = await withTransaction(async tx => {
+      const [created] = await tx.insert(capdevs).values({ ...data, aipCode, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', updatedById: access.userId, initialBudget: data.budget }).returning();
+      await insertNotificationEvent(tx, {
+        actorId: access.userId,
+        capdevId: created.id,
+        title: `New CapDev Project: ${created.aipCode}`,
+        message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+        link: `/portal#capdev-record-${created.id}`,
+        type: 'capdev_created',
+      });
+      return created;
     });
+    await writeAuditLog(access, { action: 'created', entityType: 'capdev', entityId: created.id, entityLabel: created.aipCode, details: { department: created.department, initialBudget: created.initialBudget } });
+    scheduleNotificationEmails();
     return { success: true, capdev: created };
   } catch (error) {
     console.error('Failed to create CapDev project:', error);
@@ -1446,6 +1457,7 @@ export async function updateCapdev(id: number, data: CapdevInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo, access.userId) };
     const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;
     if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
       return { success: false, error: 'AIP Code must follow the format: 0000-000-0-0-00-000-000' };
@@ -1457,11 +1469,14 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     const [previous] = await db.select().from(capdevs).where(eq(capdevs.id, id)).limit(1);
     if (!previous) return { success: false, error: 'CapDev project not found.' };
     if (previous.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
-    const [updated] = await db
-      .update(capdevs)
-      .set({ aipCode: data.aipCode, description: data.description, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', additionalInfo: data.additionalInfo, updatedById: access.userId, updatedAt: new Date() })
-      .where(and(eq(capdevs.id, id), isNull(capdevs.archivedAt)))
-      .returning();
+    const updated = await withTransaction(async tx => {
+      const [current] = await tx.select().from(capdevs).where(eq(capdevs.id, id)).for('update');
+      if (!current || current.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
+      const [saved] = await tx.update(capdevs)
+        .set({ aipCode: data.aipCode, description: data.description, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', additionalInfo: reconcilePendingAttachments(data.additionalInfo, (current.additionalInfo || {}) as Record<string, unknown>), updatedById: access.userId, updatedAt: new Date() })
+        .where(eq(capdevs.id, id)).returning();
+      return saved;
+    });
     if (!updated) return { success: false, error: 'CapDev project not found.' };
     const changes = auditChanges(previous, updated, { aipCode: 'AIP code', description: 'Description', department: 'Department' });
     const fields = await getCapdevFieldDefinitions();
@@ -2123,6 +2138,7 @@ export async function createRequest(data: RequestInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return unauthorized;
+    data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo, access.userId) };
     const validated = validateRequestInput(data);
     data = { ...data, ...validated };
     const parent = await getAccessibleCapdev(access, data.capdevId);
@@ -2149,18 +2165,19 @@ export async function createRequest(data: RequestInput) {
     }).returning();
       await claimRequestFolder(tx, access.userId, record.id, validated.additionalInfo);
       const [saved] = await tx.update(requests).set({ additionalInfo: validated.additionalInfo }).where(eq(requests.id, record.id)).returning();
+      await insertNotificationEvent(tx, {
+        actorId: access.userId,
+        capdevId: saved.capdevId,
+        requestId: saved.id,
+        title: `New Requisition: ${saved.setting === 'internal' ? 'In-House' : saved.setting === 'external' ? 'External' : 'CapDev Request'}`,
+        message: `${saved.requestorName || 'Requestor'} submitted a request for ₱${Number(saved.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+        link: `/portal/capdev/${saved.capdevId}/requests#request-record-${saved.id}`,
+        type: 'new_request',
+      });
       return saved;
     });
     await writeAuditLog(access, { action: 'created', entityType: 'request', entityId: created.id, entityLabel: `Request #${created.id}`, details: { capdevId: created.capdevId, setting: created.setting, requestedBudget: created.requestedBudget, requestorName: created.requestorName } });
-    await createNotification({
-      actorId: access.userId,
-      capdevId: created.capdevId,
-      requestId: created.id,
-      title: `New Requisition: ${created.setting === 'internal' ? 'In-House' : created.setting === 'external' ? 'External' : 'CapDev Request'}`,
-      message: `${created.requestorName || 'Requestor'} submitted a request for ₱${Number(created.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-      link: `/portal/capdev/${created.capdevId}/requests#request-record-${created.id}`,
-      type: 'new_request',
-    });
+    scheduleNotificationEmails();
     return { success: true, request: created };
   } catch (error) {
     console.error('Failed to create request:', error);
@@ -2172,6 +2189,7 @@ export async function updateRequest(id: number, data: RequestInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access)) return unauthorized;
+    data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo, access.userId) };
     const validated = validateRequestInput(data);
     data = { ...data, ...validated };
     const existing = await getWritableRequest(access, id);
@@ -2189,6 +2207,7 @@ export async function updateRequest(id: number, data: RequestInput) {
     const updated = await withTransaction(async (tx) => {
       const [current] = await tx.select().from(requests).where(eq(requests.id, id)).for('update');
       if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error('Request not found.');
+      validated.additionalInfo = reconcilePendingAttachments(validated.additionalInfo, (current.additionalInfo || {}) as Record<string, unknown>);
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
       if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
       const [deducted] = await tx.select().from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
@@ -2273,7 +2292,7 @@ export type StatusUpdateInput = {
   additionalInfo?: Record<string, unknown>;
 };
 
-export type StopRequestInput = { requestId: number; reason: string; files: StatusAttachment[] };
+export type StopRequestInput = { requestId: number; reason: string; files: StatusAttachment[]; additionalInfo?: Record<string, unknown> };
 
 export type StatusAttachment = {
   id: string;
@@ -2409,7 +2428,136 @@ async function uploadFileToGoogleDrive(file: File, accessToken: string, parentFo
 
 type GoogleDriveUploadFile = { name: string; mimeType: string; size: number };
 
-async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, accessToken: string, origin: string, parentFolderId: string) {
+async function getUploadRecord(access: UserAccess, target: UploadTarget, tx?: Transaction) {
+  if (!Number.isSafeInteger(target.id) || target.id <= 0 || !['capdev', 'request', 'status'].includes(target.kind)) throw new Error('Invalid upload record.');
+  const database = tx || db;
+  if (target.kind === 'capdev') {
+    if (access.role !== 'admin') throw new Error(unauthorized.error);
+    const query = database.select().from(capdevs).where(eq(capdevs.id, target.id));
+    const [record] = tx ? await query.for('update') : await query;
+    if (!record || record.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
+    return { info: (record.additionalInfo || {}) as Record<string, unknown>, requestId: undefined, files: [] as StatusAttachment[], label: record.aipCode };
+  }
+  let requestId = target.id;
+  let update: typeof requestStatusUpdates.$inferSelect | undefined;
+  if (target.kind === 'status') {
+    // Lock order matches request deletion: request, parent, then timeline entry.
+    const [found] = await database.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, target.id));
+    if (!found) throw new Error('Status update not found.');
+    requestId = found.requestId;
+    update = found;
+  }
+  if (!canManageRequests(access) || !await getWritableRequest(access, requestId)) throw new Error(unauthorized.error);
+  const query = database.select().from(requests).where(eq(requests.id, requestId));
+  const [request] = tx ? await query.for('update') : await query;
+  const parentQuery = database.select().from(capdevs).where(eq(capdevs.id, request?.capdevId || 0));
+  const [parent] = tx ? await parentQuery.for('update') : await parentQuery;
+  if (!request || isArchiveReadOnly(request, parent) || (access.role === 'employee' && request.userId !== access.userId)) throw new Error(ARCHIVED_READ_ONLY);
+  if (update && tx) [update] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, target.id)).for('update');
+  if (target.kind === 'status' && (!update || update.archivedAt)) throw new Error(ARCHIVED_READ_ONLY);
+  return { info: ((update ? update.additionalInfo : request.additionalInfo) || {}) as Record<string, unknown>, requestId, files: (update?.files || []) as StatusAttachment[], label: request.requestorName || 'Request' };
+}
+
+function findPendingUpload(info: Record<string, unknown>, uploadId: string, userId: string) {
+  for (const value of Object.values(info)) {
+    if (!Array.isArray(value)) continue;
+    const item = value.find(item => isPendingAttachment(item) && item.pendingUploadId === uploadId && item.uploadedById === userId);
+    if (item && isPendingAttachment(item)) return item;
+  }
+  throw new Error('This attachment is no longer pending.');
+}
+
+// Reconcile a device's saved job before transferring bytes. Only files tagged by
+// LEAPRS for this account and this exact job may be recovered or removed.
+export async function reconcileBackgroundAttachment(target: UploadTarget, uploadId: string, recoverFile = false) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access) return unauthorized;
+    if (!Number.isSafeInteger(target.id) || target.id <= 0 || !['capdev', 'request', 'status'].includes(target.kind) || !/^[\w-]{1,100}$/.test(uploadId)) throw new Error('Invalid upload record.');
+    const table = target.kind === 'capdev' ? capdevs : target.kind === 'request' ? requests : requestStatusUpdates;
+    const [exists] = await db.select({ id: table.id }).from(table).where(eq(table.id, target.id));
+    let pending = false;
+    if (exists) {
+      const record = await getUploadRecord(access, target);
+      if (Object.values(record.info).some(value => Array.isArray(value) && value.some(item => item && typeof item === 'object' && item.backgroundUploadId === uploadId))) {
+        return { success: true as const, state: 'completed' as const };
+      }
+      pending = Object.values(record.info).some(value => Array.isArray(value) && value.some(item => isPendingAttachment(item) && item.pendingUploadId === uploadId && item.uploadedById === access.userId));
+    }
+    if (pending && !recoverFile) return { success: true as const, state: 'pending' as const };
+    const token = await getGoogleDriveAccessToken();
+    // Values are constrained IDs, not arbitrary Drive query fragments.
+    const query = `trashed = false and appProperties has { key='leaprsUploadId' and value='${uploadId}' } and appProperties has { key='leaprsRecord' and value='${target.kind}:${target.id}' } and appProperties has { key='leaprsUserId' and value='${access.userId.replaceAll("'", "\\'")}' }`;
+    const url = new URL('https://www.googleapis.com/drive/v3/files');
+    url.search = new URLSearchParams({ q: query, fields: 'files(id)', pageSize: '100' }).toString();
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('Unable to recover attachment.');
+    const { files } = await response.json() as { files: { id: string }[] };
+    if (pending) return { success: true as const, state: 'pending' as const, fileId: files[0]?.id };
+    // The saved record or pending attachment was removed. Clean up the orphan;
+    // valid pending attachments and completed record references are preserved.
+    for (const file of files) {
+      const removed = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      if (!removed.ok && removed.status !== 404) throw new Error('Unable to remove an unused attachment.');
+    }
+    return { success: true as const, state: 'cancelled' as const };
+  } catch (error) { return { success: false as const, error: error instanceof Error ? error.message : 'Unable to recover attachment.' }; }
+}
+
+export async function prepareBackgroundAttachment(target: UploadTarget, uploadId: string) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access) return unauthorized;
+    const record = await getUploadRecord(access, target);
+    const pending = findPendingUpload(record.info, uploadId, access.userId);
+    const requestHeaders = await headers();
+    const origin = requestHeaders.get('origin');
+    const host = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host');
+    if (!origin || new URL(origin).host !== host) throw new Error('The upload origin could not be verified.');
+    const token = await getGoogleDriveAccessToken();
+    const folder = await ensureRequestGoogleDriveFolder(token, access, record.requestId ? { requestId: record.requestId } : undefined);
+    const session = await createGoogleDriveUploadSession(pending, token, origin, folder, {
+      leaprsUploadId: uploadId, leaprsRecord: `${target.kind}:${target.id}`, leaprsUserId: access.userId,
+    });
+    return { success: true as const, session };
+  } catch (error) { return { success: false as const, error: error instanceof Error ? error.message : 'Unable to prepare attachment.' }; }
+}
+
+export async function finishBackgroundAttachment(target: UploadTarget, uploadId: string, fileId: string) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !/^[\w-]+$/.test(fileId)) return unauthorized;
+    await getUploadRecord(access, target);
+    const token = await getGoogleDriveAccessToken();
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,webViewLink,parents,appProperties,trashed`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('Unable to verify uploaded attachment.');
+    const file = await response.json() as { id: string; name: string; mimeType: string; size: string; webViewLink?: string; appProperties?: Record<string, string>; parents?: string[]; trashed?: boolean };
+    if (file.trashed || file.appProperties?.leaprsUploadId !== uploadId || file.appProperties?.leaprsRecord !== `${target.kind}:${target.id}` || file.appProperties?.leaprsUserId !== access.userId) throw new Error('Attachment ownership could not be verified.');
+    const attachment: StatusAttachment & { backgroundUploadId: string } = { id: file.id, name: file.name, mimeType: file.mimeType, url: file.webViewLink || `https://drive.google.com/open?id=${file.id}`, backgroundUploadId: uploadId };
+    await withTransaction(async tx => {
+      const record = await getUploadRecord(access, target, tx);
+      // A repeated completion call after a lost response must be harmless.
+      if (Object.values(record.info).some(value => Array.isArray(value) && value.some(item => item && typeof item === 'object' && 'id' in item && item.id === file.id))) return;
+      const pending = findPendingUpload(record.info, uploadId, access.userId);
+      if (Number(file.size) !== pending.size || file.name !== pending.name) throw new Error('Uploaded file does not match the selected attachment.');
+      let folder = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
+      if (record.requestId) {
+        const [stored] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, record.requestId));
+        folder = stored?.folderId;
+      }
+      if (!folder || !file.parents?.includes(folder)) throw new Error('Invalid attachment folder.');
+      const additionalInfo = replacePendingAttachment(record.info, uploadId, attachment);
+      if (target.kind === 'request') additionalInfo.googleDriveFolderId = folder;
+      if (target.kind === 'status' && record.requestId) await tx.update(requests).set({ additionalInfo: sql`coalesce(${requests.additionalInfo}, '{}'::jsonb) || ${JSON.stringify({ googleDriveFolderId: folder })}::jsonb` }).where(eq(requests.id, record.requestId));
+      if (target.kind === 'capdev') await tx.update(capdevs).set({ additionalInfo, updatedAt: new Date() }).where(eq(capdevs.id, target.id));
+      else if (target.kind === 'request') await tx.update(requests).set({ additionalInfo, updatedAt: new Date() }).where(eq(requests.id, target.id));
+      else await tx.update(requestStatusUpdates).set({ additionalInfo, files: [...record.files.filter(item => item.id !== attachment.id), attachment] }).where(eq(requestStatusUpdates.id, target.id));
+    });
+    return { success: true as const };
+  } catch (error) { return { success: false as const, error: error instanceof Error ? error.message : 'Unable to attach uploaded file.' }; }
+}
+
+async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, accessToken: string, origin: string, parentFolderId: string, appProperties?: Record<string, string>) {
   const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink', {
     method: 'POST',
     headers: {
@@ -2423,6 +2571,7 @@ async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, acces
       name: file.name,
       mimeType: file.mimeType || 'application/octet-stream',
       parents: [parentFolderId],
+      appProperties,
     }),
   });
   const uploadUrl = response.headers.get('location');
@@ -2582,21 +2731,22 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
       if (current.isStopped && access.role === 'employee') throw new Error('This request is stopped.');
       const forms = status === 'completed' && current.setting === 'internal' ? await ensureRequestEvaluationForms(current, tx) : null;
       await tx.update(requests).set({ status, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, requestId));
+      await insertNotificationEvent(tx, {
+        actorId: access.userId,
+        userId: current.userId || null,
+        capdevId: current.capdevId,
+        requestId,
+        title: `${current.requestorName || 'Requestor'} · Request ${status === 'completed' ? 'Completed' : 'Denied'}`,
+        message: `The request for ${current.requestorName || 'Requestor'} was resolved as ${status}.`,
+        link: `/portal/capdev/${current.capdevId}/requests/${requestId}/status#request-status-resolution`,
+        type: status,
+      });
       return forms;
     });
 
     await writeAuditLog(access, { action: 'status_changed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { capdevId: req.capdevId, requestorName: req.requestorName, previousStatus: req.status, status } });
 
-    await createNotification({
-      actorId: access.userId,
-      userId: req.userId || null,
-      capdevId: req.capdevId,
-      requestId,
-      title: `${req.requestorName || 'Requestor'} · Request ${status === 'completed' ? 'Completed' : 'Denied'}`,
-      message: `The request for ${req.requestorName || 'Requestor'} was resolved as ${status}.`,
-      link: `/portal/capdev/${req.capdevId}/requests/${requestId}/status#request-status-resolution`,
-      type: status,
-    });
+    scheduleNotificationEmails();
 
     return { success: true, forms };
   } catch (error) {
@@ -2609,9 +2759,10 @@ export async function stopRequestProgress(data: StopRequestInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canControlRequestStop(access) || !await getWritableRequest(access, data.requestId)) return unauthorized;
+    const additionalInfo = validatePendingAttachments(data.additionalInfo || {}, access.userId);
     if (!data.reason.trim()) return { success: false, error: 'A stopper reason is required.' };
     const { data: session } = await auth.getSession();
-    const { request, stopper } = await withTransaction(async (tx) => {
+    const { stopper } = await withTransaction(async (tx) => {
       const [request] = await tx.select().from(requests).where(eq(requests.id, data.requestId)).for('update');
       const [parent] = request ? await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update') : [];
       if (isArchiveReadOnly(request, parent)) throw new Error(ARCHIVED_READ_ONLY);
@@ -2624,23 +2775,25 @@ export async function stopRequestProgress(data: StopRequestInput) {
       authorName: session?.user?.name || session?.user?.email || 'Staff member',
       statusUpdate: data.reason.trim(),
       files: data.files || [],
+      additionalInfo,
       isStopper: true,
       }).returning();
       await tx.update(requests).set({ isStopped: true, activeStopperId: stopper.id, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, data.requestId));
+      await insertNotificationEvent(tx, {
+        actorId: access.userId,
+        userId: request.userId,
+        capdevId: request.capdevId,
+        requestId: data.requestId,
+        title: `${request.requestorName || 'Requestor'} · Request Stopped`,
+        message: `${session?.user?.name || session?.user?.email || 'Staff'} stopped progress: ${data.reason.trim().slice(0, 90)}`,
+        link: `/portal/capdev/${request.capdevId}/requests/${data.requestId}/status#request-status-update-${stopper.id}`,
+        type: 'status_update',
+      });
       return { request, stopper };
     });
     await writeAuditLog(access, { action: 'stopped', entityType: 'request', entityId: data.requestId, entityLabel: `Request #${data.requestId}`, details: { reason: data.reason.trim(), statusUpdateId: stopper.id } });
-    await createNotification({
-      actorId: access.userId,
-      userId: request.userId,
-      capdevId: request.capdevId,
-      requestId: data.requestId,
-      title: `${request.requestorName || 'Requestor'} · Request Stopped`,
-      message: `${session?.user?.name || session?.user?.email || 'Staff'} stopped progress: ${data.reason.trim().slice(0, 90)}`,
-      link: `/portal/capdev/${request.capdevId}/requests/${data.requestId}/status#request-status-update-${stopper.id}`,
-      type: 'status_update',
-    });
-    return { success: true };
+    scheduleNotificationEmails();
+    return { success: true, statusUpdateId: stopper.id };
   } catch (error) {
     console.error('Failed to stop request progress:', error);
     return { success: false, error: 'Unable to stop request progress.' };
@@ -2659,21 +2812,22 @@ export async function resumeRequestProgress(requestId: number) {
       if (!request?.isStopped || !request.activeStopperId) throw new Error('This request is not stopped.');
       const [activeStopper] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, request.activeStopperId));
       if (activeStopper?.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
-      await tx.insert(requestStatusUpdates).values({ requestId, userId: access.userId, authorName: session?.user?.name || session?.user?.email || 'Staff member', statusUpdate: 'Progress resumed.', isResume: true, stopperId: request.activeStopperId });
+      const [resumed] = await tx.insert(requestStatusUpdates).values({ requestId, userId: access.userId, authorName: session?.user?.name || session?.user?.email || 'Staff member', statusUpdate: 'Progress resumed.', isResume: true, stopperId: request.activeStopperId }).returning({ id: requestStatusUpdates.id });
       await tx.update(requests).set({ isStopped: false, activeStopperId: null, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, requestId));
+      await insertNotificationEvent(tx, {
+        actorId: access.userId,
+        userId: request.userId,
+        capdevId: request.capdevId,
+        requestId,
+        title: `${request.requestorName || 'Requestor'} · Request Resumed`,
+        message: `${session?.user?.name || session?.user?.email || 'Staff'} resumed progress.`,
+        link: `/portal/capdev/${request.capdevId}/requests/${requestId}/status#request-status-update-${resumed.id}`,
+        type: 'status_update',
+      });
       return request;
     });
     await writeAuditLog(access, { action: 'resumed', entityType: 'request', entityId: requestId, entityLabel: `Request #${requestId}`, details: { stopperId: request.activeStopperId } });
-    await createNotification({
-      actorId: access.userId,
-      userId: request.userId,
-      capdevId: request.capdevId,
-      requestId,
-      title: `${request.requestorName || 'Requestor'} · Request Resumed`,
-      message: `${session?.user?.name || session?.user?.email || 'Staff'} resumed progress.`,
-      link: `/portal/capdev/${request.capdevId}/requests/${requestId}/status#request-status-update-${request.activeStopperId}`,
-      type: 'status_update',
-    });
+    scheduleNotificationEmails();
     return { success: true };
   } catch (error) {
     console.error('Failed to resume request progress:', error);
@@ -2685,6 +2839,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || !canManageRequests(access) || !await getWritableRequest(access, data.requestId)) return unauthorized;
+    data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo || {}, access.userId) };
     for (const flag of [data.markAsComplete, data.subtractsRequestedAmount, data.isStopperResponse]) {
       if (flag !== undefined && typeof flag !== 'boolean') return { success: false, error: 'Invalid status update options.' };
     }
@@ -2717,7 +2872,8 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
     if (!data.statusUpdate?.trim() || data.statusUpdate.length > 20000) return { success: false, error: 'Enter a status update of up to 20,000 characters.' };
     if (isStopperResponse && (data.subtractsRequestedAmount || data.markAsComplete)) return { success: false, error: 'A stopper response cannot deduct budget or complete a request.' };
     const deductedAmount = data.deductedAmount === undefined || data.deductedAmount === '' ? undefined : validateMoney(data.deductedAmount);
-    const createdUpdate = await withTransaction((tx) => writeRequestStatusUpdate(tx, access.role, {
+    const createdUpdate = await withTransaction(async (tx) => {
+      const createdUpdate = await writeRequestStatusUpdate(tx, access.role, {
       requestId: data.requestId, userId: access.userId,
       authorName: session?.user?.name || session?.user?.email || 'Staff member',
       statusUpdate: data.statusUpdate, remarks: data.remarks || null, files: data.files || [],
@@ -2725,7 +2881,21 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
       subtractsRequestedAmount: Boolean(data.subtractsRequestedAmount), isStopperResponse,
       stopperId: isStopperResponse ? data.stopperId : null, additionalInfo: data.additionalInfo || {},
       deductedAmount,
-    }));
+      });
+      await insertNotificationEvent(tx, {
+        actorId: access.userId,
+        userId: existingReq[0].userId !== access.userId ? existingReq[0].userId : null,
+        capdevId: existingReq[0].capdevId,
+        requestId: data.requestId,
+        title: data.statusMark
+          ? `${existingReq[0].requestorName || 'Requestor'} · Update: [${data.statusMark.toUpperCase()}]`
+          : `${existingReq[0].requestorName || 'Requestor'} · Status Update`,
+        message: `${session?.user?.name || session?.user?.email || 'Staff'}: ${data.statusUpdate.slice(0, 90)}`,
+        link: `/portal/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status#request-status-update-${isStopperResponse ? data.stopperId : createdUpdate.id}`,
+        type: 'status_update',
+      });
+      return createdUpdate;
+    });
 
     await writeAuditLog(access, {
       action: 'created',
@@ -2746,20 +2916,9 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
     });
 
     // 3. Send notification (notifies request owner or other staff, never the actor who posted the status update)
-    await createNotification({
-      actorId: access.userId,
-      userId: existingReq[0].userId !== access.userId ? existingReq[0].userId : null,
-      capdevId: existingReq[0].capdevId,
-      requestId: data.requestId,
-      title: data.statusMark
-        ? `${existingReq[0].requestorName || 'Requestor'} · Update: [${data.statusMark.toUpperCase()}]`
-        : `${existingReq[0].requestorName || 'Requestor'} · Status Update`,
-      message: `${session?.user?.name || session?.user?.email || 'Staff'}: ${data.statusUpdate.slice(0, 90)}`,
-      link: `/portal/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status#request-status-update-${isStopperResponse ? data.stopperId : createdUpdate.id}`,
-      type: 'status_update',
-    });
+    scheduleNotificationEmails();
 
-    return { success: true };
+    return { success: true, statusUpdateId: createdUpdate.id };
   } catch (error) {
     console.error('Failed to create request status update:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Database insert failed' };
@@ -2903,34 +3062,6 @@ export async function markAllNotificationsAsRead() {
   }
 }
 
-async function createNotification(data: {
-  userId?: string | null;
-  actorId?: string | null;
-  capdevId?: number | null;
-  requestId?: number | null;
-  title: string;
-  message: string;
-  link: string;
-  type?: string;
-}) {
-  try {
-    const [created] = await db.insert(notifications).values({
-      userId: data.userId || null,
-      actorId: data.actorId || null,
-      capdevId: data.capdevId || null,
-      requestId: data.requestId || null,
-      title: data.title,
-      message: data.message,
-      link: data.link,
-      type: data.type || 'status_update',
-    }).returning();
-    scheduleNotificationEmails();
-    return { success: true, notification: created };
-  } catch (error) {
-    console.error('Failed to create notification:', error);
-    return { success: false };
-  }
-}
 
 export async function requestPasswordReset(rawEmail: string): Promise<{ success: boolean; message?: string; error?: string }> {
   const generic = { success: true, message: 'If an account exists, a verification code has been sent. Please wait before requesting another.' };

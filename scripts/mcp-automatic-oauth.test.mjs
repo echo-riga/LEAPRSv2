@@ -23,6 +23,7 @@ const nextHeadersUrl = pathToFileURL(require.resolve('next/headers')).href;
 const virtual = text => ({ url: 'data:text/javascript,' + encodeURIComponent(text), shortCircuit: true });
 registerHooks({ resolve(specifier, ctx, nextResolve) {
   if (specifier === '@/db') return virtual('export const db = globalThis.automaticMcpDb;');
+  if (specifier === '@/db/transaction') return virtual('export const withTransaction = run => globalThis.automaticMcpDb.transaction(run);');
   if (specifier === '@/lib/auth/server') return virtual('export const auth = globalThis.automaticMcpAuth;');
   return nextResolve(specifier === 'next/server' ? nextServerUrl : specifier === 'next/headers' ? nextHeadersUrl : specifier.startsWith('@/') ?
     new URL('../src/' + specifier.slice(2) + '.ts', import.meta.url).href : specifier, ctx);
@@ -32,7 +33,8 @@ const { POST: register } = await import('../src/app/api/mcp/oauth/register/route
 const { GET: consent, POST: approve } = await import('../src/app/api/mcp/oauth/authorize/route.ts');
 const { POST: exchange } = await import('../src/app/api/mcp/oauth/token/route.ts');
 const { GET: discovery } = await import('../src/app/.well-known/oauth-authorization-server/route.ts');
-const { getBearerAccess, oauthConfig } = await import('../src/lib/mcp/oauth.ts');
+const { getBearerAccess, oauthConfig, issueGrant } = await import('../src/lib/mcp/oauth.ts');
+const { getConnectedAiApps, revokeAiApp } = await import('../src/app/mcp-connection-actions.ts');
 const { validateClientRegistration } = await import('../src/lib/mcp/client-registration.ts');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const name = 'mcp_test_' + randomUUID().replaceAll('-', '');
@@ -78,7 +80,9 @@ test('automatic OAuth registration, consent, tokens and live user permissions', 
       await client.query(`CREATE TABLE ${quoted}."${table}" (LIKE public."${table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)`);
     }
     await client.query('SET search_path TO ' + quoted);
-    await context.run(drizzle(client), async () => {
+    await drizzle(client).transaction(async transaction => {
+    await transaction.execute(sql.raw('SET LOCAL search_path TO ' + quoted));
+    await context.run(transaction, async () => {
       const db = context.getStore();
       await db.execute(sql`INSERT INTO users(id,role,department) VALUES (${identity.id},'employee','Alpha')`);
       let publicClient, confidentialClient, credentials;
@@ -145,6 +149,27 @@ test('automatic OAuth registration, consent, tokens and live user permissions', 
         assert.equal((await token({ ...otherGrant, client_id: publicClient.client_id, grant_type: 'authorization_code', redirect_uri: 'https://evil.example/callback' })).status, 400);
         assert.equal((await token({ client_id: 'leaprs-claude', client_secret: 'old-secret', grant_type: 'refresh_token', refresh_token: 'old-token' })).status, 401);
       });
+      await t.test('revocation blocks access, refresh and unused codes for only the approving user', async () => {
+        const grant = await authorize(publicClient, publicClient.redirect_uris[0]);
+        const other = { userId: randomUUID(), name: 'Other', email: 'other@example.test' };
+        await db.execute(sql`INSERT INTO users(id,role,department) VALUES (${other.userId},'employee','Alpha')`);
+        const otherToken = await issueGrant('access', other, publicClient.client_id, base + '/api/mcp', 60000);
+        const before = await getConnectedAiApps();
+        assert.equal(before.success, true);
+        assert.ok(before.apps.some(app => app.clientId === publicClient.client_id));
+        assert.equal((await revokeAiApp(publicClient.client_id)).success, true);
+        const after = await getConnectedAiApps();
+        assert.ok(!after.apps.some(app => app.clientId === publicClient.client_id));
+        assert.equal(await getBearerAccess('Bearer ' + credentials.access_token), null);
+        assert.equal((await token({ client_id: publicClient.client_id, grant_type: 'refresh_token', refresh_token: credentials.refresh_token })).status, 400);
+        assert.equal((await token({ ...grant, client_id: publicClient.client_id, grant_type: 'authorization_code' })).status, 400);
+        assert.equal((await getBearerAccess('Bearer ' + otherToken)).userId, other.userId);
+        // Explicit approval can establish a new connection after revocation.
+        const approved = await authorize(publicClient, publicClient.redirect_uris[0]);
+        const response = await token({ ...approved, client_id: publicClient.client_id, grant_type: 'authorization_code' });
+        assert.equal(response.status, 200);
+        credentials = await response.json();
+      });
       await t.test('archiving, current role, maintenance and client deletion affect token access immediately', async () => {
         await db.execute(sql`UPDATE users SET role = 'viewer', department = 'Beta' WHERE id = ${identity.id}`);
         assert.equal((await getBearerAccess('Bearer ' + credentials.access_token)).department, 'Beta');
@@ -164,11 +189,68 @@ test('automatic OAuth registration, consent, tokens and live user permissions', 
         assert.equal((await registration({ redirect_uris: ['https://example.test/callback'] })).status, 429);
       });
     });
+    });
   } finally {
     await client.query('SET search_path TO public');
     await client.query('DROP SCHEMA IF EXISTS ' + quoted + ' CASCADE');
     client.release();
     await pool.end();
+  }
+});
+
+test('a refresh racing revocation cannot leave usable replacement tokens', async () => {
+  const racePool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const raceSchema = 'mcp_race_' + randomUUID().replaceAll('-', '');
+  const raceQuoted = '"' + raceSchema + '"';
+  const clientId = randomBytes(32).toString('base64url');
+  const scoped = async run => {
+    const connection = await racePool.connect();
+    try {
+      return await drizzle(connection).transaction(async tx => {
+        await tx.execute(sql.raw('SET LOCAL search_path TO ' + raceQuoted));
+        return context.run(tx, run);
+      });
+    } finally { connection.release(); }
+  };
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let refreshing, revoking;
+  try {
+    await racePool.query('CREATE SCHEMA ' + raceQuoted);
+    for (const table of ['users', 'system_settings', 'mcp_oauth_clients', 'mcp_oauth_grants']) {
+      await racePool.query(`CREATE TABLE ${raceQuoted}."${table}" (LIKE public."${table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)`);
+    }
+    const oldRefresh = await scoped(async () => {
+      const db = context.getStore();
+      await db.execute(sql`INSERT INTO users(id,role,department) VALUES (${identity.id},'employee','Alpha')`);
+      await db.execute(sql`INSERT INTO mcp_oauth_clients(client_id,client_name,redirect_uris,token_endpoint_auth_method)
+        VALUES (${clientId},'Race test','["https://example.test/callback"]'::jsonb,'none')`);
+      return issueGrant('refresh', { userId: identity.id, name: identity.name, email: identity.email }, clientId, base + '/api/mcp', 60000);
+    });
+    let ready;
+    const issued = new Promise(resolve => { ready = resolve; });
+    refreshing = scoped(async () => {
+      const response = await token({ client_id: clientId, grant_type: 'refresh_token', refresh_token: oldRefresh });
+      const credentials = await response.json();
+      ready();
+      await gate; // Keep the refresh transaction's client lock until revoke is waiting.
+      assert.equal(response.status, 200);
+      return credentials;
+    });
+    await issued;
+    revoking = scoped(() => revokeAiApp(clientId));
+    release();
+    const [credentials, revoked] = await Promise.all([refreshing, revoking]);
+    assert.equal(revoked.success, true);
+    await scoped(async () => {
+      assert.equal(await getBearerAccess('Bearer ' + credentials.access_token), null);
+      assert.equal((await token({ client_id: clientId, grant_type: 'refresh_token', refresh_token: credentials.refresh_token })).status, 400);
+    });
+  } finally {
+    release();
+    await Promise.allSettled([refreshing, revoking].filter(Boolean));
+    await racePool.query('DROP SCHEMA IF EXISTS ' + raceQuoted + ' CASCADE');
+    await racePool.end();
   }
 });
 

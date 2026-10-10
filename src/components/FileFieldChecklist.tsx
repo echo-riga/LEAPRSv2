@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import type { PendingAttachment } from '@/lib/background-attachments';
 import {
   AttachFile as AttachFileIcon,
   CheckCircle as CheckCircleIcon,
@@ -32,6 +33,7 @@ type FileFieldChecklistProps = {
   required?: boolean;
   existingFiles: ChecklistAttachment[];
   pendingFiles: File[];
+  pendingUploads?: PendingAttachment[];
   editable?: boolean;
   onSelectFiles?: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onRemoveExisting?: (fileId: string) => void;
@@ -77,9 +79,10 @@ export default function FileFieldChecklist({
   onSelectFiles,
   onRemoveExisting,
   onRemovePending,
+  pendingUploads = [],
 }: FileFieldChecklistProps) {
   const [open, setOpen] = useState(false);
-  const fileCount = existingFiles.length + pendingFiles.length;
+  const fileCount = existingFiles.length + pendingFiles.length + pendingUploads.length;
   const hasFiles = fileCount > 0;
   const handleSelectFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     onSelectFiles?.(event);
@@ -133,6 +136,7 @@ export default function FileFieldChecklist({
         <DialogTitle sx={{ fontWeight: 800 }}>{label}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={1}>
+            {pendingUploads.map(file => <Typography key={file.pendingUploadId} variant="body2" color="text.secondary">{file.name} · Upload pending</Typography>)}
             {existingFiles.map((file) => (
               <Stack
                 key={file.id}

@@ -15,7 +15,8 @@ import DynamicTableField from '@/components/DynamicTableField';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
-import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
+import { isPendingAttachment, stageAttachments } from '@/lib/background-attachments';
+import { useAttachmentRefresh, useBackgroundUploads } from '@/components/BackgroundUploads';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
 import FileFieldChecklist from '@/components/FileFieldChecklist';
 import { focusFormError } from '@/lib/form-error-focus';
@@ -44,6 +45,7 @@ const formatAipCode = (value: string) => {
 };
 
 export default function PortalPage() {
+  const uploads = useBackgroundUploads();
   const router = useRouter();
   const session = authClient.useSession();
   const [projects, setProjects] = useState<Capdev[]>([]);
@@ -137,6 +139,7 @@ export default function PortalPage() {
     void Promise.resolve().then(() => { if (active) return loadData(); });
     return () => { active = false; sequenceRef.current++; };
   }, [loadData]);
+  useAttachmentRefresh(loadData);
   useEffect(() => {
     if (!userId) return;
     let active = true;
@@ -197,7 +200,7 @@ export default function PortalPage() {
   const hasDynamicValue = (field: DynamicField) => {
     const storageKey = dynamicFieldStorageKey(field);
     const value = getDynamicFieldValue(form.additionalInfo, field);
-    if (field.type === 'file') return getAttachments(value).length > 0 || (pendingFiles[storageKey] || []).length > 0;
+    if (field.type === 'file') return getAttachments(value).length > 0 || (Array.isArray(value) && value.some(isPendingAttachment)) || (pendingFiles[storageKey] || []).length > 0;
     if (field.type === 'table') {
       if (Array.isArray(value) && value.length > 0) {
         return value.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
@@ -228,21 +231,11 @@ export default function PortalPage() {
     setSaving(true);
     setError('');
     try {
-      const additionalInfo = { ...form.additionalInfo };
-      for (const [fieldName, files] of Object.entries(pendingFiles)) {
-        if (files.length === 0) continue;
-        const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
-        const uploaded = await uploadFilesDirectlyToGoogleDrive(files);
-        if (!uploaded.success) {
-          showFormError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`);
-          return;
-        }
-        const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
-        additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
-      }
+      const { additionalInfo, jobs } = stageAttachments(form.additionalInfo, pendingFiles, definitions);
       const payload = { ...form, additionalInfo, aipCode: form.aipCode.trim(), department: (form.department && form.department.trim() !== 'None') ? form.department.trim() : '', updatedById: session.data.user.id };
       const result = editing ? await updateCapdev(editing.id, payload) : await createCapdev(payload);
       if (result.success) {
+        if (result.capdev) uploads.enqueue({ kind: 'capdev', id: result.capdev.id }, result.capdev.aipCode, jobs);
         setEditorOpen(false);
         const projectDept = payload.department?.trim() || 'None';
         setFilters((current) => ({
@@ -357,6 +350,7 @@ export default function PortalPage() {
             required={isRequired}
             existingFiles={getAttachments(fieldValue)}
             pendingFiles={pendingFiles[storageKey] || []}
+            pendingUploads={Array.isArray(fieldValue) ? fieldValue.filter(isPendingAttachment) : []}
             editable={isAdmin}
             onSelectFiles={(event) => addSelectedFiles(storageKey, event)}
             onRemoveExisting={(fileId) => removeExistingAttachment(field, fileId)}

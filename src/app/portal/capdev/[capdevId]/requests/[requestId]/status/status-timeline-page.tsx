@@ -71,7 +71,8 @@ import SelectionCombobox from '@/components/SelectionCombobox';
 import DynamicTableField from '@/components/DynamicTableField';
 import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
-import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
+import { isPendingAttachment, stageAttachments } from '@/lib/background-attachments';
+import { useAttachmentRefresh, useBackgroundUploads } from '@/components/BackgroundUploads';
 import type { EvaluationSummary } from '@/lib/google-forms';
 import FileFieldChecklist from '@/components/FileFieldChecklist';
 import { focusFormError } from '@/lib/form-error-focus';
@@ -306,6 +307,7 @@ function ConnectorLeft({ toResolution = false }: { toResolution?: boolean }) {
 }
 
 export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: number; requestId: number }) {
+  const uploads = useBackgroundUploads();
   const router = useRouter();
   const searchParams = useSearchParams();
   const reminderQuery = searchParams.get('reminder');
@@ -489,6 +491,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   useEffect(() => {
     void Promise.resolve().then(loadData);
   }, [loadData]);
+  useAttachmentRefresh(loadData);
 
   useEffect(() => {
     const refresh = () => { void loadData(); };
@@ -649,27 +652,25 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     if (readOnly) return;
     if (!session.data || !stopperResponse.text.trim()) return;
     setRespondingToStopper(true);
-    const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperResponse.files, { requestId });
-    if (!uploaded.success) {
-      setError(uploaded.error || 'Unable to upload the selected files.');
-      setRespondingToStopper(false);
-      return;
-    }
+    try {
+    const { additionalInfo, jobs } = stageAttachments({}, { attachments: stopperResponse.files });
     const result = await createRequestStatusUpdate({
       requestId,
       userId: session.data.user.id,
       statusUpdate: stopperResponse.text.trim(),
-      files: uploaded.files,
+      files: [], additionalInfo,
       isStopperResponse: true,
       stopperId,
     });
     if (result.success) {
+      if (result.statusUpdateId) uploads.enqueue({ kind: 'status', id: result.statusUpdateId, requestId }, request?.requestorName || 'Stopper response', jobs);
       setStopperResponse({ text: '', files: [] });
       await loadData();
     } else {
       setError(result.error || 'Unable to save the stopper response.');
     }
-    setRespondingToStopper(false);
+    } catch (error) { setError(error instanceof Error ? error.message : 'Unable to save response.'); }
+    finally { setRespondingToStopper(false); }
   };
 
   const handleInitiateSave = () => {
@@ -699,18 +700,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     if (!session.data || !form.statusUpdate.trim()) return;
     setSaving(true);
     const stopperFiles = pendingFiles['stopper'] || form.files || [];
-    const uploaded = await uploadFilesDirectlyToGoogleDrive(stopperFiles, { requestId });
-    if (!uploaded.success) {
-      showStatusFormError(uploaded.error || 'Unable to upload the selected files.');
-      setSaving(false);
-      return;
-    }
+    try {
+    const { additionalInfo, jobs } = stageAttachments({}, { attachments: stopperFiles });
     const result = await stopRequestProgress({
       requestId,
       reason: form.statusUpdate.trim(),
-      files: uploaded.files,
+      files: [], additionalInfo,
     });
     if (result.success) {
+      if (result.statusUpdateId) uploads.enqueue({ kind: 'status', id: result.statusUpdateId, requestId }, request?.requestorName || 'Stopper', jobs);
       setDialogOpen(false);
       await loadData();
     } else {
@@ -721,7 +719,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         showStatusFormError(message);
       }
     }
-    setSaving(false);
+    } catch (error) { showStatusFormError(error instanceof Error ? error.message : 'Unable to save stopper.'); }
+    finally { setSaving(false); }
   };
 
   const handleResumeProgress = async () => {
@@ -739,27 +738,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     setSaving(true);
     setError('');
 
-    const additionalInfo = { ...form.additionalInfo };
-    const allUploadedFiles: StatusAttachment[] = [];
-
-    // Upload pending files for any dynamic file fields
-    for (const [fieldName, files] of Object.entries(pendingFiles)) {
-      if (files.length === 0) continue;
-      const field = definitions.find((d) => dynamicFieldStorageKey(d) === fieldName);
-      const uploaded = await uploadFilesDirectlyToGoogleDrive(files, { requestId });
-      if (!uploaded.success) {
-        showStatusFormError(
-          uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`,
-          deductedAmountOverride !== undefined ? 'status-deduction-error' : 'status-form-error'
-        );
-        setSaving(false);
-        return;
-      }
-      const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
-      const combined = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
-      additionalInfo[fieldName] = combined;
-      allUploadedFiles.push(...uploaded.files);
-    }
+    try {
+    const { additionalInfo, jobs } = stageAttachments(form.additionalInfo, pendingFiles, definitions);
 
     // Resolve primary statusUpdate and remarks strings
     let primaryStatusUpdate = form.statusUpdate.trim();
@@ -796,7 +776,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       userId: session.data.user.id,
       statusUpdate: primaryStatusUpdate,
       remarks: primaryRemarks || undefined,
-      files: allUploadedFiles,
+      files: [],
       statusMark: form.statusMark,
       subtractsRequestedAmount: hasDeductedBudget ? false : form.subtractsRequestedAmount,
       deductedAmount: deductedAmountOverride,
@@ -804,6 +784,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     });
 
     if (result.success) {
+      if (result.statusUpdateId) uploads.enqueue({ kind: 'status', id: result.statusUpdateId, requestId }, request?.requestorName || 'Status update', jobs);
       setDialogOpen(false);
       setDeductModalOpen(false);
       await loadData();
@@ -831,7 +812,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         }
       }
     }
-    setSaving(false);
+    } catch (error) { showStatusFormError(error instanceof Error ? error.message : 'Unable to save status update.'); }
+    finally { setSaving(false); }
   };
 
   const handleCopyFormLink = (formName: string, url: string | null) => {
@@ -966,6 +948,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             required={field.isRequired}
             existingFiles={getAttachments(fieldValue)}
             pendingFiles={pendingFiles[storageKey] || []}
+            pendingUploads={Array.isArray(fieldValue) ? fieldValue.filter(isPendingAttachment) : []}
             onSelectFiles={(event) => addSelectedFiles(storageKey, event)}
             onRemoveExisting={(fileId) => removeExistingAttachment(field, fileId)}
             onRemovePending={(file) => removeSelectedFile(storageKey, file)}
@@ -1268,6 +1251,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                             );
                           }
                           if (Array.isArray(v)) {
+                            if (v.some(isPendingAttachment)) return <ReadOnlyDynamicField key={k} field={{ name: label, type: 'file' }} value={v} />;
                             const files = getAttachments(v);
                             if (files.length > 0) {
                               return (
@@ -1739,7 +1723,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           {viewingUpdate && showStandaloneRemarks(viewingUpdate.remarks, viewingFields) && <Typography sx={{ whiteSpace: 'pre-wrap' }}>{viewingUpdate.remarks}</Typography>}
           {viewingFields.map(([key, value]) => {
             const field = definitions.find((definition) => dynamicFieldStorageKey(definition) === key || definition.name === key);
-            return <ReadOnlyDynamicField key={key} field={field || { name: key, type: getAttachments(value).length ? 'file' : 'text' }} value={value} />;
+            return <ReadOnlyDynamicField key={key} field={field || { name: key, type: getAttachments(value).length || (Array.isArray(value) && value.some(isPendingAttachment)) ? 'file' : 'text' }} value={value} />;
           })}
           {viewingStandaloneFiles.length > 0 && <ReadOnlyDynamicField field={{ name: 'Attachments', type: 'file' }} value={viewingStandaloneFiles} />}
         </Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setViewingUpdate(null)}>Close</Button></DialogActions>

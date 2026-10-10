@@ -37,7 +37,8 @@ import {
   getRequestFieldDefinitions,
   getCurrentUserAccess,
 } from '@/app/actions';
-import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
+import { stageAttachments } from '@/lib/background-attachments';
+import { useBackgroundUploads } from '@/components/BackgroundUploads';
 import { authClient } from '@/lib/auth/client';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
@@ -61,6 +62,7 @@ export type DynamicField = {
 };
 
 export type DraftState = {
+  pendingSourceFile?: File;
   aipCode?: string | null;
   capdev?: { id: number; aipCode: string; department: string; remainingBudget: number } | null;
   setting: 'internal' | 'external';
@@ -487,7 +489,7 @@ function RequestDraftModal({
                     />
                   )}
                   <Typography variant="body2" sx={{ fontWeight: 600, flexGrow: 1 }}>
-                    {draft.sourceFile?.name || 'Attached Activity Design'}
+                    {draft.sourceFile?.name || draft.pendingSourceFile?.name || 'Attached Activity Design'}
                   </Typography>
                   {draft.sourceFile?.url && (
                     <Button
@@ -538,6 +540,7 @@ interface PortalChatbotProps {
 }
 
 export default function PortalChatbot({ userRole }: PortalChatbotProps) {
+  const uploads = useBackgroundUploads();
   const session = authClient.useSession();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [message, setMessage] = useState('');
@@ -703,26 +706,12 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
         reader.readAsDataURL(primaryFile);
         const base64Data = await base64Promise;
 
-        let attachment: StatusAttachment | undefined;
-        try {
-          const uploadResult = await uploadFilesDirectlyToGoogleDrive([primaryFile], {
-            requestorName: session.data?.user?.name || undefined,
-            dateRequested: new Date().toISOString().split('T')[0],
-          });
-          if (uploadResult.success && uploadResult.files.length > 0) {
-            attachment = uploadResult.files[0];
-          }
-        } catch (err) {
-          console.warn('Google Drive direct upload notice:', err);
-        }
-
         const result = await handleChatbotActivityDesignUpload(
           {
             base64Data,
             mimeType: primaryFile.type || 'image/jpeg',
             fileName: primaryFile.name,
-          },
-          attachment
+          }
         );
 
         if (result.success) {
@@ -735,7 +724,8 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
               description: result.draft.description,
               dynamicFields: result.draft.dynamicFields,
               attachments: result.draft.attachments,
-              sourceFile: result.draft.sourceFile || attachment || null,
+              sourceFile: result.draft.sourceFile || null,
+              pendingSourceFile: primaryFile,
               imagePreviewUrl: imagePreviews[0],
               missingRequiredFields: result.draft.missingRequiredFields,
               budgetValidation: result.draft.budgetValidation,
@@ -847,12 +837,15 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
     setSubmittingDraft(true);
 
     try {
+      const field = definitions.find(field => field.setting === draftToSubmit.setting && field.type === 'file');
+      const { additionalInfo, jobs } = stageAttachments(draftToSubmit.dynamicFields,
+        draftToSubmit.pendingSourceFile ? { [field ? dynamicFieldStorageKey(field) : 'attachments']: [draftToSubmit.pendingSourceFile] } : {}, definitions);
       const result = await handleChatbotSubmitRequest({
         aipCode: draftToSubmit.aipCode,
         setting: draftToSubmit.setting,
         requestedBudget: draftToSubmit.requestedBudget,
         description: draftToSubmit.description,
-        dynamicFields: draftToSubmit.dynamicFields,
+        dynamicFields: additionalInfo,
         attachments: draftToSubmit.attachments,
         sourceFile: draftToSubmit.sourceFile || undefined,
         userConfirmed: true,
@@ -860,6 +853,7 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
 
       if (result.success && result.request) {
         const requestId = result.request.id;
+        uploads.enqueue({ kind: 'request', id: requestId }, session.data?.user.name || 'Request', jobs);
         const link = result.link || `/portal/capdev/${result.request.capdevId}/requests#request-record-${requestId}`;
 
         setModalOpen(false);

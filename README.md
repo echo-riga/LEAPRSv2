@@ -1,4 +1,16 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LEAPRS
+
+Lifelong Education Advancement Program Requisition System: CapDev projects, requests, progress, budgets, and related administration.
+
+## Project documentation
+
+| Document | Purpose |
+| --- | --- |
+| [REQUIREMENTS.md](REQUIREMENTS.md) | Business rules, roles, workflows, and acceptance criteria |
+| [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | UI principles, visual patterns, and interaction standards |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Technical structure, data flows, integrations, and implementation limits |
+
+These documents were reviewed against the workspace on October 10, 2026 and replace the older system concept and UI design guide. One [project guidance skill](.agents/skills/leaprs-project-guidance/SKILL.md) points coding agents to the relevant documents when needed. Deployment and database migration state must be checked separately.
 
 ## Connect AI apps to LEAPRS automatically
 
@@ -12,7 +24,7 @@ Server setup:
 
 User setup:
 
-All active roles can open **LEAPRS Help → Connect to AI Apps** in the portal header to copy the configured MCP URL and read the Claude/ChatGPT setup steps. Actual screenshot assets can be added following `public/mcp-guides/README.md`.
+All active roles can open **LEAPRS Help → Connect to AI Apps** in the portal header to copy the configured MCP URL and follow the Claude/ChatGPT screenshot walkthroughs. Screenshot assets and their sequence are documented in [public/mcp-guides/README.md](public/mcp-guides/README.md).
 
 - **Claude:** Customize → Connectors → Add custom connector. Enter the MCP server URL, choose OAuth/sign in, and select **Register automatically** under OAuth client. Do not select a provided client or Claude's published identity: this server supports DCR, not Client ID Metadata Documents (CIMD). Connect, sign in to LEAPRS, and allow access. For Team/Enterprise, an owner may need to add the connector first.
 - **ChatGPT:** Plugins → Add custom MCP server. Enter the MCP URL and choose OAuth. In advanced OAuth settings select automatic/dynamic client registration if a client setup choice is shown; leave any provided client ID and secret blank. Create the plugin, sign in to LEAPRS, and allow access. Install/enable the plugin in a conversation.
@@ -25,6 +37,18 @@ The consent screen shows the client-supplied app name and callback origin so use
 Discovery URLs: `/.well-known/oauth-protected-resource/api/mcp` and `/.well-known/oauth-authorization-server`. Authorization metadata advertises `/api/mcp/oauth/register`. An unauthenticated `/api/mcp` request returns `401` with the resource metadata challenge.
 
 Run OAuth checks with `node --use-system-ca --experimental-strip-types --test scripts/mcp-automatic-oauth.test.mjs scripts/mcp-consent.test.mjs`. Database tests use temporary schemas and do not connect to real AI apps.
+
+## Background attachment uploads
+
+CapDev, request, status update, stopper, stopper response, and AI draft submissions save their form fields first. After a successful save, the dialog closes and a shared browser queue uploads attachments to Google Drive one at a time. The bottom-left Attachments panel shows file names/progress and offers Retry after three failed attempts with backoff. Hide collapses it to a small attachment icon; the panel and icon disappear when all jobs finish. Saved unfinished files show Upload pending without a Drive link. Uploaded files are attached through a separate server action; retrying an upload does not create another record or repeat a budget deduction.
+
+Pending descriptors are stored in the existing JSON fields, with no schema migration. Existing attachments and unrelated form values are preserved. Completion verifies the Drive file's record, uploader, size, and managed folder, then replaces only its pending descriptor under a row lock. A stale form opened during an upload retains the finished attachment when saved. Drive upload sessions are reused on retry following [Google's resumable upload protocol](https://developers.google.com/workspace/drive/api/guides/manage-uploads#resume-upload).
+
+File bytes, job states, and resumable Drive identifiers are saved in IndexedDB on the device, separately for each account. A Web Lock allows one tab per account to process uploads. Closing the tab or signing out pauses transfers; reopening the portal with the same account on the same browser resumes unfinished jobs. Recovery checks for already attached files and can recover an uploaded file whose completion response was lost. It removes tagged, unused Drive files when a recovered job's record or pending attachment was deleted. Clearing browser storage or changing devices still requires reselecting unfinished files. Redis and temporary server file storage are not required. AI extraction still sends the source bytes to the AI service before draft review; Drive storage happens after submission.
+
+Run queue regression checks with `node --test scripts/background-uploads.test.mjs`.
+
+Every role can open **LEAPRS Help → Connect to AI Apps → Connected AI Apps** to review and revoke their own approvals. Revocation removes that account/client's codes and access/refresh grants; an already authorized request may finish. AI summaries share portal request scopes and completion rules, with full counts independent of the recent-result limit. Notifying business mutations insert their notification event in the same database transaction. Run the isolated database checks with `node --use-system-ca --test scripts/workflow-integrity-database.test.mjs scripts/mcp-automatic-oauth.test.mjs`.
 
 ## Getting Started
 

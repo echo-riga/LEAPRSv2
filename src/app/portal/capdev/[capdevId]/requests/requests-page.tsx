@@ -60,7 +60,8 @@ import {
   type AppRole,
   type StatusAttachment,
 } from '@/app/actions';
-import { uploadFilesDirectlyToGoogleDrive } from '@/lib/google-drive-client';
+import { isPendingAttachment, stageAttachments } from '@/lib/background-attachments';
+import { useAttachmentRefresh, useBackgroundUploads } from '@/components/BackgroundUploads';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
 import FileFieldChecklist from '@/components/FileFieldChecklist';
 import { focusFormError } from '@/lib/form-error-focus';
@@ -124,6 +125,7 @@ const disabledFieldSx = {
 };
 
 export default function RequestsPage({ capdevId }: { capdevId: number }) {
+  const uploads = useBackgroundUploads();
   const router = useRouter();
   const searchParams = useSearchParams();
   const query = searchParams.toString();
@@ -242,6 +244,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   }, [capdevId]);
 
   useEffect(() => { void Promise.resolve().then(loadData); }, [loadData]);
+  useAttachmentRefresh(loadData);
   useEffect(() => {
     const refreshRequests = () => { void loadData(); };
     const refreshWhenVisible = () => {
@@ -340,7 +343,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const hasDynamicValue = (field: DynamicField) => {
     const storageKey = dynamicFieldStorageKey(field);
     const value = getDynamicFieldValue(form.additionalInfo, field);
-    if (field.type === 'file') return getAttachments(value).length > 0 || (pendingFiles[storageKey] || []).length > 0;
+    if (field.type === 'file') return getAttachments(value).length > 0 || (Array.isArray(value) && value.some(isPendingAttachment)) || (pendingFiles[storageKey] || []).length > 0;
     if (field.type === 'table') {
       if (Array.isArray(value) && value.length > 0) {
         return value.some((row) => Array.isArray(row) && row.some((cell) => String(cell || '').trim().length > 0));
@@ -376,30 +379,12 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
 
     setSaving(true);
     setError('');
-    const additionalInfo = { ...form.additionalInfo };
-    let currentFolderId = typeof additionalInfo.googleDriveFolderId === 'string' ? additionalInfo.googleDriveFolderId : undefined;
-    const requestContext = {
-      requestId: editing?.id,
-      folderId: currentFolderId,
-      requestorName: editing?.requestorName?.trim() || session.data.user.name || undefined,
-      dateRequested: editing?.createdAt ? new Date(editing.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-    };
-    for (const [fieldName, files] of Object.entries(pendingFiles)) {
-      if (files.length === 0) continue;
-      const field = allDefinitions.find((definition) => dynamicFieldStorageKey(definition) === fieldName);
-      if (!field) continue;
-      const uploaded = await uploadFilesDirectlyToGoogleDrive(files, { ...requestContext, folderId: currentFolderId });
-      if (!uploaded.success) { showFormError(uploaded.error || `Unable to upload ${field?.name || 'attachment'}.`); setSaving(false); return; }
-      if (uploaded.folderId) {
-        currentFolderId = uploaded.folderId;
-        additionalInfo.googleDriveFolderId = uploaded.folderId;
-      }
-      const existingFiles = field ? getDynamicFieldValue(additionalInfo, field) : additionalInfo[fieldName];
-      additionalInfo[fieldName] = [...(Array.isArray(existingFiles) ? existingFiles : []), ...uploaded.files];
-    }
+    try {
+    const { additionalInfo, jobs } = stageAttachments(form.additionalInfo, pendingFiles, allDefinitions);
     const data = { ...form, additionalInfo, capdevId, userId: editing?.userId || session.data.user.id, updatedById: session.data.user.id };
     const result = editing ? await updateRequest(editing.id, data) : await createRequest(data);
     if (result.success) {
+      if (result.request) uploads.enqueue({ kind: 'request', id: result.request.id }, result.request.requestorName || 'Request', jobs);
       setEditorOpen(false);
       await loadData();
     } else {
@@ -411,7 +396,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
         showFormError(result.error || 'Unable to save request.');
       }
     }
-    setSaving(false);
+    } catch (error) { showFormError(error instanceof Error ? error.message : 'Unable to save request.'); }
+    finally { setSaving(false); }
   };
 
   const renderDynamicField = (field: DynamicField) => {
@@ -499,6 +485,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           required={field.isRequired}
           existingFiles={getAttachments(fieldValue)}
           pendingFiles={pendingFiles[storageKey] || []}
+          pendingUploads={Array.isArray(fieldValue) ? fieldValue.filter(isPendingAttachment) : []}
           editable={canEdit}
           onSelectFiles={(event) => addSelectedFiles(storageKey, event)}
           onRemoveExisting={(fileId) => removeExistingAttachment(field, fileId)}
