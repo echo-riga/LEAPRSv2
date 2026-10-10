@@ -42,6 +42,15 @@ export const requestStorageFolders = pgTable('request_storage_folders', {
 }, (table) => [uniqueIndex('request_storage_folders_request_idx').on(table.requestId)]);
 
 // OAuth grants for remote MCP clients. Only hashes of bearer credentials are stored.
+export const mcpOAuthClients = pgTable('mcp_oauth_clients', {
+  clientId: text('client_id').primaryKey(),
+  clientName: text('client_name').notNull(),
+  redirectUris: jsonb('redirect_uris').$type<string[]>().notNull(),
+  tokenEndpointAuthMethod: varchar('token_endpoint_auth_method', { length: 32 }).notNull(),
+  clientSecretHash: text('client_secret_hash'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export const mcpOAuthGrants = pgTable('mcp_oauth_grants', {
   tokenHash: text('token_hash').primaryKey(),
   kind: varchar('kind', { length: 16 }).notNull(),

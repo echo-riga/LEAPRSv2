@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { consumeGrant, getUserAccess, issueGrant, oauthConfig, pkceChallenge, secretMatches } from '@/lib/mcp/oauth';
+import { consumeGrant, getOAuthClient, getUserAccess, issueGrant, oauthConfig, pkceChallenge, secretMatches, tokenHash } from '@/lib/mcp/oauth';
 
 function error(code: string, status = 400) {
   return Response.json({ error: code }, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -12,6 +12,7 @@ export async function POST(req: NextRequest) {
   const form = await req.formData();
   let clientId = String(form.get('client_id') || '');
   let clientSecret = String(form.get('client_secret') || '');
+  let authenticationMethod = clientSecret ? 'client_secret_post' : 'none';
   const authorization = req.headers.get('authorization');
   if (authorization?.startsWith('Basic ')) {
     try {
@@ -20,9 +21,12 @@ export async function POST(req: NextRequest) {
       if (separator < 0) return error('invalid_client', 401);
       clientId = decodeURIComponent(pair.slice(0, separator));
       clientSecret = decodeURIComponent(pair.slice(separator + 1));
+      authenticationMethod = 'client_secret_basic';
     } catch { return error('invalid_client', 401); }
   }
-  if (clientId !== config.clientId || !secretMatches(clientSecret, config.clientSecret)) return error('invalid_client', 401);
+  const client = await getOAuthClient(clientId);
+  if (!client || client.tokenEndpointAuthMethod !== authenticationMethod ||
+    (authenticationMethod !== 'none' && (!client.clientSecretHash || !secretMatches(tokenHash(clientSecret), client.clientSecretHash)))) return error('invalid_client', 401);
   const grantType = form.get('grant_type');
   const resource = String(form.get('resource') || config.resource);
   if (resource !== config.resource) return error('invalid_target');

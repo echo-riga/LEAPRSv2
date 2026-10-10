@@ -1,26 +1,28 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
-## Connect Claude web to LEAPRS
+## Connect AI apps to LEAPRS automatically
 
-The MCP endpoint is `https://YOUR-LEAPRS-DOMAIN/api/mcp`. Claude connects from Anthropic's cloud, so deploy the app at a public HTTPS address. It cannot connect to `localhost` or a private LAN address.
+The public MCP endpoint is `https://leaprs-v2.vercel.app/api/mcp` (replace the domain if deploying elsewhere). The server supports OAuth Dynamic Client Registration (DCR). Each connector registers its own client and callbacks automatically; users do not enter or share server credentials. Registration alone grants no access to LEAPRS data: each user must sign in and approve access.
 
-1. Apply [drizzle/0006_mcp_oauth_grants.sql](drizzle/0006_mcp_oauth_grants.sql) to the same database as LEAPRS (or apply the schema with `npm run db:push`).
-2. Set these environment variables on the deployed app:
+Server setup:
 
-   ```text
-   MCP_PUBLIC_URL=https://YOUR-LEAPRS-DOMAIN
-   MCP_OAUTH_CLIENT_ID=leaprs-claude
-   MCP_OAUTH_CLIENT_SECRET=<a-long-random-secret>
-   MCP_OAUTH_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
-   ```
+1. Apply [drizzle/0006_mcp_oauth_grants.sql](drizzle/0006_mcp_oauth_grants.sql) and the security migration if not already applied. Then run `node --use-system-ca scripts/migrate-mcp-clients.mjs` to apply [drizzle/0017_mcp_oauth_clients.sql](drizzle/0017_mcp_oauth_clients.sql). The additive migration preserves existing data.
+2. Set `MCP_PUBLIC_URL=https://leaprs-v2.vercel.app` in the deployed app. Use the origin only, without a path or trailing slash. Existing database and Neon Auth settings remain required.
+3. Deploy. The manual `MCP_OAUTH_CLIENT_ID`, `MCP_OAUTH_CLIENT_SECRET`, and `MCP_OAUTH_REDIRECT_URIS` variables are no longer used and can be removed. Existing manually configured connectors must be re-created with automatic registration; their old tokens no longer authorize MCP access.
 
-   `MCP_PUBLIC_URL` is the origin only, with no path or trailing slash. Generate a unique client secret, for example with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`. Keep it in the server environment and Claude connector settings; do not put it in `NEXT_PUBLIC_*` variables. Redeploy after setting them.
-3. In Claude web, open **Customize → Connectors → + → Add custom connector**. Enter the MCP URL above. Under **Advanced settings**, enter the same OAuth client ID and secret, then add the connector. For Team or Enterprise, an owner adds it in **Organization settings → Connectors** first.
-4. Click **Connect**, sign in to LEAPRS if prompted, and approve the consent screen. Enable the connector in the conversation's **+ → Connectors** menu.
+User setup:
 
-OAuth grants carry the signed-in user's identity; each tool call checks the current LEAPRS role, department, and maintenance setting. Access tokens expire after one hour, and refresh tokens rotate on use. The connector can submit requests, so approve its actions in Claude deliberately.
+- **Claude:** Customize → Connectors → Add custom connector. Enter the MCP server URL, choose OAuth/sign in, and select **Register automatically** under OAuth client. Do not select a provided client or Claude's published identity: this server supports DCR, not Client ID Metadata Documents (CIMD). Connect, sign in to LEAPRS, and allow access. For Team/Enterprise, an owner may need to add the connector first.
+- **ChatGPT:** Plugins → Add custom MCP server. Enter the MCP URL and choose OAuth. In advanced OAuth settings select automatic/dynamic client registration if a client setup choice is shown; leave any provided client ID and secret blank. Create the plugin, sign in to LEAPRS, and allow access. Install/enable the plugin in a conversation.
+- **Other clients:** Use a remote HTTP MCP client with OAuth discovery, DCR, and S256 PKCE support. An OAuth-compatible client does not necessarily support automatic registration; verify its capabilities.
 
-To check discovery after deployment, open `https://YOUR-LEAPRS-DOMAIN/.well-known/oauth-protected-resource/api/mcp` and `https://YOUR-LEAPRS-DOMAIN/.well-known/oauth-authorization-server`. An unauthenticated request to `/api/mcp` should return `401` with a `WWW-Authenticate` header pointing to the protected resource metadata.
+Test with: “Use LEAPRS to list my available CapDev projects.” Then test “Use LEAPRS to summarize my requests.” These read-only calls use the connected user's current role and department permissions. The MCP attachment tool accepts file metadata; it does not upload file bytes.
+
+The consent screen shows the client-supplied app name and callback origin so users can check the connection they started. App names are not verified brand identities. Every consent form is bound to the client, callback, PKCE challenge, resource, and state. Registration validates HTTPS callbacks (HTTP is permitted only for local loopback clients), limits metadata size, and uses shared PostgreSQL rate limits. Deploy behind a proxy that overwrites forwarded IP headers, as Vercel does. Confidential client secrets and authorization/access/refresh tokens are stored only as hashes. Access tokens expire after one hour; refresh tokens rotate on use. Archived accounts and non-admin users under maintenance cannot use tools.
+
+Discovery URLs: `/.well-known/oauth-protected-resource/api/mcp` and `/.well-known/oauth-authorization-server`. Authorization metadata advertises `/api/mcp/oauth/register`. An unauthenticated `/api/mcp` request returns `401` with the resource metadata challenge.
+
+Run OAuth checks with `node --use-system-ca --experimental-strip-types --test scripts/mcp-automatic-oauth.test.mjs scripts/mcp-consent.test.mjs`. Database tests use temporary schemas and do not connect to real AI apps.
 
 ## Getting Started
 

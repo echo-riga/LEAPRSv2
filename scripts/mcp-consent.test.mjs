@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks, createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const require = createRequire(import.meta.url);
 const nextServerUrl = pathToFileURL(require.resolve('next/server')).href;
@@ -11,8 +12,13 @@ const config = {
   redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
 };
 const grants = [];
+function consentHash(nonce, input) {
+  return createHash('sha256').update(JSON.stringify([nonce, input.clientId, input.redirectUri, input.challenge, input.resource, input.state])).digest('hex');
+}
 globalThis.mcpConsentTest = {
   oauthConfig: () => config,
+  getOAuthClient: async id => id === config.clientId ? { clientName: 'Claude', redirectUris: config.redirectUris } : null,
+  consentHash,
   getSessionIdentity: async () => ({ userId: 'test-user', name: 'Test User', email: 'test@example.test' }),
   getUserAccess: async () => ({ role: 'admin' }),
   randomToken: () => 'test-consent-nonce',
@@ -21,7 +27,7 @@ globalThis.mcpConsentTest = {
 };
 registerHooks({ resolve(specifier, context, nextResolve) {
   if (specifier === '@/lib/mcp/oauth') return {
-    url: 'data:text/javascript,' + encodeURIComponent('export const { oauthConfig, getSessionIdentity, getUserAccess, randomToken, secretMatches, issueGrant } = globalThis.mcpConsentTest;'),
+    url: 'data:text/javascript,' + encodeURIComponent('export const { oauthConfig, getOAuthClient, consentHash, getSessionIdentity, getUserAccess, randomToken, secretMatches, issueGrant } = globalThis.mcpConsentTest;'),
     shortCircuit: true,
   };
   return nextResolve(specifier === 'next/server' ? nextServerUrl : specifier, context);
@@ -39,9 +45,12 @@ function authorizationUrl(overrides = {}) {
   return url;
 }
 function consentPost(decision, csrf = 'test-consent-nonce', overrides = {}) {
+  const cookie = consentHash('test-consent-nonce', {
+    clientId: config.clientId, redirectUri: config.redirectUris[0], challenge: 'a'.repeat(43), resource: config.resource, state: 'client-state',
+  });
   return new NextRequest(authorizationUrl(overrides), {
     method: 'POST', headers: {
-      'Content-Type': 'application/x-www-form-urlencoded', Cookie: 'leaprs_mcp_consent=test-consent-nonce',
+      'Content-Type': 'application/x-www-form-urlencoded', Cookie: `leaprs_mcp_consent=${cookie}`,
     }, body: new URLSearchParams({ csrf, decision }),
   });
 }
@@ -91,5 +100,12 @@ test('unlisted callbacks and invalid consent cannot issue authorization codes', 
   }
   assert.equal((await POST(consentPost('allow', 'wrong-nonce'))).status, 403);
   assert.equal((await POST(consentPost('invalid'))).status, 400);
+  assert.equal(grants.length, 0);
+});
+
+test('consent cannot be reused with modified OAuth state or PKCE challenge', async () => {
+  grants.length = 0;
+  assert.equal((await POST(consentPost('allow', 'test-consent-nonce', { state: 'changed-state' }))).status, 403);
+  assert.equal((await POST(consentPost('allow', 'test-consent-nonce', { code_challenge: 'b'.repeat(43) }))).status, 403);
   assert.equal(grants.length, 0);
 });
