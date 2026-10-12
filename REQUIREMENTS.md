@@ -50,7 +50,7 @@ Despite its stored name `employee-department`, Employee (All Department Requests
 
 ### Requests
 
-- Every request belongs to one CapDev and has a submitting user, requestor name, setting, description, requested budget, and configured fields.
+- Every request belongs to one CapDev and has a submitting user, requestor name, setting, fixed Title, fixed Event Date, requested budget, and configured fields. Title is stored in the request description column; Event Date is the scheduled activity date and is distinct from the request creation timestamp.
 - UI settings are In-House and External; stored values are `internal` and `external`. Each setting has an independent form configuration.
 - Requestor name is the primary user-facing request label. Internal numeric IDs remain necessary for relations, routes, and exact tool lookups; names are not unique database keys.
 - The submitting identity and initial workflow state come from authenticated server context.
@@ -87,7 +87,7 @@ Despite its stored name `employee-department`, Employee (All Department Requests
 - Supported types include text with optional suggestions, suggestions-only combobox, number, date, file, and table. Legacy select fields remain supported.
 - Definitions control label, required/active state, options, order, width, and column position. Tables occupy a full row; an unpaired half-width field can occupy the left or right column.
 - Values use stable field identity, with a legacy label fallback. Renaming a field must not disconnect values saved under its stable identity.
-- Fixed fields remain usable in previews but cannot be deleted, reordered, or configured as dynamic fields.
+- Fixed fields remain usable in previews but cannot be deleted, reordered, or configured as dynamic fields. Title and required Event Date are fixed for both In-House and External request forms.
 - Add Field and edits stage changes. Save Configuration is the explicit persistence action; Cancel discards or restores the current draft.
 
 ## 8. Attachments and background uploads
@@ -173,8 +173,9 @@ The seven categories are Inactivity Reminders, Request Submissions, Status Updat
 - Completing an In-House request creates or reuses its seminar evaluation Google Form. External requests do not generate this seminar evaluation workflow.
 - Evaluation sections cover speaker, content/learnings, satisfaction, comments, and training needs. The final view provides open/edit/copy actions and See Summary.
 - Fetch responses on demand. Compute rating summaries from actual responses; optional AI summarizes written responses. Rating results remain usable when AI summarization is unavailable.
-- Admin and Viewers can view analytics and export monitoring workbooks from authorized live data. Department Viewer access remains scoped to their department.
+- Admin and Viewers can view analytics and export monitoring workbooks and Request Report PDFs from authorized live data. Department Viewer access remains scoped to their department.
 - Reports can include selected projects and fixed/configured fields. AIP Code identifies projects; stored numeric IDs remain internal lookup keys.
+- Request Reports filter by Event Date month/year and group rows into Completed, In Progress, and Rejected. Each row shows Title, Event Date, the CapDev initial budget as Allotted Budget, the request amount as Utilized Budget, and the overall In-House evaluation average. External or unrated requests show None for evaluation.
 
 ## 12. AI assistance and external AI connections
 

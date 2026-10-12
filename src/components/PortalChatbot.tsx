@@ -68,6 +68,7 @@ export type DraftState = {
   setting: 'internal' | 'external';
   requestedBudget: string;
   description: string;
+  eventDate: string;
   dynamicFields: Record<string, unknown>;
   attachments: StatusAttachment[];
   sourceFile?: StatusAttachment | null;
@@ -276,6 +277,7 @@ function RequestDraftModal({
       setting: draft.setting,
       requestedBudget: draft.requestedBudget,
       description: draft.description,
+      eventDate: draft.eventDate,
       dynamicFields: draft.dynamicFields,
       sourceFile: draft.sourceFile || undefined,
     });
@@ -312,6 +314,10 @@ function RequestDraftModal({
     }
     if (!draft.requestedBudget || requestedNum <= 0) {
       setFormError('Please enter a requested amount.');
+      return;
+    }
+    if (!draft.eventDate) {
+      setFormError('Please enter an Event Date.');
       return;
     }
     if (isBudgetExceeded) {
@@ -395,15 +401,22 @@ function RequestDraftModal({
               />
             </Grid>
 
-            {/* Activity Description */}
+            <Grid size={12}>
+              <DateField
+                required
+                label="Event Date"
+                value={draft.eventDate}
+                onChange={(eventDate) => onUpdateDraft({ ...draft, eventDate })}
+                disabled={submitting}
+              />
+            </Grid>
+
+            {/* Title */}
             <Grid size={12}>
               <TextField
                 fullWidth
-                multiline
-                minRows={2}
-                maxRows={4}
-                label="Activity Description"
-                placeholder="Activity or seminar title..."
+                label="Title"
+                placeholder="Activity or seminar title"
                 value={draft.description}
                 onChange={(e) => onUpdateDraft({ ...draft, description: e.target.value })}
                 disabled={submitting}
@@ -523,7 +536,7 @@ function RequestDraftModal({
         </Button>
         <Button
           onClick={() => void handleSave()}
-          disabled={submitting || !draft.requestedBudget || requestedNum <= 0 || isBudgetExceeded}
+          disabled={submitting || !draft.eventDate || !draft.requestedBudget || requestedNum <= 0 || isBudgetExceeded}
           variant="contained"
           color="primary"
           sx={{ fontWeight: 800, px: 3, borderRadius: 2 }}
@@ -722,6 +735,7 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
               setting: result.draft.setting,
               requestedBudget: result.draft.requestedBudget,
               description: result.draft.description,
+              eventDate: result.draft.eventDate,
               dynamicFields: result.draft.dynamicFields,
               attachments: result.draft.attachments,
               sourceFile: result.draft.sourceFile || null,
@@ -791,6 +805,7 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
         setting: activeDraft.setting,
         requestedBudget: activeDraft.requestedBudget,
         description: activeDraft.description,
+        eventDate: activeDraft.eventDate,
         dynamicFields: activeDraft.dynamicFields,
         sourceFile: activeDraft.sourceFile || undefined,
       });
@@ -845,6 +860,7 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
         setting: draftToSubmit.setting,
         requestedBudget: draftToSubmit.requestedBudget,
         description: draftToSubmit.description,
+        eventDate: draftToSubmit.eventDate,
         dynamicFields: additionalInfo,
         attachments: draftToSubmit.attachments,
         sourceFile: draftToSubmit.sourceFile || undefined,

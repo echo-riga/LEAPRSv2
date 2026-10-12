@@ -63,7 +63,7 @@ export function describeAudit(entry: AuditEntry) {
     lines.length = 0;
   }
   const changedFields = new Set(changes.map((c) => c.field));
-  const metadata: Record<string, string> = { capdevAipCode: 'CapDev AIP code', requestDescription: 'Activity', department: 'Department', role: 'Role', requestedRole: 'Requested role', email: 'Email', setting: 'Request type', requestedBudget: 'Requested budget', initialBudget: 'Initial budget', statusMark: 'Progress status', reason: 'Reason for pause', statusUpdate: 'Update', remarks: 'Remarks', deductedAmount: 'Amount deducted', restoredBudget: 'Budget restored', type: 'Field type', isRequired: 'Required', included: 'Available departments', excluded: 'Hidden departments' };
+  const metadata: Record<string, string> = { capdevAipCode: 'CapDev AIP code', requestDescription: 'Activity', eventDate: 'Event Date', department: 'Department', role: 'Role', requestedRole: 'Requested role', email: 'Email', setting: 'Request type', requestedBudget: 'Requested budget', initialBudget: 'Initial budget', statusMark: 'Progress status', reason: 'Reason for pause', statusUpdate: 'Update', remarks: 'Remarks', deductedAmount: 'Amount deducted', restoredBudget: 'Budget restored', type: 'Field type', isRequired: 'Required', included: 'Available departments', excluded: 'Hidden departments' };
   for (const [key, label] of Object.entries(metadata)) {
     if (!changedFields.has(key) && d[key] !== undefined && d[key] !== null && d[key] !== '' && !(key === 'restoredBudget' && Number(d[key]) === 0)) lines.push(`${label}: ${valueText(d[key], key)}`);
   }

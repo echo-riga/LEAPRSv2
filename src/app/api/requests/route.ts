@@ -31,6 +31,7 @@ export async function POST(request: Request) {
       (typeof budget !== 'string' && typeof budget !== 'number') ||
       !Number.isFinite(Number(budget)) || Number(budget) <= 0 ||
       (input.description !== undefined && typeof input.description !== 'string') ||
+      typeof input.eventDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.eventDate) ||
       (dynamicFields !== undefined && (!dynamicFields || typeof dynamicFields !== 'object' || Array.isArray(dynamicFields))) ||
       input.userConfirmed !== true || input.attachments !== undefined || input.sourceFile !== undefined) {
     return Response.json({ success: false, error: 'Invalid request data.' }, { status: 400 });
@@ -41,6 +42,7 @@ export async function POST(request: Request) {
     setting: input.setting,
     requestedBudget: budget,
     description: input.description as string | undefined,
+    eventDate: input.eventDate,
     dynamicFields: dynamicFields as Record<string, unknown> | undefined,
     userConfirmed: true,
   };

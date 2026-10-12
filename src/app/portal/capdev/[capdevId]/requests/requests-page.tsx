@@ -81,11 +81,12 @@ type RequestRecord = {
   hasDeductedBudget: boolean;
   setting: string;
   description: string;
+  eventDate: string | null;
   requestedBudget: string;
   additionalInfo: Record<string, unknown>;
 };
 type DynamicField = { id: number; setting?: 'internal' | 'external'; name: string; type: string; options: string[] | null; isRequired: boolean; width: string; columnPosition: string; placeholder: string | null; section?: string };
-type RequestForm = Pick<RequestRecord, 'setting' | 'description' | 'requestedBudget' | 'additionalInfo'>;
+type RequestForm = Pick<RequestRecord, 'setting' | 'description' | 'requestedBudget' | 'additionalInfo'> & { eventDate: string };
 type CapdevDetail = {
   archivedAt: Date | string | null;
   id: number;
@@ -98,7 +99,7 @@ type CapdevDetail = {
   createdAt: Date | string;
 };
 
-const EMPTY_FORM: RequestForm = { setting: 'internal', description: '', requestedBudget: '', additionalInfo: {} };
+const EMPTY_FORM: RequestForm = { setting: 'internal', description: '', eventDate: '', requestedBudget: '', additionalInfo: {} };
 const formatDate = (value: Date | string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
 const formatCurrency = (value: string | number) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
 const getAttachments = (value: unknown): StatusAttachment[] => Array.isArray(value) ? value.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file) : [];
@@ -326,7 +327,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
 
   const editorReadOnly = showArchived || Boolean(capdev?.archivedAt || editing?.archivedAt);
   const openCreate = () => { if (showArchived || capdev?.archivedAt) return; setError(''); setFieldErrors({}); setPendingFiles({}); setEditing(null); setForm(EMPTY_FORM); setShowScrollArrow(true); setEditorOpen(true); };
-  const openEdit = (request: RequestRecord) => { setError(''); setFieldErrors({}); setPendingFiles({}); setEditing(request); setForm({ setting: request.setting, description: request.description, requestedBudget: request.requestedBudget, additionalInfo: { ...request.additionalInfo } }); setShowScrollArrow(true); setEditorOpen(true); };
+  const openEdit = (request: RequestRecord) => { setError(''); setFieldErrors({}); setPendingFiles({}); setEditing(request); setForm({ setting: request.setting, description: request.description, eventDate: request.eventDate || '', requestedBudget: request.requestedBudget, additionalInfo: { ...request.additionalInfo } }); setShowScrollArrow(true); setEditorOpen(true); };
   const addSelectedFiles = (fieldName: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
     setPendingFiles((current) => ({ ...current, [fieldName]: [...(current[fieldName] || []), ...selectedFiles].filter((file, index, files) => files.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index) }));
@@ -768,6 +769,25 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 </TextField>
               </Grid>
               <Grid size={12}>
+                <TextField
+                  fullWidth
+                  label="Title"
+                  placeholder="Activity or seminar title"
+                  value={form.description}
+                  onChange={(event) => setValue({ description: event.target.value })}
+                  disabled={editorReadOnly}
+                  slotProps={{ inputLabel: { shrink: true } }}
+                  sx={editorReadOnly ? disabledFieldSx : undefined}
+                />
+              </Grid>
+              <Grid size={12}>
+                <DateField
+                  required
+                  label="Event Date"
+                  value={form.eventDate}
+                  onChange={(eventDate) => setValue({ eventDate })}
+                  disabled={editorReadOnly}
+                />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }} id="request-field-budget">
                 <TextField required
@@ -847,7 +867,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           {(!editing || canEditRequest(editing)) && canManageRequest && (
             <Button
               onClick={saveRequest}
-              disabled={editorReadOnly || saving || !form.requestedBudget || Number(form.requestedBudget) <= 0 || !areRequiredFieldsComplete || Object.keys(fieldErrors).length > 0}
+              disabled={editorReadOnly || saving || !form.eventDate || !form.requestedBudget || Number(form.requestedBudget) <= 0 || !areRequiredFieldsComplete || Object.keys(fieldErrors).length > 0}
               variant="contained"
             >
               {saving ? 'Saving' : 'Save Request'}

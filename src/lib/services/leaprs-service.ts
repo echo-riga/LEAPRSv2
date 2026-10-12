@@ -46,6 +46,7 @@ export type RequestDraftInput = {
   setting?: 'internal' | 'external';
   requestedBudget?: number | string;
   description?: string;
+  eventDate?: string;
   dynamicFields?: Record<string, unknown>;
   attachments?: StatusAttachment[];
   sourceFile?: StatusAttachment;
@@ -56,6 +57,7 @@ export type RequestSubmissionInput = {
   setting: 'internal' | 'external';
   requestedBudget: string | number;
   description?: string;
+  eventDate: string;
   dynamicFields?: Record<string, unknown>;
   attachments?: StatusAttachment[];
   sourceFile?: StatusAttachment;
@@ -183,10 +185,17 @@ export async function getRequestFormSchemaService(_access?: UserAccess, setting?
     },
     {
       name: 'description',
-      label: 'Activity Description',
+      label: 'Title',
       type: 'text',
       isRequired: false,
-      description: 'Brief overview or title of the activity requisition.',
+      description: 'Activity or seminar title.',
+    },
+    {
+      name: 'eventDate',
+      label: 'Event Date',
+      type: 'date',
+      isRequired: true,
+      description: 'Scheduled date of the activity or event.',
     },
   ];
 
@@ -255,6 +264,10 @@ export async function createRequestDraftService(access: UserAccess, draft: Reque
   if (!draft.requestedBudget || Number(draft.requestedBudget) <= 0) {
     missingRequiredFields.push('Amount');
   }
+  const eventDate = draft.eventDate ? new Date(`${draft.eventDate}T00:00:00Z`) : null;
+  if (!draft.eventDate || !/^\d{4}-\d{2}-\d{2}$/.test(draft.eventDate) || !eventDate || !Number.isFinite(eventDate.getTime()) || eventDate.toISOString().slice(0, 10) !== draft.eventDate) {
+    missingRequiredFields.push('Event Date');
+  }
 
   // Check required dynamic fields
   const dynamicValues = draft.dynamicFields || {};
@@ -290,6 +303,7 @@ export async function createRequestDraftService(access: UserAccess, draft: Reque
       setting: draft.setting || 'internal',
       requestedBudget: draft.requestedBudget ? String(draft.requestedBudget) : '',
       description: draft.description || '',
+      eventDate: draft.eventDate || '',
       dynamicFields: dynamicValues,
       attachments: allAttachments,
       sourceFile: draft.sourceFile || null,
@@ -338,7 +352,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   // Validate dynamic required fields
   const schema = await getRequestFormSchemaService(access, input.setting);
   const additionalInfo = validatePendingAttachments(validateRequestInput({ capdevId: capdev.id, setting: input.setting,
-    description: input.description || '', requestedBudget: input.requestedBudget, additionalInfo: input.dynamicFields || {} }).additionalInfo, access.userId);
+    description: input.description || '', eventDate: input.eventDate, requestedBudget: input.requestedBudget, additionalInfo: input.dynamicFields || {} }).additionalInfo, access.userId);
   const invalidSelections = getInvalidComboboxFields(schema.dynamicFields, additionalInfo);
   if (invalidSelections.length) return { success: false as const, error: 'Select a configured option for: ' + invalidSelections.join(', ') + '.' };
   // Attach sourceFile or attachments if provided
@@ -400,6 +414,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
         requestorName: access.name || access.email || 'Requestor',
         setting: input.setting,
         description: input.description || '',
+        eventDate: input.eventDate,
         requestedBudget: String(requestedBudgetNum),
         additionalInfo: {},
         status: 'in_progress',
@@ -429,6 +444,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
       capdevId: created.capdevId,
       capdevAipCode: capdev.aipCode,
       setting: created.setting,
+      eventDate: created.eventDate,
       requestedBudget: created.requestedBudget,
       requestorName: created.requestorName,
       requestDescription: created.description,
@@ -485,6 +501,7 @@ export async function getRequestStatusService(access: UserAccess, requestId: num
       requestorName: record.request.requestorName,
       setting: record.request.setting,
       description: record.request.description,
+      eventDate: record.request.eventDate,
       requestedBudget: String(record.request.requestedBudget),
       status: record.isComplete ? 'completed' : record.request.status,
       isComplete: record.isComplete,

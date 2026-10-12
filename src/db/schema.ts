@@ -10,6 +10,7 @@ import {
   jsonb, 
   uniqueIndex,
   index,
+  date,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -173,6 +174,7 @@ export const requests = pgTable('requests', {
   requestorName: varchar('requestor_name', { length: 255 }),
   setting: varchar('setting', { length: 50 }).notNull(),
   description: text('description').notNull().default(''),
+  eventDate: date('event_date'),
   requestedBudget: numeric('requested_budget', { precision: 12, scale: 2 }).notNull(),
   additionalInfo: jsonb('additional_info').default({}).notNull(),
   status: varchar('status', { length: 50 }).default('in_progress').notNull(),

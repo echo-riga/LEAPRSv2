@@ -138,6 +138,10 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
           type: 'string',
           description: 'Brief description or activity title.',
         },
+        event_date: {
+          type: 'string',
+          description: 'Scheduled event date in YYYY-MM-DD format.',
+        },
         dynamic_fields: {
           type: 'object',
           description: 'Key-value map of dynamic form fields.',
@@ -200,6 +204,10 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
         description: {
           type: 'string',
         },
+        event_date: {
+          type: 'string',
+          description: 'Scheduled event date in YYYY-MM-DD format.',
+        },
         dynamic_fields: {
           type: 'object',
         },
@@ -229,7 +237,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
           description: 'Must be true to indicate explicit user confirmation.',
         },
       },
-      required: ['aip_code', 'setting', 'requested_budget', 'user_confirmed'],
+      required: ['aip_code', 'setting', 'requested_budget', 'event_date', 'user_confirmed'],
     },
   },
 ];
@@ -289,6 +297,7 @@ export async function executeMcpTool(
           setting: args.setting === 'external' ? 'external' : 'internal',
           requestedBudget: args.requested_budget !== undefined ? String(args.requested_budget) : (args.requestedBudget !== undefined ? String(args.requestedBudget) : undefined),
           description: args.description ? String(args.description) : undefined,
+          eventDate: args.event_date ? String(args.event_date) : (args.eventDate ? String(args.eventDate) : undefined),
           dynamicFields: (args.dynamic_fields || args.dynamicFields || {}) as Record<string, unknown>,
           attachments: (args.attachments as StatusAttachment[]) || [],
           sourceFile: (args.source_file || args.sourceFile) as StatusAttachment | undefined,
@@ -311,6 +320,7 @@ export async function executeMcpTool(
           setting: args.setting === 'external' ? 'external' : 'internal',
           requestedBudget: String(args.requested_budget ?? args.requestedBudget ?? '0'),
           description: args.description ? String(args.description) : '',
+          eventDate: String(args.event_date || args.eventDate || ''),
           dynamicFields: (args.dynamic_fields || args.dynamicFields || {}) as Record<string, unknown>,
           attachments: (args.attachments as StatusAttachment[]) || [],
           sourceFile: (args.source_file || args.sourceFile) as StatusAttachment | undefined,

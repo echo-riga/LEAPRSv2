@@ -75,6 +75,7 @@ Admin Settings retains six equal outlined cards in a desktop three-column, two-r
 - Status Update Configuration places Configure Fields and Configure Inactivity Reminders in the same footer.
 - Request Configuration provides Configure External Fields and Configure In-House Fields as equal actions.
 - Viewers receive the Reports & Analytics card only. Employees do not get Settings access; their email preferences and AI guide remain reachable from header tools.
+- Reports offers Monitoring Sheet and Request Reports as equal selectable report types. Request Reports uses month/year controls, the heading `Report as of Month, Year`, and Completed, In Progress, and Rejected outlined table sections that reuse the primary green, surface, border, typography, and spacing tokens. Its download action produces a landscape PDF; Monitoring Sheet keeps its spreadsheet export.
 
 ## 6. Forms and dialogs
 
@@ -82,7 +83,7 @@ Admin Settings retains six equal outlined cards in a desktop three-column, two-r
 - Show fixed and active configured fields using the existing required/optional sections and form grid.
 - Read-only metadata is text, not a disabled input pretending to be editable.
 - Required indicators use the established red asterisk. Do not duplicate required status in helper paragraphs.
-- Dynamic fields use saved order and full/half widths. An unpaired half-width field honors its saved left/right position; tables occupy a full row.
+- Request previews show Title and required Event Date as fixed fields for both In-House and External configurations. Dynamic fields use saved order and full/half widths. An unpaired half-width field honors its saved left/right position; tables occupy a full row.
 - Use the shared DateField/MUI date picker, not native date inputs. Read-only dates use `Mon day, year`; ISO dates belong in input/technical values.
 - Department is the existing shared combobox with Not listed (please specify).
 - Add Field stages a draft. Save Configuration stays fixed at bottom-right; Cancel beside Add Field discards/restores the current edit. Avoid per-field Save buttons or header save indicators.

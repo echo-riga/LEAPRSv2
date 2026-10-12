@@ -90,7 +90,7 @@ test('AI scopes, counts and notification rollback in an isolated schema', async 
         });
         await tx.execute(sql.raw(`CREATE FUNCTION ${quoted}.reject_notification() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'Notification insert failed'; END $$`));
         await tx.execute(sql.raw('CREATE TRIGGER reject_notification BEFORE INSERT ON notifications FOR EACH ROW EXECUTE FUNCTION ' + quoted + '.reject_notification()'));
-        const input = { aipCode: '2026-001-1-1-01-001-001', setting: 'internal', requestedBudget: '100', userConfirmed: true };
+        const input = { aipCode: '2026-001-1-1-01-001-001', setting: 'internal', eventDate: '2026-10-12', requestedBudget: '100', userConfirmed: true };
         await t.test('actual AI request creation rolls back when its notification fails', async () => {
           await assert.rejects(() => submit(access('employee'), input), error => error.cause?.message === 'Notification insert failed');
           assert.equal((await tx.execute(sql`SELECT count(*)::int AS n FROM requests`)).rows[0].n, 7);

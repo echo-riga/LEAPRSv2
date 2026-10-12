@@ -359,3 +359,27 @@ export async function getEvaluationSummary(formId: string): Promise<EvaluationSu
     aiError,
   };
 }
+
+export async function getEvaluationAverage(formId: string): Promise<number | null> {
+  const accessToken = await getGoogleAccessToken();
+  const [form, responses] = await Promise.all([
+    googleJson<GoogleForm>(`https://forms.googleapis.com/v1/forms/${formId}`, accessToken),
+    getAllResponses(formId, accessToken),
+  ]);
+  const ratings: number[] = [];
+  for (const item of form.items || []) {
+    const question = item.questionItem?.question;
+    const questionId = question?.questionId;
+    if (!questionId || !question.scaleQuestion) continue;
+    for (const response of responses) {
+      const values = response.answers?.[questionId]?.textAnswers?.answers || [];
+      for (const answer of values) {
+        const rating = Number(answer.value);
+        if (Number.isFinite(rating) && rating >= 1 && rating <= 5) ratings.push(rating);
+      }
+    }
+  }
+  return ratings.length > 0
+    ? Math.round((ratings.reduce((total, rating) => total + rating, 0) / ratings.length) * 10) / 10
+    : null;
+}

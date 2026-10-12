@@ -26,6 +26,7 @@ import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail, sendSignupVerificationEmail } from '@/lib/email';
 import {
   createRequestEvaluationForm,
+  getEvaluationAverage,
   getEvaluationSummary,
   isLegacyRequestEvaluationForm,
   type EvaluationSummary,
@@ -38,6 +39,7 @@ import path from 'node:path';
 import { headers } from 'next/headers';
 import { getRequestInactivitySummaries, readInactivityDays, syncRequestReminders } from '@/lib/request-reminders';
 import { DEFAULT_INACTIVITY_DAYS, INACTIVITY_SETTING_KEY, inactivityMessage, validInactivityDays } from '@/lib/request-inactivity';
+import { renderRequestReportPdf } from '@/lib/request-report-pdf';
 import { getDynamicFieldValue, getInvalidComboboxFields, hasComboboxOptions } from '@/lib/dynamic-fields';
 import { PORTAL_CHATBOT_GUIDE } from '@/lib/portal-chatbot-guide';
 import {
@@ -1275,6 +1277,114 @@ export async function getMonitoringReportData() {
   }
 }
 
+export type RequestReportRow = {
+  id: number;
+  title: string;
+  eventDate: string;
+  allottedBudget: string;
+  utilizedBudget: string;
+  evaluationAverage: number | null;
+  setting: string;
+  status: 'completed' | 'in_progress' | 'denied';
+};
+
+export type RequestReportData = {
+  success: boolean;
+  month: number;
+  year: number;
+  label: string;
+  completed: RequestReportRow[];
+  inProgress: RequestReportRow[];
+  rejected: RequestReportRow[];
+  error?: string;
+};
+
+function validateRequestReportPeriod(month: number, year: number) {
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw new Error('Select a valid report month and year.');
+  }
+}
+
+async function buildRequestReportData(access: UserAccess, month: number, year: number): Promise<RequestReportData> {
+  validateRequestReportPeriod(month, year);
+  const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
+  const completeExpression = sql<boolean>`(${requests.status} = 'completed' or exists (
+    select 1 from ${requestStatusUpdates}
+    where ${requestStatusUpdates.requestId} = ${requests.id}
+      and ${requestStatusUpdates.markAsComplete} = true
+  ))`;
+  const records = await db
+    .select({ request: getTableColumns(requests), initialBudget: capdevs.initialBudget, isComplete: completeExpression })
+    .from(requests)
+    .innerJoin(capdevs, eq(requests.capdevId, capdevs.id))
+    .where(scope)
+    .orderBy(requests.eventDate, requests.id);
+  const period = `${year}-${String(month).padStart(2, '0')}`;
+  const selected = records.filter(({ request }) => request.eventDate?.slice(0, 7) === period);
+  const rows = await Promise.all(selected.map(async ({ request, initialBudget, isComplete }): Promise<RequestReportRow> => {
+    let evaluationAverage: number | null = null;
+    if (isComplete && request.setting === 'internal' && request.participantFeedbackFormId) {
+      try {
+        evaluationAverage = await getEvaluationAverage(request.participantFeedbackFormId);
+      } catch (error) {
+        console.error(`Failed to fetch evaluation rating for request ${request.id}:`, error);
+      }
+    }
+    return {
+      id: request.id,
+      title: request.description || 'Untitled activity',
+      eventDate: request.eventDate || '',
+      allottedBudget: String(initialBudget),
+      utilizedBudget: String(request.requestedBudget),
+      evaluationAverage,
+      setting: request.setting,
+      status: isComplete ? 'completed' : request.status === 'denied' ? 'denied' : 'in_progress',
+    };
+  }));
+  const label = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'Asia/Manila' })
+    .format(new Date(Date.UTC(year, month - 1, 1)));
+  return {
+    success: true,
+    month,
+    year,
+    label,
+    completed: rows.filter((row) => row.status === 'completed'),
+    inProgress: rows.filter((row) => row.status === 'in_progress'),
+    rejected: rows.filter((row) => row.status === 'denied'),
+  };
+}
+
+export async function getRequestReportData(month: number, year: number): Promise<RequestReportData> {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role === 'employee' || access.role === 'employee-department') {
+      return { success: false, month, year, label: '', completed: [], inProgress: [], rejected: [], error: unauthorized.error };
+    }
+    return await buildRequestReportData(access, month, year);
+  } catch (error) {
+    console.error('Failed to fetch request report:', error);
+    return { success: false, month, year, label: '', completed: [], inProgress: [], rejected: [], error: error instanceof Error ? error.message : 'Unable to generate the request report.' };
+  }
+}
+
+export async function generateRequestReportPdf(month: number, year: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role === 'employee' || access.role === 'employee-department') return unauthorized;
+    const report = await buildRequestReportData(access, month, year);
+    const pdf = renderRequestReportPdf(report);
+    return {
+      success: true,
+      fileName: `Request-Report-${year}-${String(month).padStart(2, '0')}.pdf`,
+      base64: pdf.toString('base64'),
+      mimeType: 'application/pdf',
+    };
+  } catch (error) {
+    console.error('Failed to generate request report PDF:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to generate the request report PDF.' };
+  }
+}
+
 type MonitoringField = { id?: number; name: string; source: 'capdev' | 'request'; key?: string };
 
 function monitoringCellValue(value: unknown) {
@@ -1727,6 +1837,8 @@ export async function updateCapdevFieldsOrder(
 
 export type RequestSetting = 'internal' | 'external';
 
+const REQUEST_FIXED_FIELD_NAMES = new Set(['title', 'event date', 'event/activity date', 'activity date']);
+
 function isRequestSetting(value: string): value is RequestSetting {
   return value === 'internal' || value === 'external';
 }
@@ -1765,6 +1877,7 @@ export async function saveRequestFieldDefinition(data: {
     if (!access || access.role !== 'admin') return unauthorized;
     if (!hasComboboxOptions(data.type, data.options)) return { success: false, error: 'Suggestions-only comboboxes require at least one non-empty option.' };
     if (!isRequestSetting(data.setting)) return { success: false, error: 'Invalid request setting.' };
+    if (REQUEST_FIXED_FIELD_NAMES.has(data.name.trim().toLowerCase())) return { success: false, error: 'Title and Event Date are fixed request fields and cannot be configured as dynamic fields.' };
     if (data.id) {
       const [previous] = await db.select().from(requestFieldDefinitions).where(eq(requestFieldDefinitions.id, data.id)).limit(1);
       if (!previous) return { success: false, error: 'Form field not found.' };
@@ -2051,6 +2164,7 @@ export type RequestInput = {
   userId: string;
   setting: string;
   description: string;
+  eventDate: string;
   requestedBudget: string;
   additionalInfo: Record<string, unknown>;
   updatedById: string;
@@ -2157,7 +2271,7 @@ export async function createRequest(data: RequestInput) {
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, validated.capdevId)).for('update');
       if (!parent || parent.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
       const [record] = await tx.insert(requests).values({
-      capdevId: validated.capdevId, setting: validated.setting, description: validated.description,
+      capdevId: validated.capdevId, setting: validated.setting, description: validated.description, eventDate: validated.eventDate,
       requestedBudget: validated.requestedBudget, additionalInfo: {}, status: 'in_progress',
       userId: access.userId,
       updatedById: access.userId,
@@ -2176,7 +2290,7 @@ export async function createRequest(data: RequestInput) {
       });
       return saved;
     });
-    await writeAuditLog(access, { action: 'created', entityType: 'request', entityId: created.id, entityLabel: `Request #${created.id}`, details: { capdevId: created.capdevId, setting: created.setting, requestedBudget: created.requestedBudget, requestorName: created.requestorName } });
+    await writeAuditLog(access, { action: 'created', entityType: 'request', entityId: created.id, entityLabel: `Request #${created.id}`, details: { capdevId: created.capdevId, setting: created.setting, eventDate: created.eventDate, requestedBudget: created.requestedBudget, requestorName: created.requestorName } });
     scheduleNotificationEmails();
     return { success: true, request: created };
   } catch (error) {
@@ -2216,12 +2330,12 @@ export async function updateRequest(id: number, data: RequestInput) {
         const [balance] = await tx.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, current.capdevId));
         if (!balance || Number(validated.requestedBudget) > Number(balance.budget)) throw new Error('Requested budget exceeds the remaining CapDev budget.');
       }
-      changes = auditChanges(current, validated, { setting: 'Request type', description: 'Description', requestedBudget: 'Requested budget' });
+      changes = auditChanges(current, validated, { setting: 'Request type', description: 'Title', eventDate: 'Event Date', requestedBudget: 'Requested budget' });
       for (const field of schema.dynamicFields) {
         changes.push(...auditChanges({ value: getDynamicFieldValue((current.additionalInfo || {}) as Record<string, unknown>, field) }, { value: getDynamicFieldValue(validated.additionalInfo, field) }, { value: field.name }));
       }
       await claimRequestFolder(tx, access.userId, id, validated.additionalInfo);
-      const [saved] = await tx.update(requests).set({ setting: validated.setting, description: validated.description,
+      const [saved] = await tx.update(requests).set({ setting: validated.setting, description: validated.description, eventDate: validated.eventDate,
         requestedBudget: validated.requestedBudget, additionalInfo: validated.additionalInfo,
         updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
       return saved;
@@ -3195,6 +3309,7 @@ export async function handleChatbotActivityDesignUpload(
     setting: extracted.setting || 'internal',
     requestedBudget: extracted.requestedBudget || undefined,
     description: extracted.description || undefined,
+    eventDate: extracted.eventDate || undefined,
     dynamicFields: extracted.dynamicFields,
     sourceFile: attachment,
   });

@@ -105,6 +105,8 @@ function RequestConfigContent() {
   // Fixed/required preview fields (AIP Code, Budget, etc.) — typeable, placeholder only
   const [fixedPreviewData, setFixedPreviewData] = useState<Record<string, string>>({
     setting,
+    description: '',
+    eventDate: '',
     requestedBudget: '',
   });
 
@@ -755,6 +757,34 @@ function RequestConfigContent() {
                                 <MenuItem value="internal">In-House</MenuItem>
                                 <MenuItem value="external">External</MenuItem>
                               </TextField>
+                            </Stack>
+                          </Grid>
+                          <Grid size={12}>
+                            <Stack spacing={0.5}>
+                              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
+                                Title
+                              </Typography>
+                              <TextField
+                                fullWidth
+                                size="small"
+                                placeholder="Activity or seminar title"
+                                value={fixedPreviewData.description}
+                                onChange={(e) => handleFixedPreviewChange('description', e.target.value)}
+                                sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}
+                              />
+                            </Stack>
+                          </Grid>
+                          <Grid size={12}>
+                            <Stack spacing={0.5}>
+                              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
+                                Event Date <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
+                              </Typography>
+                              <DateField
+                                required
+                                size="small"
+                                value={fixedPreviewData.eventDate}
+                                onChange={(value) => handleFixedPreviewChange('eventDate', value)}
+                              />
                             </Stack>
                           </Grid>
                           <Grid size={{ xs: 12, sm: 6 }}>

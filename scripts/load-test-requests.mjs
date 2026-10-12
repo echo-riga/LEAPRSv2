@@ -1,7 +1,7 @@
 // Load test POST /api/requests with JSON only. Each successful call may create a record.
 // Example (PowerShell):
 // $env:REQUEST_URL = 'https://leaprs-v2.vercel.app/api/requests'
-// $env:REQUEST_BODY_JSON = '{"aipCode":"1111-111-1-1-11-111-111","setting":"internal","description":"Load test","requestedBudget":"1.00","dynamicFields":{"field:13":"CAS","field:14":"Load test","field:15":"Test participants","field:16":"Test duration","field:17":"Load test objectives","field:18":"Load test learning objectives"},"userConfirmed":true}'
+// $env:REQUEST_BODY_JSON = '{"aipCode":"1111-111-1-1-11-111-111","setting":"internal","description":"Load test","eventDate":"2026-10-12","requestedBudget":"1.00","dynamicFields":{"field:13":"CAS","field:14":"Load test","field:15":"Test participants","field:16":"Test duration","field:17":"Load test objectives","field:18":"Load test learning objectives"},"userConfirmed":true}'
 // $env:REQUEST_COOKIE = 'your-session-cookie'
 // node scripts/load-test-requests.mjs
 

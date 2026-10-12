@@ -8,6 +8,7 @@ export interface ExtractedActivityDesign {
   setting: 'internal' | 'external' | null;
   requestedBudget: string | null;
   description: string | null;
+  eventDate: string | null;
   dynamicFields: Record<string, unknown>;
   fieldConfidence: Record<string, number>;
   uncertainFields: string[];
@@ -53,7 +54,7 @@ FIRST: Think and determine if this is an Activity Design, Training Proposal, Sem
 CASE A - NOT an activity design (or insufficient request information, screenshot of app, general photo, chart, diagram, or question):
 - Set "isActivityDesign": false.
 - In "explanation", provide a smart, direct, helpful 1-2 sentence response explaining what you see in the image or answering what is shown from a LEAPRS perspective. Use exact UI labels in **bold** if referring to LEAPRS features.
-- Set "aipCode": null, "setting": null, "requestedBudget": null, "description": null, "dynamicFields": {}, "uncertainFields": [], "summary": "".
+- Set "aipCode": null, "setting": null, "requestedBudget": null, "description": null, "eventDate": null, "dynamicFields": {}, "uncertainFields": [], "summary": "".
 
 CASE B - IS an activity design / seminar proposal:
 - Set "isActivityDesign": true.
@@ -62,6 +63,7 @@ CASE B - IS an activity design / seminar proposal:
 - For "requestedBudget", find the total proposed amount or budget requirement. Clean currency signs and return the numeric string.
 - For "setting", determine if "internal" (in-house/on-campus) or "external" (offsite/external provider).
 - For "description", extract the activity/seminar title or primary objective.
+- For "eventDate", extract the scheduled activity date as YYYY-MM-DD. If no exact date is present, set it to null.
 - For "dynamicFields", use only fields whose "setting" matches the detected request setting, and map extracted details using their "field:<id>" key.
 - In "explanation", strictly output a single sentence stating the title: "I found an activity design for **[Title]**." Never ask for AIP codes, never ask follow-up questions, and never mention missing fields.
 
@@ -76,6 +78,7 @@ Return ONLY valid JSON matching this structure:
   "setting": "internal" | "external" | null,
   "requestedBudget": string | null,
   "description": string | null,
+  "eventDate": string | null,
   "dynamicFields": Record<string, unknown>,
   "fieldConfidence": Record<string, number>,
   "uncertainFields": string[],
@@ -151,6 +154,7 @@ Determine if this is an activity design and return strict JSON.`;
       setting: parsed.setting === 'external' ? 'external' : parsed.setting === 'internal' ? 'internal' : null,
       requestedBudget: parsed.requestedBudget ? String(parsed.requestedBudget).replace(/[^0-9.]/g, '') : null,
       description: parsed.description?.trim() || null,
+      eventDate: typeof parsed.eventDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.eventDate) ? parsed.eventDate : null,
       dynamicFields: (parsed.dynamicFields as Record<string, unknown>) || {},
       fieldConfidence: parsed.fieldConfidence || {},
       uncertainFields: Array.isArray(parsed.uncertainFields) ? parsed.uncertainFields : [],
