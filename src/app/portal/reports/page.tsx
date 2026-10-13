@@ -13,10 +13,13 @@ import {
   Box,
   Button,
   Card,
-  CardActionArea,
   CardContent,
   Checkbox,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   FormControlLabel,
   Grid,
@@ -241,10 +244,14 @@ function downloadFile(base64: string, fileName: string, mimeType: string) {
 }
 
 function RequestReportTable({ report }: { report: RequestReportData }) {
-  const sections: Array<{ label: string; rows: RequestReportRow[] }> = [
-    { label: "Completed", rows: report.completed },
-    { label: "In Progress", rows: report.inProgress },
-    { label: "Rejected", rows: report.rejected },
+  const sections: Array<{
+    label: string;
+    rows: RequestReportRow[];
+    headerColor: string;
+  }> = [
+    { label: "Completed", rows: report.completed, headerColor: "primary.main" },
+    { label: "In Progress", rows: report.inProgress, headerColor: "warning.main" },
+    { label: "Rejected", rows: report.rejected, headerColor: "error.main" },
   ];
   const headers = [
     "Activity title",
@@ -295,7 +302,7 @@ function RequestReportTable({ report }: { report: RequestReportData }) {
                 justifyContent: "space-between",
                 px: 2,
                 py: 1.25,
-                bgcolor: "primary.main",
+                bgcolor: section.headerColor,
                 color: "primary.contrastText",
               }}
             >
@@ -389,6 +396,10 @@ export default function ReportsPage() {
   const [reportType, setReportType] = useState<"monitoring" | "requests">(
     "monitoring",
   );
+  const [draftReportType, setDraftReportType] = useState<
+    "monitoring" | "requests"
+  >("monitoring");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [data, setData] = useState<ReportData>({
     capdevs: [],
     requests: [],
@@ -592,104 +603,21 @@ export default function ReportsPage() {
         >
           Reports
         </Typography>
+        <Button
+          size="small"
+          sx={{ height: 40, alignSelf: { xs: "flex-start", sm: "auto" } }}
+          variant="outlined"
+          startIcon={<FilterIcon />}
+          onClick={() => {
+            setDraftReportType(reportType);
+            setFiltersOpen(true);
+          }}
+        >
+          Filter
+        </Button>
       </Stack>
       <Grid container spacing={3}>
-        <Grid size={{ xs: 12, lg: 3 }}>
-          <Card
-            variant="outlined"
-            sx={{
-              borderRadius: 2,
-              bgcolor: "#fafcfa",
-              position: { lg: "sticky" },
-              top: { lg: 96 },
-            }}
-          >
-            <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-              <Typography variant="overline" color="text.secondary">
-                Report type
-              </Typography>
-              <Stack spacing={1} sx={{ mt: 1 }}>
-                <CardActionArea
-                  onClick={() => setReportType("monitoring")}
-                  sx={{
-                    border: "1px solid",
-                    borderColor:
-                      reportType === "monitoring" ? "primary.main" : "divider",
-                    borderRadius: 2,
-                    bgcolor:
-                      reportType === "monitoring"
-                        ? "rgba(46, 125, 50, 0.07)"
-                        : "transparent",
-                    p: 2,
-                  }}
-                >
-                  <Stack
-                    direction="row"
-                    spacing={1.5}
-                    sx={{ alignItems: "center" }}
-                  >
-                    <Box
-                      sx={{
-                        display: "grid",
-                        placeItems: "center",
-                        width: 38,
-                        height: 38,
-                        flexShrink: 0,
-                        borderRadius: 2,
-                        bgcolor: "rgba(46, 125, 50, 0.10)",
-                        color: "primary.main",
-                      }}
-                    >
-                      <ReportIcon fontSize="small" />
-                    </Box>
-                    <Typography sx={{ fontWeight: 800 }}>
-                      Monitoring Sheet
-                    </Typography>
-                  </Stack>
-                </CardActionArea>
-                <CardActionArea
-                  onClick={() => setReportType("requests")}
-                  sx={{
-                    border: "1px solid",
-                    borderColor:
-                      reportType === "requests" ? "primary.main" : "divider",
-                    borderRadius: 2,
-                    bgcolor:
-                      reportType === "requests"
-                        ? "rgba(46, 125, 50, 0.07)"
-                        : "transparent",
-                    p: 2,
-                  }}
-                >
-                  <Stack
-                    direction="row"
-                    spacing={1.5}
-                    sx={{ alignItems: "center" }}
-                  >
-                    <Box
-                      sx={{
-                        display: "grid",
-                        placeItems: "center",
-                        width: 38,
-                        height: 38,
-                        flexShrink: 0,
-                        borderRadius: 2,
-                        bgcolor: "rgba(46, 125, 50, 0.10)",
-                        color: "primary.main",
-                      }}
-                    >
-                      <RequestReportIcon fontSize="small" />
-                    </Box>
-                    <Typography sx={{ fontWeight: 800 }}>
-                      Request Reports
-                    </Typography>
-                  </Stack>
-                </CardActionArea>
-              </Stack>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 12, lg: 9 }}>
+        <Grid size={12}>
           {reportType === "monitoring" ? (
             <Card
               variant="outlined"
@@ -1367,6 +1295,44 @@ export default function ReportsPage() {
           </Grid>
         )}
       </Grid>
+      <Dialog
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 800 }}>Filter Reports</DialogTitle>
+        <DialogContent dividers>
+          <TextField
+            select
+            fullWidth
+            label="Report type"
+            value={draftReportType}
+            onChange={(event) =>
+              setDraftReportType(
+                event.target.value as "monitoring" | "requests",
+              )
+            }
+          >
+            <MenuItem value="monitoring">Monitoring Sheet</MenuItem>
+            <MenuItem value="requests">Request Reports</MenuItem>
+          </TextField>
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button onClick={() => setDraftReportType("monitoring")}>
+            Reset
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              setReportType(draftReportType);
+              setFiltersOpen(false);
+            }}
+          >
+            Apply Filters
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

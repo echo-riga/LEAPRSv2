@@ -4,7 +4,7 @@ import { validateMoney, validateRequestInput } from '../src/lib/request-validati
 import { manilaDate, manilaDateBoundary } from '../src/lib/manila-date.ts';
 import { verificationCode, hashVerificationCode } from '../src/lib/verification-code.ts';
 
-const request = { capdevId: 10, setting: 'internal', description: 'Training', requestedBudget: '5000.00', additionalInfo: {} };
+const request = { capdevId: 10, setting: 'internal', description: 'Training', eventDate: '2026-10-20', requestedBudget: '5000.00', additionalInfo: {} };
 test('request payload cannot set workflow, identity, or timestamps', () => {
   const result = validateRequestInput({ ...request, status: 'completed', isStopped: true, id: 2,
     userId: 'another-user', updatedById: 'admin', createdAt: new Date() });

@@ -53,7 +53,7 @@ flowchart LR
 | Tables | Responsibility |
 | --- | --- |
 | `users` + `neon_auth.user` | Application role, department, archive state; authentication name/email/credentials |
-| `capdevs` | Unique AIP Code, initial/remaining budgets, department, configured JSON values |
+| `capdevs` | Repeatable user-facing AIP Code, numeric primary key, initial/remaining budgets, department, configured JSON values |
 | `requests` | Parent/owner, requestor name, setting, fixed title/event date, amount, workflow/stopper state, permanent deduction marker, form links, configured JSON |
 | `request_status_updates` | Progress, author snapshot, marks, deduction flag, stopper/response/resume relations, attachments, configured JSON |
 | `capdev_field_definitions`, `request_field_definitions`, `status_update_field_definitions` | Dynamic form schema, options, required/active state, layout/order |
@@ -77,6 +77,7 @@ Requests and timeline entries keep numeric IDs for joins/routes. Requestor name 
 - Neon Auth's Next.js handler serves `/api/auth/[...path]`. The sign-up wrapper additionally enforces the allowed email domain at the sign-up endpoint.
 - Server actions resolve the current authenticated identity and current application role/department. Archived accounts and non-Admin access during maintenance fail authorization.
 - Portal read/mutation helpers check project department, request ownership, role, and archive state. The shared tool services also enforce access. Role labels shown by the client are not authorization evidence.
+- The portal header requests the configured root Drive URL through an Admin-only server action. The client receives only the folder URL, never Google credentials; Drive enforces its own account permissions after navigation.
 - `validateRequestInput` allowlists request fields and rejects unsupported settings, invalid amounts, oversized description/JSON, and caller-supplied identity/workflow state. Suggestions-only combobox values are validated against definition options.
 - Verification codes use keyed hashes based on purpose/email and `NEON_AUTH_COOKIE_SECRET`; rate-limit counters are PostgreSQL rows shared across instances.
 - Forwarded IP/host checks depend on a deployment proxy that overwrites client-supplied forwarded headers. Database credentials, API keys, OAuth refresh credentials, and cookie secrets remain server-side.
@@ -88,12 +89,15 @@ Ordinary reads/simple statements use Drizzle's Neon HTTP adapter. Multi-statemen
 
 - Deduction locks the request and its CapDev, verifies eligibility/previous deduction, conditionally subtracts only if enough balance remains, records `budget_deducted_at`, and inserts the timeline entry in the same transaction.
 - Partial unique indexes prevent duplicate deduction and legacy completion entries. The permanent request marker prevents a removed deduction entry from enabling another deduction.
-- Stop/resume, archive/restore, permanent deletion, folder claims, and attachment finalization use locks for their related invariants. Request workflows generally lock the request before the parent and timeline entry.
+- Stop/resume, request reopening, archive/restore, permanent deletion, folder claims, and attachment finalization use locks for their related invariants. Reopening changes only the request resolution status to `in_progress`; it preserves stopper state, timeline rows, deductions, and external evaluation-form references. Request workflows generally lock the request before the parent and timeline entry.
 - Attachment completion merges only the matching pending descriptor. Updating a form reconciles a stale pending token to its completed attachment before writing.
 - CapDev/request creation, role-approval registration, request resolution, stop/resume, timeline updates and AI submission insert their notification event inside the business transaction using `insertNotificationEvent`. Insert failures roll back business writes and deductions. Email processing is scheduled after commit and can reconstruct delivery jobs from saved events. Audit logging and external provider effects remain separate.
+- Bulk CapDev duplication locks the selected active sources and inserts the new-year CapDev rows and their notification events in one transaction. It preserves each exact AIP Code, copies only CapDev columns, and resets each remaining balance to its initial balance. The numeric primary key distinguishes records that share an AIP Code.
 - External Drive/Form API calls cannot be rolled back with PostgreSQL. Request folder deletion failures are logged while database deletion continues. Form creation during resolution can produce an external form even if a later database step fails.
 
 Do not describe all database/provider effects as one atomic transaction.
+
+CapDev, request, and user page filters are stored in browser local storage under account-specific keys. Request preferences use one key across all CapDev request pages. They survive refresh and logout/login for the same account in that browser without leaking selections to another account; they do not synchronize across browsers or devices.
 
 ## 6. Background attachment pipeline
 

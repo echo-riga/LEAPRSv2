@@ -113,7 +113,7 @@ export const capdevFieldDefinitions = pgTable('capdev_field_definitions', {
 export const capdevs = pgTable('capdevs', {
   archivedAt: timestamp('archived_at'),
   id: serial('id').primaryKey(),
-  aipCode: varchar('aip_code', { length: 100 }).notNull().unique(),
+  aipCode: varchar('aip_code', { length: 100 }).notNull(),
   description: text('description').notNull().default(''),
   initialBudget: numeric('initial_budget', { precision: 12, scale: 2 }).notNull().default('0'),
   budget: numeric('budget', { precision: 12, scale: 2 }).notNull(),
@@ -123,6 +123,7 @@ export const capdevs = pgTable('capdevs', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => [
+  index('capdevs_aip_code_idx').on(table.aipCode),
   index('capdevs_department_created_idx').on(table.department, table.createdAt, table.id),
   index('capdevs_created_idx').on(table.createdAt, table.id),
 ]);

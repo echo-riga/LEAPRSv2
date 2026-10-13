@@ -51,7 +51,7 @@ The legacy guide describes Paper as `#fafcfa`; the theme currently uses white Pa
 ## 4. Page shell and cards
 
 - Use fluid portal containers with the established responsive gutters. Titles and content share the left edge.
-- Preserve the current fixed, light portal header: greeting, role/department indicators, help, notifications, eligible Settings, fullscreen, and sign-out controls. Do not restore the legacy description of a solid green header with a clock.
+- Preserve the current fixed, light portal header: greeting, role/department indicators, help, Admin-only Open Drive Folder, notifications, eligible Settings, fullscreen, and sign-out controls. Open Drive Folder uses a folder icon, opens a new tab, and does not imply that the link grants Google permissions. Do not restore the legacy description of a solid green header with a clock.
 - Resource pages show up to six concise summary boxes in a desktop three-column, two-row grid with pagination. Reduce columns responsively.
 - Keep card actions aligned at the bottom. Show only fixed core summary properties; configured values and attachments belong in full views/forms.
 - Primary creation actions use the existing green extended FAB with Add icon and label at bottom-right.
@@ -75,11 +75,13 @@ Admin Settings retains six equal outlined cards in a desktop three-column, two-r
 - Status Update Configuration places Configure Fields and Configure Inactivity Reminders in the same footer.
 - Request Configuration provides Configure External Fields and Configure In-House Fields as equal actions.
 - Viewers receive the Reports & Analytics card only. Employees do not get Settings access; their email preferences and AI guide remain reachable from header tools.
-- Reports offers Monitoring Sheet and Request Reports as equal selectable report types. Request Reports uses month/year controls, the heading `Report as of Month, Year`, and Completed, In Progress, and Rejected outlined table sections that reuse the primary green, surface, border, typography, and spacing tokens. Its download action produces a landscape PDF; Monitoring Sheet keeps its spreadsheet export.
+- Reports presents Monitoring Sheet and Request Reports through the standard page-level Filter dialog and gives the selected report the full content width without a persistent side selector or active-type badge. Request Reports uses month/year controls, the heading `Report as of Month, Year`, and outlined table sections with green for Completed, orange for In Progress, and red for Rejected. Its download action produces a landscape PDF with the same section colors; Monitoring Sheet keeps its spreadsheet export.
 
 ## 6. Forms and dialogs
 
 - Reuse MUI Dialog title, divided content, and bottom-right action row. Cancel is secondary; the commit action is primary.
+- The CapDev toolbar places an icon-only Duplicate control beside Filter for Admins. Its dialog provides a target Date Added and Select all/Clear controls with AIP-based project checkboxes. Duplication preserves the exact AIP Code; state explicitly that requests and status updates are excluded. The standard CapDev filter uses Date Added from/to fields and date shortcuts; it does not include a separate Year Added selector.
+- CapDev, request, and user filter dialogs save applied selections per account in the same browser. Date shortcuts use a contained/highlighted state when their exact Today, This month, or This year range is selected.
 - Show fixed and active configured fields using the existing required/optional sections and form grid.
 - Read-only metadata is text, not a disabled input pretending to be editable.
 - Required indicators use the established red asterisk. Do not duplicate required status in helper paragraphs.
@@ -129,7 +131,9 @@ Source: [BackgroundUploads.tsx](src/components/BackgroundUploads.tsx).
 ## 9. Timeline and record focus
 
 - Render populated configured progress values in configuration order, including files. Avoid hardcoded Action/Office priority, repeated headings/remarks, and generic Status updated for attachment-only entries.
-- Keep stoppers, nested responses, resume history, and final resolution visually connected using existing timeline/card patterns.
+- Keep stoppers, nested responses, and final resolution visually connected using existing timeline/card patterns. Show a resumed stopper on its existing card instead of adding a separate Progress Resumed card.
+- A completed or denied timeline shows a fixed Reopen Request action for authorized users. Require confirmation and explain that history, deductions, and evaluation forms remain; if the request is also stopped, explain that reopening does not resume the stopper.
+- End timeline connectors at an active stopper when the current role has no following action or resolution card; never point an arrow into empty space.
 - Progress circles are keyboard-accessible summary controls with tooltips; activate them to scroll to their corresponding entry or resolution.
 - Deep links first make a filtered/paginated target visible, then scroll to it.
 - Pulse the whole destination card briefly: slight shrink, slight enlargement, then normal. Do not animate the title, a text fragment, or the surrounding page.

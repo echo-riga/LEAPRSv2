@@ -19,6 +19,8 @@ const PAGE_HEIGHT = 595;
 const MARGIN = 36;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 const PRIMARY = "#2e7d32";
+const WARNING = "#ed6c02";
+const ERROR = "#d32f2f";
 const PRIMARY_DARK = "#005005";
 const PRIMARY_PALE = "#e8f5e9";
 const TEXT = "#1c281c";
@@ -203,7 +205,14 @@ export function renderRequestReportPdf(report: RequestReportPdfData) {
   };
 
   const addTableHeader = (section: string) => {
-    commands.push(rect(MARGIN, cursor, CONTENT_WIDTH, 28, PRIMARY, PRIMARY));
+    const headerColor = section.startsWith("In Progress")
+      ? WARNING
+      : section.startsWith("Rejected")
+        ? ERROR
+        : PRIMARY;
+    commands.push(
+      rect(MARGIN, cursor, CONTENT_WIDTH, 28, headerColor, headerColor),
+    );
     commands.push(text(section, MARGIN + 12, cursor + 8, 10, "#ffffff", true));
     cursor += 28;
     const headers = [

@@ -2,12 +2,12 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Add as AddIcon, ChevronRight as ChevronRightIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
+import { Add as AddIcon, ChevronRight as ChevronRightIcon, ContentCopy as DuplicateIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
 import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, FormControlLabel, Grid, IconButton, InputAdornment, MenuItem, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import ArchiveActions from '@/components/ArchiveActions';
 import ReadOnlyDynamicField from '@/components/ReadOnlyDynamicField';
 import { authClient } from '@/lib/auth/client';
-import { archiveCapdev, restoreCapdev, createCapdev, deleteCapdev, getCapdevPage, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
+import { archiveCapdev, restoreCapdev, createCapdev, deleteCapdev, duplicateCapdevs, getAllCapdevs, getCapdevPage, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
 import { manilaDate } from '@/lib/manila-date';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
@@ -20,13 +20,16 @@ import { useAttachmentRefresh, useBackgroundUploads } from '@/components/Backgro
 import { getHalfFieldLayout } from '@/components/FieldReorder';
 import FileFieldChecklist from '@/components/FileFieldChecklist';
 import { focusFormError } from '@/lib/form-error-focus';
+import { filterPreferenceStorageKey, getActiveDateFilterPreset, getDateFilterPresetRange } from '@/lib/filter-preferences';
 
 type DynamicField = { id: number; name: string; type: string; options: string[] | null; isRequired: boolean; section: string; width: string; columnPosition: string; placeholder: string | null };
 type Capdev = { archivedAt: Date | string | null; id: number; aipCode: string; description: string; initialBudget: string; budget: string; department: string; updatedById: string; createdAt: Date | string; additionalInfo: Record<string, unknown> };
 type CapdevForm = Omit<Capdev, 'id' | 'createdAt' | 'updatedById' | 'archivedAt'>;
 type BudgetHistoryEntry = { authorName: string | null; amount: string; createdAt: Date | string };
+type CapdevFilters = { departments: string[]; initialMin: string; initialMax: string; remainingMin: string; remainingMax: string; dateFrom: string; dateTo: string; sort: string };
 
 const EMPTY_FORM: CapdevForm = { aipCode: '', description: '', initialBudget: '', budget: '', department: '', additionalInfo: {} };
+const EMPTY_FILTERS: CapdevFilters = { departments: [], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' };
 const formatCurrency = (value: string) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
 const formatDate = (value: Date | string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
 const getAttachments = (value: unknown): StatusAttachment[] => Array.isArray(value) ? value.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file) : [];
@@ -42,6 +45,14 @@ const formatAipCode = (value: string) => {
     offset += length;
   }
   return groups.join('-');
+};
+const isSavedCapdevFilters = (value: unknown): value is CapdevFilters => {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<CapdevFilters>;
+  return Array.isArray(candidate.departments) && candidate.departments.every((item) => typeof item === 'string') &&
+    ['initialMin', 'initialMax', 'remainingMin', 'remainingMax', 'dateFrom', 'dateTo', 'sort']
+      .every((key) => typeof candidate[key as keyof CapdevFilters] === 'string') &&
+    (candidate.sort === 'newest' || candidate.sort === 'oldest');
 };
 
 export default function PortalPage() {
@@ -59,8 +70,15 @@ export default function PortalPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [filters, setFilters] = useState({ departments: [] as string[], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' });
+  const [filters, setFilters] = useState<CapdevFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState(filters);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [duplicateOptions, setDuplicateOptions] = useState<Capdev[]>([]);
+  const [selectedDuplicateIds, setSelectedDuplicateIds] = useState<number[]>([]);
+  const [duplicateTargetDate, setDuplicateTargetDate] = useState(`${Number(manilaDate().slice(0, 4)) + 1}-01-01`);
+  const [duplicateLoading, setDuplicateLoading] = useState(false);
+  const [duplicateSaving, setDuplicateSaving] = useState(false);
+  const [duplicateError, setDuplicateError] = useState('');
   const [page, setPage] = useState(1);
   const [editorOpen, setEditorOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -74,6 +92,7 @@ export default function PortalPage() {
   const [role, setRole] = useState<AppRole>('employee');
   const [notificationFocus, setNotificationFocus] = useState<{ targetId: string; nonce: number } | null>(null);
   const filtersInitialized = useRef(false);
+  const filterAccountId = useRef<string | null>(null);
   const saveProjectInFlight = useRef(false);
 
   useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
@@ -101,6 +120,36 @@ export default function PortalPage() {
   }, []);
 
   const userId = session.data?.user.id;
+  useEffect(() => {
+    if (!userId || (filterAccountId.current === userId && filtersInitialized.current)) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      filterAccountId.current = userId;
+      filtersInitialized.current = false;
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(filterPreferenceStorageKey('capdev', userId)) || 'null');
+        if (!isSavedCapdevFilters(saved)) {
+          setFilters(EMPTY_FILTERS);
+          setDraftFilters(EMPTY_FILTERS);
+          return;
+        }
+        setFilters({ ...saved, departments: [...saved.departments] });
+        setDraftFilters({ ...saved, departments: [...saved.departments] });
+        filtersInitialized.current = true;
+      } catch {
+        window.localStorage.removeItem(filterPreferenceStorageKey('capdev', userId));
+        setFilters(EMPTY_FILTERS);
+        setDraftFilters(EMPTY_FILTERS);
+      }
+    });
+    return () => { active = false; };
+  }, [userId]);
+
+  const saveFiltersForAccount = (next: CapdevFilters) => {
+    if (!userId) return;
+    window.localStorage.setItem(filterPreferenceStorageKey('capdev', userId), JSON.stringify(next));
+  };
   const loadData = useCallback(async () => {
     if (!userId) return;
     const sequence = ++loadSequence.current;
@@ -264,6 +313,55 @@ export default function PortalPage() {
     }
   };
 
+  const openDuplicate = async () => {
+    setDuplicateOpen(true);
+    setDuplicateLoading(true);
+    setDuplicateError('');
+    setSelectedDuplicateIds([]);
+    setDuplicateTargetDate(`${Number(manilaDate().slice(0, 4)) + 1}-01-01`);
+    try {
+      const records = await getAllCapdevs();
+      setDuplicateOptions(records.filter((record) => !record.archivedAt).map((record) => ({
+        ...record,
+        initialBudget: String(record.initialBudget),
+        budget: String(record.budget),
+        additionalInfo: record.additionalInfo as Record<string, unknown>,
+      })));
+    } catch {
+      setDuplicateError('Unable to load CapDev projects.');
+    } finally {
+      setDuplicateLoading(false);
+    }
+  };
+
+  const submitDuplicates = async () => {
+    if (!duplicateTargetDate || selectedDuplicateIds.length === 0) return;
+    setDuplicateSaving(true);
+    setDuplicateError('');
+    try {
+      const result = await duplicateCapdevs({ capdevIds: selectedDuplicateIds, targetDate: duplicateTargetDate });
+      if (!result.success) {
+        setDuplicateError(result.error || 'Unable to duplicate the selected CapDev projects.');
+        return;
+      }
+      const targetYear = duplicateTargetDate.slice(0, 4);
+      const nextFilters: CapdevFilters = {
+        ...filters,
+        dateFrom: `${targetYear}-01-01`,
+        dateTo: `${targetYear}-12-31`,
+      };
+      setFilters(nextFilters);
+      setDraftFilters(nextFilters);
+      saveFiltersForAccount(nextFilters);
+      setPage(1);
+      setDuplicateOpen(false);
+    } catch {
+      setDuplicateError('Unable to duplicate the selected CapDev projects.');
+    } finally {
+      setDuplicateSaving(false);
+    }
+  };
+
   const renderDynamicField = (field: DynamicField) => {
     const isRequired = field.isRequired || field.section === 'required';
     const storageKey = dynamicFieldStorageKey(field);
@@ -383,6 +481,7 @@ export default function PortalPage() {
           <Stack direction="row" spacing={2} sx={{ width: { xs: '100%', sm: 'auto' }, alignItems: 'center' }}>
             <TextField size="small" placeholder="Search projects..." value={search} onChange={(event) => { setSearch(event.target.value); resetPage(); }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> } }} sx={{ bgcolor: '#ffffff', borderRadius: 2, minWidth: { sm: 260 }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} />
             <Button size="small" sx={{ height: 40 }} variant="outlined" startIcon={<FilterIcon />} onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}>Filter</Button>
+            {isAdmin && !showArchived && <Tooltip title="Duplicate CapDev projects"><IconButton color="primary" onClick={() => void openDuplicate()} aria-label="Duplicate CapDev projects" sx={{ width: 40, height: 40, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}><DuplicateIcon /></IconButton></Tooltip>}
             <Button size="small" sx={{ height: 40, whiteSpace: 'nowrap' }} variant="outlined" onClick={() => { setShowArchived(!showArchived); setNotificationFocus(null); resetPage(); }}>{showArchived ? 'See Active Projects' : 'See Archives'}</Button>
         </Stack>
       </Stack>
@@ -431,7 +530,32 @@ export default function PortalPage() {
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Close</Button>{isAdmin && <Button onClick={saveProject} disabled={editorReadOnly || saving || !form.aipCode || !form.budget || (!editing && Number(form.budget) <= 0) || !areRequiredFieldsComplete || Object.keys(fieldErrors).length > 0} variant="contained">{saving ? 'Saving' : 'Save CapDev'}</Button>}</DialogActions>
       </Dialog>
-      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev Projects</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const d = manilaDate(); setDraftFilters({ ...draftFilters, dateFrom: d, dateTo: d }); }}>Today</Button><Button size="small" onClick={() => { const d = manilaDate(); setDraftFilters({ ...draftFilters, dateFrom: d.slice(0, 7) + '-01', dateTo: d }); }}>This month</Button><Button size="small" onClick={() => { const d = manilaDate(); setDraftFilters({ ...draftFilters, dateFrom: d.slice(0, 4) + '-01-01', dateTo: d }); }}>This year</Button></Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { setFilters({ ...draftFilters, departments: [...draftFilters.departments] }); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev Projects</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}>{(['today', 'month', 'year'] as const).map((preset) => <Button key={preset} size="small" variant={getActiveDateFilterPreset(draftFilters.dateFrom, draftFilters.dateTo) === preset ? 'contained' : 'text'} onClick={() => setDraftFilters({ ...draftFilters, ...getDateFilterPresetRange(preset) })}>{preset === 'today' ? 'Today' : preset === 'month' ? 'This month' : 'This year'}</Button>)}</Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { const next = { ...draftFilters, departments: [...draftFilters.departments] }; setFilters(next); saveFiltersForAccount(next); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
+
+      <Dialog open={duplicateOpen} onClose={() => { if (!duplicateSaving) setDuplicateOpen(false); }} fullWidth maxWidth="sm">
+        <DialogTitle sx={{ fontWeight: 800 }}>Duplicate CapDev Projects</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2.5}>
+            <Typography variant="body2" color="text.secondary">Copy only the selected CapDev records. Requests and status updates will not be included. Remaining balances reset to each project&apos;s initial balance.</Typography>
+            {duplicateError && <Alert severity="error">{duplicateError}</Alert>}
+            <DateField label="Date added for duplicates" value={duplicateTargetDate} onChange={setDuplicateTargetDate} required />
+            <Box>
+              <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                <Typography variant="body2" sx={{ fontWeight: 700 }}>CapDev projects</Typography>
+                <Stack direction="row" spacing={1}>
+                  <Button size="small" disabled={duplicateLoading} onClick={() => setSelectedDuplicateIds(duplicateOptions.map((project) => project.id))}>Select all</Button>
+                  <Button size="small" disabled={duplicateLoading} onClick={() => setSelectedDuplicateIds([])} color="inherit">Clear</Button>
+                </Stack>
+              </Stack>
+              <Box sx={{ maxHeight: 300, overflowY: 'auto', pr: 1 }}>
+                {duplicateLoading ? <Typography color="text.secondary" sx={{ py: 2 }}>Loading projects...</Typography> : duplicateOptions.map((project) => <FormControlLabel key={project.id} control={<Checkbox checked={selectedDuplicateIds.includes(project.id)} onChange={() => setSelectedDuplicateIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id])} />} label={<Stack><Typography variant="body2" sx={{ fontWeight: 700 }}>{project.aipCode}</Typography><Typography variant="caption" color="text.secondary">{project.department ? `${project.department} · ` : ''}Added {formatDate(project.createdAt)}</Typography></Stack>} sx={{ display: 'flex', width: '100%', m: 0, py: 0.5 }} />)}
+                {!duplicateLoading && duplicateOptions.length === 0 && <Typography color="text.secondary" sx={{ py: 2 }}>No active CapDev projects are available.</Typography>}
+              </Box>
+            </Box>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}><Button color="inherit" disabled={duplicateSaving} onClick={() => setDuplicateOpen(false)}>Cancel</Button><Button variant="contained" startIcon={<DuplicateIcon />} disabled={duplicateSaving || duplicateLoading || selectedDuplicateIds.length === 0 || !duplicateTargetDate} onClick={() => void submitDuplicates()}>{duplicateSaving ? 'Duplicating...' : `Duplicate ${selectedDuplicateIds.length || ''} CapDev${selectedDuplicateIds.length === 1 ? '' : 's'}`}</Button></DialogActions>
+      </Dialog>
 
       </Container>
     </Box>

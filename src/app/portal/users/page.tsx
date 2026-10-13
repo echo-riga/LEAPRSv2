@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Alert,
@@ -51,6 +51,7 @@ import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
 import DepartmentCombobox from '@/components/DepartmentCombobox';
 import { getFriendlyPasswordError, getPasswordValidationError, PASSWORD_REQUIREMENTS } from '@/lib/password-validation';
 import { focusFormError } from '@/lib/form-error-focus';
+import { filterPreferenceStorageKey, getActiveDateFilterPreset, getDateFilterPresetRange } from '@/lib/filter-preferences';
 
 interface UserEntity {
   id: string;
@@ -66,6 +67,15 @@ interface UserEntity {
 }
 
 const ALL_ROLES = ROLE_OPTIONS.map(({ value }) => value);
+type UserFilters = { roles: string[]; departments: string[]; dateFrom: string; dateTo: string; sort: 'newest' | 'oldest' };
+const isSavedUserFilters = (value: unknown): value is UserFilters => {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<UserFilters>;
+  return Array.isArray(candidate.roles) && candidate.roles.every((item) => typeof item === 'string') &&
+    Array.isArray(candidate.departments) && candidate.departments.every((item) => typeof item === 'string') &&
+    typeof candidate.dateFrom === 'string' && typeof candidate.dateTo === 'string' &&
+    (candidate.sort === 'newest' || candidate.sort === 'oldest');
+};
 
 export default function UsersManagementPage() {
   const router = useRouter();
@@ -98,6 +108,8 @@ export default function UsersManagementPage() {
   const [draftDepartmentFilter, setDraftDepartmentFilter] = useState<string[]>([]);
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [draftSortOrder, setDraftSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const filterAccountId = useRef<string | null>(null);
+  const filtersInitialized = useRef(false);
 
   // Pagination State (6 items per page to prevent scrolling)
   const [currentPage, setCurrentPage] = useState(1);
@@ -136,7 +148,7 @@ export default function UsersManagementPage() {
   }, [router, session.data]);
 
   // Load users from DB
-  const loadUsers = async (showLoading = true) => {
+  const loadUsers = useCallback(async (showLoading = true) => {
     if (!session.data) return;
 
     if (showLoading) setLoading(true);
@@ -160,14 +172,16 @@ export default function UsersManagementPage() {
       setDepartmentOptions(departments);
       if (approvalResult.success) setPendingApprovals(approvalResult.approvals);
       const initialDepartments = Array.from(new Set(formattedDbUsers.map((user) => user.department))).sort();
-      setDepartmentFilter(initialDepartments);
-      setDraftDepartmentFilter(initialDepartments);
+      if (!filtersInitialized.current) {
+        setDepartmentFilter(initialDepartments);
+        setDraftDepartmentFilter(initialDepartments);
+      }
     } catch (err) {
       console.error('Error loading users:', err);
     } finally {
       if (showLoading) setLoading(false);
     }
-  };
+  }, [session.data]);
 
   const handleApprovalDecision = async (approvalId: number, decision: 'accepted' | 'rejected') => {
     setApprovalActionId(approvalId);
@@ -184,12 +198,52 @@ export default function UsersManagementPage() {
 
   useEffect(() => {
     if (session.data) {
-      loadUsers();
+      void Promise.resolve().then(() => loadUsers());
     }
-  }, [session.data]);
+  }, [loadUsers, session.data]);
+
+  const userId = session.data?.user.id;
+  useEffect(() => {
+    if (!userId || loading || (filterAccountId.current === userId && filtersInitialized.current)) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      filterAccountId.current = userId;
+      const availableDepartments = Array.from(new Set(usersList.map((user) => user.department))).sort();
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(filterPreferenceStorageKey('users', userId)) || 'null');
+        const next: UserFilters = isSavedUserFilters(saved)
+          ? saved
+          : { roles: [...ALL_ROLES], departments: availableDepartments, dateFrom: '', dateTo: '', sort: 'newest' };
+        setRoleFilter([...next.roles]);
+        setDraftRoleFilter([...next.roles]);
+        setDepartmentFilter([...next.departments]);
+        setDraftDepartmentFilter([...next.departments]);
+        setDateFrom(next.dateFrom);
+        setDraftDateFrom(next.dateFrom);
+        setDateTo(next.dateTo);
+        setDraftDateTo(next.dateTo);
+        setSortOrder(next.sort);
+        setDraftSortOrder(next.sort);
+        filtersInitialized.current = true;
+      } catch {
+        window.localStorage.removeItem(filterPreferenceStorageKey('users', userId));
+        setRoleFilter([...ALL_ROLES]);
+        setDraftRoleFilter([...ALL_ROLES]);
+        setDepartmentFilter(availableDepartments);
+        setDraftDepartmentFilter(availableDepartments);
+        filtersInitialized.current = true;
+      }
+    });
+    return () => { active = false; };
+  }, [loading, userId, usersList]);
+
+  const saveFiltersForAccount = (next: UserFilters) => {
+    if (userId) window.localStorage.setItem(filterPreferenceStorageKey('users', userId), JSON.stringify(next));
+  };
 
   useEffect(() => {
-    if (searchParams.has('approval')) setPendingApprovalsOpen(true);
+    if (searchParams.has('approval')) void Promise.resolve().then(() => setPendingApprovalsOpen(true));
   }, [searchParams]);
 
   useEffect(() => {
@@ -410,11 +464,6 @@ export default function UsersManagementPage() {
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentItems = filteredUsers.slice(indexOfFirstItem, indexOfLastItem);
 
-  // Reset page when filter/search changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery]);
-
   if (session.isPending || loading) {
     return <ResourceGridSkeleton titleWidth={180} />;
   }
@@ -461,7 +510,7 @@ export default function UsersManagementPage() {
               placeholder="Search user..."
               size="small"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
               slotProps={{
                 input: {
                   startAdornment: (
@@ -849,7 +898,7 @@ export default function UsersManagementPage() {
           <Button onClick={() => setPendingApprovalsOpen(false)} color="inherit" sx={{ fontWeight: 700 }}>Close</Button>
         </DialogActions>
       </Dialog>
-      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} maxWidth="sm" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Filter Users</DialogTitle><DialogContent dividers><Stack spacing={2}><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Roles</Typography>{ALL_ROLES.map((role) => <FormControlLabel key={role} control={<Checkbox checked={draftRoleFilter.includes(role)} onChange={() => setDraftRoleFilter((current) => current.includes(role) ? current.filter((item) => item !== role) : [...current, role])} />} label={roleLabel(role)} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{Array.from(new Set(usersList.map((user) => user.department))).sort().map((department) => <FormControlLabel key={department} control={<Checkbox checked={draftDepartmentFilter.includes(department)} onChange={() => setDraftDepartmentFilter((current) => current.includes(department) ? current.filter((item) => item !== department) : [...current, department])} />} label={department} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Grid container spacing={2}><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftDateFrom} onChange={setDraftDateFrom} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftDateTo} onChange={setDraftDateTo} /></Grid></Grid><Stack direction="row" spacing={1}><Button size="small" onClick={() => { const today = new Date().toISOString().slice(0, 10); setDraftDateFrom(today); setDraftDateTo(today); }}>Today</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This month</Button><Button size="small" onClick={() => { const now = new Date(); setDraftDateFrom(`${now.getFullYear()}-01-01`); setDraftDateTo(now.toISOString().slice(0, 10)); }}>This year</Button></Stack><TextField select fullWidth label="Sort" value={draftSortOrder} onChange={(event) => setDraftSortOrder(event.target.value as 'newest' | 'oldest')}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => { setDraftRoleFilter([...ALL_ROLES]); setDraftDepartmentFilter(Array.from(new Set(usersList.map((user) => user.department))).sort()); setDraftDateFrom(''); setDraftDateTo(''); setDraftSortOrder('newest'); }}>Reset</Button><Button variant="contained" onClick={() => { setRoleFilter([...draftRoleFilter]); setDepartmentFilter([...draftDepartmentFilter]); setDateFrom(draftDateFrom); setDateTo(draftDateTo); setSortOrder(draftSortOrder); setCurrentPage(1); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} maxWidth="sm" fullWidth><DialogTitle sx={{ fontWeight: 800 }}>Filter Users</DialogTitle><DialogContent dividers><Stack spacing={2}><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Roles</Typography>{ALL_ROLES.map((role) => <FormControlLabel key={role} control={<Checkbox checked={draftRoleFilter.includes(role)} onChange={() => setDraftRoleFilter((current) => current.includes(role) ? current.filter((item) => item !== role) : [...current, role])} />} label={roleLabel(role)} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Box><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{Array.from(new Set(usersList.map((user) => user.department))).sort().map((department) => <FormControlLabel key={department} control={<Checkbox checked={draftDepartmentFilter.includes(department)} onChange={() => setDraftDepartmentFilter((current) => current.includes(department) ? current.filter((item) => item !== department) : [...current, department])} />} label={department} sx={{ display: 'flex', width: 'fit-content' }} />)}</Box><Grid container spacing={2}><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftDateFrom} onChange={setDraftDateFrom} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftDateTo} onChange={setDraftDateTo} /></Grid></Grid><Stack direction="row" spacing={1}>{(['today', 'month', 'year'] as const).map((preset) => <Button key={preset} size="small" variant={getActiveDateFilterPreset(draftDateFrom, draftDateTo) === preset ? 'contained' : 'text'} onClick={() => { const range = getDateFilterPresetRange(preset); setDraftDateFrom(range.dateFrom); setDraftDateTo(range.dateTo); }}>{preset === 'today' ? 'Today' : preset === 'month' ? 'This month' : 'This year'}</Button>)}</Stack><TextField select fullWidth label="Sort" value={draftSortOrder} onChange={(event) => setDraftSortOrder(event.target.value as 'newest' | 'oldest')}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => { setDraftRoleFilter([...ALL_ROLES]); setDraftDepartmentFilter(Array.from(new Set(usersList.map((user) => user.department))).sort()); setDraftDateFrom(''); setDraftDateTo(''); setDraftSortOrder('newest'); }}>Reset</Button><Button variant="contained" onClick={() => { const next: UserFilters = { roles: [...draftRoleFilter], departments: [...draftDepartmentFilter], dateFrom: draftDateFrom, dateTo: draftDateTo, sort: draftSortOrder }; setRoleFilter(next.roles); setDepartmentFilter(next.departments); setDateFrom(next.dateFrom); setDateTo(next.dateTo); setSortOrder(next.sort); saveFiltersForAccount(next); setCurrentPage(1); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
       <Dialog open={Boolean(archivingUser)} onClose={() => { if (!archiveBusy) setArchivingUser(null); }} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 800 }}>Archive User?</DialogTitle>
         <DialogContent dividers><Typography>Are you sure you want to archive the user {archivingUser?.name}?</Typography></DialogContent>

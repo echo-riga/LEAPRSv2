@@ -11,6 +11,7 @@
     "test:security": "node --experimental-strip-types --test scripts/security-regression.test.mjs",
     "test:security:db": "node --experimental-strip-types --test scripts/security-database.test.mjs",
     "db:security-migrate": "node scripts/migrate-security.mjs --apply",
+    "db:repeatable-aip-migrate": "node --use-system-ca scripts/migrate-repeatable-capdev-aip-codes.mjs",
     "db:push": "drizzle-kit push",
     "db:pull": "drizzle-kit pull",
     "db:generate": "drizzle-kit generate",

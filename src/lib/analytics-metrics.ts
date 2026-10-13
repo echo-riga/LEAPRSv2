@@ -10,6 +10,7 @@ type RequestEvent = {
   denied: boolean;
   stopped: boolean;
   resumed: boolean;
+  reopened: boolean;
   deductedAmount: string | null;
 };
 type Filters = { departments: string[]; capdevIds: number[]; dateFrom: string; dateTo: string; snapshotDate: string };
@@ -64,10 +65,12 @@ export function summarizeAnalytics(
     if (!snapshotProjectIds.has(request.capdevId) || Date.parse(request.createdAt) > snapshotAt) continue;
     const allEvents = eventsByRequest.get(request.id) || [];
     const eventsAtSnapshot = allEvents.filter((event) => Date.parse(event.createdAt) <= snapshotAt);
-    let concluded = eventsAtSnapshot.some((event) => event.complete || event.denied);
+    let concluded = false;
     let stopped = false;
     let stoppedEventId: string | undefined;
     for (const event of eventsAtSnapshot) {
+      if (event.complete || event.denied) concluded = true;
+      if (event.reopened) concluded = false;
       if (event.stopped) {
         stopped = true;
         stoppedEventId = event.id;
@@ -78,7 +81,7 @@ export function summarizeAnalytics(
       }
     }
     if (currentSnapshot) {
-      concluded ||= request.status === 'completed' || request.status === 'denied';
+      concluded = request.status === 'completed' || request.status === 'denied';
       if (!concluded) {
         stopped = request.isStopped;
         if (stopped && request.activeStopperId) stoppedEventId = `timeline-${request.activeStopperId}`;

@@ -23,6 +23,7 @@ Supported entry points are the web portal, the portal AI assistant, and authoriz
 | Respond to an active stopper | No | Own request | No | No | No |
 | Complete/deny requests | All | Own requests, subject to stopper rules | All | No | No |
 | Reports and analytics | All | No | No | Own department | All |
+| Open root Google Drive records folder | Yes | No | No | No | No |
 | User administration, audit, form configuration, maintenance | Yes | No | No | No | No |
 | Own email preferences and AI connection guide | Yes | Yes | Yes | Yes | Yes |
 
@@ -44,9 +45,11 @@ Despite its stored name `employee-department`, Employee (All Department Requests
 ### CapDev
 
 - Fixed fields: AIP Code, description, initial budget, remaining budget, and department.
-- AIP Code is unique and follows `0000-000-0-0-00-000-000`. It is the user-facing project identifier.
+- AIP Code follows `0000-000-0-0-00-000-000` and is a user-facing project identifier, but it is not unique because the same project code can be carried into another Date Added year. The numeric CapDev ID remains the relational identifier.
 - Initial budget records the original allocation; remaining budget reflects permanent deductions. Ordinary project edits do not reset these balances.
 - Admin-configured fields provide additional project information.
+- Admin can duplicate one or more active CapDev records for a selected Date Added. Duplication preserves the exact AIP Code, copies CapDev fields, resets remaining budget to the copied initial budget, and never copies requests or status updates.
+- CapDev, request, and user filter selections persist separately for each signed-in account in the same browser. Request filters are shared across all CapDev request pages. After a successful CapDev duplication, the Date Added range switches to the target calendar year so older years are excluded.
 
 ### Requests
 
@@ -62,7 +65,8 @@ Despite its stored name `employee-department`, Employee (All Department Requests
 - Ordinary progress marks are Pending, Completed, and Denied; historical Accepted marks remain readable.
 - A progress mark documents one milestone. It does not conclude the whole request.
 - Only an explicit request resolution concludes it. Concluded requests reject new ordinary timeline entries.
-- Timeline history includes progress, stoppers, responses, resumes, configured values, and attachments.
+- Admins, the owning Employee, and Employee (All Department Requests) can reopen an accidentally completed or denied request. Reopening returns it to In progress while preserving timeline history, permanent budget deductions, evaluation forms, and any separate stopped condition.
+- Timeline history includes progress, stoppers, responses, configured values, and attachments. Resuming does not add a separate status card; the related stopper shows that progress was resumed.
 
 ## 5. Budget rules
 
@@ -78,7 +82,7 @@ Despite its stored name `employee-department`, Employee (All Department Requests
 1. Admin or Employee (All Department Requests) stops an active request with a reason and optional files.
 2. A stopper is recorded on the timeline and becomes the request's active blocker. A stopped request cannot receive another active stopper.
 3. While stopped, only the owning Employee can add a response to the active stopper. Ordinary progress posting is blocked for all roles until resumed.
-4. Admin or Employee (All Department Requests) resumes progress. The stopper and its responses remain in history.
+4. Admin or Employee (All Department Requests) resumes progress. The stopper and its responses remain in history, with the stopper marked Resumed and no separate resume status card. Once resumed, Admin, the owning Employee, and Employee (All Department Requests) can add ordinary progress again.
 5. An Employee cannot complete or deny a stopped request until it is resumed. Management roles retain their resolution authority.
 
 ## 7. Configurable forms
@@ -114,6 +118,7 @@ Despite its stored name `employee-department`, Employee (All Department Requests
 ### Storage and access
 
 - Drive stores attachment bytes. Request files use the request's managed folder; CapDev files use the configured root folder.
+- Admins can open the configured root Drive folder from the portal header. The portal link does not grant Google Drive access; the signed-in Google account must already have permission.
 - Only an authorized uploader may complete their pending descriptor. Completion must verify the file belongs to the expected uploader, record, and managed folder.
 - Portal permission to view an attachment reference and Google Drive permission to open the file are separate. Do not describe Drive links as automatically public.
 - Uploading a file for AI extraction still requires sending its bytes before draft review. Only subsequent Drive storage happens after request submission.

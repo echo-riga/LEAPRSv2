@@ -128,7 +128,8 @@ export async function findCapdevByAipCodeService(access: UserAccess, aipCode: st
   const [capdev] = await db
     .select()
     .from(capdevs)
-    .where(eq(capdevs.aipCode, cleanedCode))
+    .where(and(eq(capdevs.aipCode, cleanedCode), capdevAccessScope(access)))
+    .orderBy(desc(capdevs.createdAt), desc(capdevs.id))
     .limit(1);
 
   if (!capdev) {

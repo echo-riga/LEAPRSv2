@@ -18,6 +18,7 @@ LEAPRS (Lifelong Education Advancement Program Requisition System) Knowledge Bas
 3. Header & Global UI Controls (Top Navigation Bar):
 - **Fullscreen**: Click the **Enter fullscreen** / **Exit fullscreen** icon in the top-right header to expand or exit fullscreen mode.
 - **Help Chat**: Click the robot icon in the header to open this assistant, ask questions, or paste/upload activity-design images or files to create request drafts.
+- **Open Drive Folder**: Admins can click the folder icon in the header to open the configured root Google Drive records folder in a new tab. Google Drive permissions still apply.
 - **Notifications**: Click the bell icon in the header to view unread timeline updates and request alerts.
 - **Settings**: Click the gear icon in the header to open administrative configuration, user management, and reporting.
 - **Sign Out**: Click the red exit icon in the header to securely end your session.

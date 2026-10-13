@@ -67,6 +67,7 @@ import FileFieldChecklist from '@/components/FileFieldChecklist';
 import { focusFormError } from '@/lib/form-error-focus';
 
 import { inactivityMessage, type RequestInactivity } from '@/lib/request-inactivity';
+import { filterPreferenceStorageKey, getActiveDateFilterPreset, getDateFilterPresetRange } from '@/lib/filter-preferences';
 
 type RequestRecord = {
   inactivity: RequestInactivity | null;
@@ -87,6 +88,7 @@ type RequestRecord = {
 };
 type DynamicField = { id: number; setting?: 'internal' | 'external'; name: string; type: string; options: string[] | null; isRequired: boolean; width: string; columnPosition: string; placeholder: string | null; section?: string };
 type RequestForm = Pick<RequestRecord, 'setting' | 'description' | 'requestedBudget' | 'additionalInfo'> & { eventDate: string };
+type RequestFilters = { setting: string; min: string; max: string; dateFrom: string; dateTo: string; sort: string };
 type CapdevDetail = {
   archivedAt: Date | string | null;
   id: number;
@@ -100,9 +102,17 @@ type CapdevDetail = {
 };
 
 const EMPTY_FORM: RequestForm = { setting: 'internal', description: '', eventDate: '', requestedBudget: '', additionalInfo: {} };
+const EMPTY_FILTERS: RequestFilters = { setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' };
 const formatDate = (value: Date | string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
 const formatCurrency = (value: string | number) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
 const getAttachments = (value: unknown): StatusAttachment[] => Array.isArray(value) ? value.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file) : [];
+const isSavedRequestFilters = (value: unknown): value is RequestFilters => {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<RequestFilters>;
+  return ['setting', 'min', 'max', 'dateFrom', 'dateTo', 'sort'].every((key) => typeof candidate[key as keyof RequestFilters] === 'string') &&
+    ['all', 'internal', 'external'].includes(candidate.setting || '') &&
+    ['newest', 'oldest'].includes(candidate.sort || '');
+};
 
 const disabledFieldSx = {
   '& .MuiOutlinedInput-root': {
@@ -146,7 +156,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [filters, setFilters] = useState({ setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' });
+  const [filters, setFilters] = useState<RequestFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState(filters);
   const [page, setPage] = useState(1);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -161,6 +171,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const [notificationFocus, setNotificationFocus] = useState<{ targetId: string; nonce: number } | null>(null);
   const capdevSectionRef = React.useRef<HTMLDivElement>(null);
   const activityDesignRef = React.useRef<HTMLDivElement>(null);
+  const filterAccountId = React.useRef<string | null>(null);
 
   const scrollToActivityDesign = () => {
     activityDesignRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -168,6 +179,31 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   };
 
   useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
+
+  const userId = session.data?.user.id;
+  useEffect(() => {
+    if (!userId || filterAccountId.current === userId) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      filterAccountId.current = userId;
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(filterPreferenceStorageKey('requests', userId)) || 'null');
+        const next = isSavedRequestFilters(saved) ? saved : EMPTY_FILTERS;
+        setFilters({ ...next });
+        setDraftFilters({ ...next });
+      } catch {
+        window.localStorage.removeItem(filterPreferenceStorageKey('requests', userId));
+        setFilters(EMPTY_FILTERS);
+        setDraftFilters(EMPTY_FILTERS);
+      }
+    });
+    return () => { active = false; };
+  }, [userId]);
+
+  const saveFiltersForAccount = (next: RequestFilters) => {
+    if (userId) window.localStorage.setItem(filterPreferenceStorageKey('requests', userId), JSON.stringify(next));
+  };
 
   useEffect(() => {
     const focusTarget = (targetId: string) => {
@@ -909,6 +945,20 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               />
             </Grid>
             <Grid size={12}>
+              <Stack direction="row" spacing={1}>
+                {(['today', 'month', 'year'] as const).map((preset) => (
+                  <Button
+                    key={preset}
+                    size="small"
+                    variant={getActiveDateFilterPreset(draftFilters.dateFrom, draftFilters.dateTo) === preset ? 'contained' : 'text'}
+                    onClick={() => setDraftFilters({ ...draftFilters, ...getDateFilterPresetRange(preset) })}
+                  >
+                    {preset === 'today' ? 'Today' : preset === 'month' ? 'This month' : 'This year'}
+                  </Button>
+                ))}
+              </Stack>
+            </Grid>
+            <Grid size={12}>
               <TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}>
                 <MenuItem value="newest">Newest to oldest</MenuItem>
                 <MenuItem value="oldest">Oldest to newest</MenuItem>
@@ -920,7 +970,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           <Button onClick={() => setDraftFilters({ setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' })}>
             Reset
           </Button>
-          <Button variant="contained" onClick={() => { setFilters(draftFilters); resetPage(); setFiltersOpen(false); }}>
+          <Button variant="contained" onClick={() => { const next = { ...draftFilters }; setFilters(next); saveFiltersForAccount(next); resetPage(); setFiltersOpen(false); }}>
             Apply Filters
           </Button>
         </DialogActions>

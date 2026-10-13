@@ -377,6 +377,16 @@ export async function getCurrentUserAccess() {
   return access ? { success: true as const, ...access } : { success: false as const, error: 'You must be signed in.' };
 }
 
+export async function getRootDriveFolderLink() {
+  const access = await getCurrentAccess();
+  if (!access || access.role !== 'admin') return unauthorized;
+  const folderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID?.trim();
+  if (!folderId || !/^[A-Za-z0-9_-]+$/.test(folderId)) {
+    return { success: false as const, error: 'The root Google Drive folder is not configured.' };
+  }
+  return { success: true as const, url: `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}` };
+}
+
 export async function getMaintenanceMode() {
   try {
     return { success: true as const, enabled: await readMaintenanceMode() };
@@ -1230,6 +1240,7 @@ export async function getAnalyticsData() {
           denied: false,
           stopped: event.stopped,
           resumed: event.resumed,
+          reopened: false,
           deductedAmount: event.subtracts ? event.amount : null,
         })),
         ...resolutionEvents.map((event) => {
@@ -1244,6 +1255,7 @@ export async function getAnalyticsData() {
             denied: details.status === 'denied',
             stopped: false,
             resumed: false,
+            reopened: details.status === 'in_progress' && details.reopened === true,
             deductedAmount: null,
           };
         }),
@@ -1537,8 +1549,6 @@ export async function createCapdev(data: CapdevInput) {
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const aipCode = data.aipCode.trim();
-    const [existing] = await db.select({ id: capdevs.id }).from(capdevs).where(eq(capdevs.aipCode, aipCode)).limit(1);
-    if (existing) return { success: false, error: `A CapDev project with AIP Code ${aipCode} already exists.` };
     const created = await withTransaction(async tx => {
       const [created] = await tx.insert(capdevs).values({ ...data, aipCode, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', updatedById: access.userId, initialBudget: data.budget }).returning();
       await insertNotificationEvent(tx, {
@@ -1556,10 +1566,75 @@ export async function createCapdev(data: CapdevInput) {
     return { success: true, capdev: created };
   } catch (error) {
     console.error('Failed to create CapDev project:', error);
-    if (error instanceof Error && error.message.includes('capdevs_aip_code_unique')) {
-      return { success: false, error: `A CapDev project with AIP Code ${data.aipCode.trim()} already exists.` };
-    }
     return { success: false, error: 'Database insert failed' };
+  }
+}
+
+export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate: string }) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    if (!Array.isArray(input.capdevIds) || input.capdevIds.length === 0 || input.capdevIds.length > 500 ||
+      input.capdevIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+      return { success: false, error: 'Select at least one valid CapDev project.' };
+    }
+    const sourceIds = Array.from(new Set(input.capdevIds));
+    if (sourceIds.length !== input.capdevIds.length) return { success: false, error: 'Duplicate project selections are not allowed.' };
+    const createdAt = manilaDateBoundary(input.targetDate);
+    const targetYear = Number(input.targetDate.slice(0, 4));
+    if (!Number.isInteger(targetYear) || targetYear < 2000 || targetYear > 2100) {
+      return { success: false, error: 'Choose a valid target date.' };
+    }
+
+    const created = await withTransaction(async (tx) => {
+      const sources = await tx.select().from(capdevs)
+        .where(and(inArray(capdevs.id, sourceIds), isNull(capdevs.archivedAt)))
+        .orderBy(asc(capdevs.id)).for('update');
+      if (sources.length !== sourceIds.length) throw new Error('One or more selected CapDev projects are unavailable or archived.');
+
+      const values = sources.map((source) => ({
+        aipCode: source.aipCode,
+        description: source.description,
+        initialBudget: source.initialBudget,
+        budget: source.initialBudget,
+        department: source.department,
+        additionalInfo: Object.fromEntries(Object.entries((source.additionalInfo || {}) as Record<string, unknown>).map(([key, value]) => [
+          key,
+          Array.isArray(value) ? value.filter((item) => !isPendingAttachment(item)) : value,
+        ])),
+        updatedById: access.userId,
+        createdAt,
+        updatedAt: new Date(),
+      }));
+      const duplicates = await tx.insert(capdevs).values(values).returning();
+      for (const duplicate of duplicates) {
+        await insertNotificationEvent(tx, {
+          actorId: access.userId,
+          capdevId: duplicate.id,
+          title: `New CapDev Project: ${duplicate.aipCode}`,
+          message: `Duplicated for ${duplicate.department} with balance ₱${Number(duplicate.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+          link: `/portal#capdev-record-${duplicate.id}`,
+          type: 'capdev_created',
+        });
+      }
+      return duplicates;
+    });
+
+    for (const duplicate of created) {
+      await writeAuditLog(access, {
+        action: 'created', entityType: 'capdev', entityId: duplicate.id, entityLabel: duplicate.aipCode,
+        details: { department: duplicate.department, initialBudget: duplicate.initialBudget, duplicated: true, targetDate: input.targetDate },
+      });
+    }
+    scheduleNotificationEmails();
+    return { success: true, created: created.map((record) => ({ id: record.id, aipCode: record.aipCode })) };
+  } catch (error) {
+    console.error('Failed to duplicate CapDev projects:', error);
+    const message = error instanceof Error ? error.message : '';
+    if (message.includes('unavailable') || message.includes('archived')) {
+      return { success: false, error: message };
+    }
+    return { success: false, error: 'Unable to duplicate the selected CapDev projects.' };
   }
 }
 
@@ -2869,6 +2944,57 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
   }
 }
 
+export async function reopenRequest(requestId: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !canManageRequests(access)) return unauthorized;
+    const req = await getWritableRequest(access, requestId);
+    if (!req) return unauthorized;
+
+    const previousStatus = await withTransaction(async (tx) => {
+      const [current] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
+      if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error(unauthorized.error);
+      const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
+      if (current.status !== 'completed' && current.status !== 'denied') throw new Error('Only a completed or denied request can be reopened.');
+
+      await tx.update(requests)
+        .set({ status: 'in_progress', updatedById: access.userId, updatedAt: new Date() })
+        .where(eq(requests.id, requestId));
+      await insertNotificationEvent(tx, {
+        actorId: access.userId,
+        userId: current.userId || null,
+        capdevId: current.capdevId,
+        requestId,
+        title: `${current.requestorName || 'Requestor'} · Request Reopened`,
+        message: `The ${current.status} request for ${current.requestorName || 'Requestor'} was returned to In Progress.`,
+        link: `/portal/capdev/${current.capdevId}/requests/${requestId}/status#request-status-start`,
+        type: 'status_update',
+      });
+      return current.status;
+    });
+
+    await writeAuditLog(access, {
+      action: 'status_changed',
+      entityType: 'request',
+      entityId: requestId,
+      entityLabel: `Request #${requestId}`,
+      details: {
+        capdevId: req.capdevId,
+        requestorName: req.requestorName,
+        previousStatus,
+        status: 'in_progress',
+        reopened: true,
+      },
+    });
+    scheduleNotificationEmails();
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to reopen request:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to reopen the request.' };
+  }
+}
+
 export async function stopRequestProgress(data: StopRequestInput) {
   try {
     const access = await getCurrentAccess();
@@ -2926,7 +3052,7 @@ export async function resumeRequestProgress(requestId: number) {
       if (!request?.isStopped || !request.activeStopperId) throw new Error('This request is not stopped.');
       const [activeStopper] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, request.activeStopperId));
       if (activeStopper?.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
-      const [resumed] = await tx.insert(requestStatusUpdates).values({ requestId, userId: access.userId, authorName: session?.user?.name || session?.user?.email || 'Staff member', statusUpdate: 'Progress resumed.', isResume: true, stopperId: request.activeStopperId }).returning({ id: requestStatusUpdates.id });
+      await tx.insert(requestStatusUpdates).values({ requestId, userId: access.userId, authorName: session?.user?.name || session?.user?.email || 'Staff member', statusUpdate: 'Progress resumed.', isResume: true, stopperId: request.activeStopperId });
       await tx.update(requests).set({ isStopped: false, activeStopperId: null, updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, requestId));
       await insertNotificationEvent(tx, {
         actorId: access.userId,
@@ -2935,7 +3061,7 @@ export async function resumeRequestProgress(requestId: number) {
         requestId,
         title: `${request.requestorName || 'Requestor'} · Request Resumed`,
         message: `${session?.user?.name || session?.user?.email || 'Staff'} resumed progress.`,
-        link: `/portal/capdev/${request.capdevId}/requests/${requestId}/status#request-status-update-${resumed.id}`,
+        link: `/portal/capdev/${request.capdevId}/requests/${requestId}/status#request-status-update-${request.activeStopperId}`,
         type: 'status_update',
       });
       return request;

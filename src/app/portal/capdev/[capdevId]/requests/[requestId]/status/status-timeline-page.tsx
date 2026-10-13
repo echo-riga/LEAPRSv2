@@ -60,6 +60,7 @@ import {
   getRequestEvaluationSummary,
   getRequestStatusUpdates,
   getStatusUpdateFieldDefinitions,
+  reopenRequest,
   resumeRequestProgress,
   stopRequestProgress,
   updateRequestStatus,
@@ -173,6 +174,17 @@ const getAttachments = (value: unknown): StatusAttachment[] =>
           typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file
       )
     : [];
+
+function resolveTimelineTargetId(targetId: string, updates: StatusUpdate[]) {
+  const prefix = 'request-status-update-';
+  if (!targetId.startsWith(prefix)) return targetId;
+
+  const updateId = Number(targetId.slice(prefix.length));
+  const update = updates.find((item) => item.id === updateId);
+  return update?.isResume && update.stopperId
+    ? `${prefix}${update.stopperId}`
+    : targetId;
+}
 
 function ConnectorDown({ toResolution = false }: { toResolution?: boolean }) {
   const height = toResolution ? 88 : 40;
@@ -322,6 +334,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [concludeDialogOpen, setConcludeDialogOpen] = useState(false);
   const [concludeAction, setConcludeAction] = useState<'completed' | 'denied' | null>(null);
   const [concluding, setConcluding] = useState(false);
+  const [reopenDialogOpen, setReopenDialogOpen] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [reopenError, setReopenError] = useState('');
   const [formsModalOpen, setFormsModalOpen] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [summaryModalOpen, setSummaryModalOpen] = useState(false);
@@ -350,7 +365,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     setReminderRequested(false);
     const latestUpdateId = request?.inactivity?.latestUpdateId;
     if (latestUpdateId && updates.some((update) => update.id === latestUpdateId)) {
-      setTimelineFocus({ targetId: 'request-status-update-' + latestUpdateId, nonce: Date.now() });
+      setTimelineFocus({
+        targetId: resolveTimelineTargetId('request-status-update-' + latestUpdateId, updates),
+        nonce: Date.now(),
+      });
     }
     const url = new URL(window.location.href);
     url.searchParams.delete('reminder');
@@ -365,7 +383,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         targetId !== 'request-status-resolution' &&
         !targetId.startsWith('request-status-update-')
       ) return;
-      setTimelineFocus({ targetId, nonce: Date.now() });
+      setTimelineFocus({ targetId: resolveTimelineTargetId(targetId, updates), nonce: Date.now() });
     };
 
     const handleTimelineFocus = (event: Event) => {
@@ -394,7 +412,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       window.removeEventListener('leaprs:notification-focus', handleNotificationFocus);
       window.removeEventListener('hashchange', focusFromHash);
     };
-  }, [requestId]);
+  }, [requestId, updates]);
 
   useEffect(() => {
     if (!timelineFocus || loading || reminderRequested) return;
@@ -518,8 +536,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const canConcludeRequest =
     !readOnly && (role === 'admin' || role === 'employee' || role === 'employee-department') &&
     !(request?.isStopped && role === 'employee');
+  const canReopenRequest = !readOnly && (role === 'admin' || role === 'employee' || role === 'employee-department');
   const visibleUpdates = useMemo(
-    () => updates.filter((update) => !update.isStopperResponse),
+    () => updates.filter((update) => !update.isStopperResponse && !update.isResume),
     [updates]
   );
 
@@ -854,6 +873,20 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     setConcluding(false);
   };
 
+  const handleReopenRequest = async () => {
+    if (!canReopenRequest) return;
+    setReopening(true);
+    setReopenError('');
+    const result = await reopenRequest(requestId);
+    if (result.success) {
+      setReopenDialogOpen(false);
+      await loadData();
+    } else {
+      setReopenError(result.error || 'Unable to reopen the request.');
+    }
+    setReopening(false);
+  };
+
   const renderDynamicInput = (field: DynamicField) => {
     const storageKey = dynamicFieldStorageKey(field);
     const fieldValue = getDynamicFieldValue(form.additionalInfo, field);
@@ -989,7 +1022,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     );
   }
 
-  const allCardsCount = visibleUpdates.length + 1;
+  const hasTimelineEndCard = isConcluded || canConcludeRequest;
+  const allCardsCount = visibleUpdates.length + (hasTimelineEndCard ? 1 : 0);
   const viewingFields = orderedStatusValues(viewingUpdate?.additionalInfo || {}, definitions);
   const viewingAttachmentIds = new Set(viewingFields.flatMap(([, value]) => getAttachments(value).map((file) => file.id)));
   const viewingStandaloneFiles = getAttachments(viewingUpdate?.files).filter((file) => !viewingAttachmentIds.has(file.id));
@@ -1076,11 +1110,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             const stopperResponses = isStopper
               ? updates.filter((item) => item.isStopperResponse && item.stopperId === update.id)
               : [];
+            const stopperResumes = isStopper
+              ? updates.filter((item) => item.isResume && item.stopperId === update.id)
+              : [];
             const isInactive = !archived && Boolean(request.inactivity && (
               request.inactivity.latestUpdateId === update.id ||
-              stopperResponses.some((response) => response.id === request.inactivity?.latestUpdateId)
+              stopperResponses.some((response) => response.id === request.inactivity?.latestUpdateId) ||
+              stopperResumes.some((resume) => resume.id === request.inactivity?.latestUpdateId)
             ));
-            const wasResumed = isStopper && updates.some((item) => item.isResume && item.stopperId === update.id);
+            const wasResumed = stopperResumes.length > 0;
             const isActiveStopper = isStopper && request.isStopped && request.activeStopperId === update.id;
 
             // Extra dynamic fields (beyond statusUpdate, remarks, and standard attachments) in additionalInfo
@@ -1712,6 +1750,27 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           </Fab>
         )}
 
+      {isConcluded && canReopenRequest && (
+        <Fab
+          variant="extended"
+          color="primary"
+          onClick={() => { setReopenError(''); setReopenDialogOpen(true); }}
+          disabled={reopening}
+          sx={{
+            position: 'fixed',
+            right: 24,
+            bottom: 24,
+            zIndex: 1100,
+            px: 2.5,
+            fontWeight: 700,
+            boxShadow: '0 4px 14px rgba(46, 125, 50, 0.4)',
+          }}
+        >
+          <ResumeIcon sx={{ mr: 1 }} />
+          Reopen Request
+        </Fab>
+      )}
+
       {/* Add Status Update Dialog */}
       <Dialog open={Boolean(viewingUpdate)} onClose={() => setViewingUpdate(null)} fullWidth maxWidth="md">
         <DialogTitle sx={{ fontWeight: 800 }}>Progress Update</DialogTitle>
@@ -2122,6 +2181,36 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               : concludeAction === 'completed'
               ? 'Confirm Complete'
               : 'Confirm Deny'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={reopenDialogOpen}
+        onClose={() => { if (!reopening) setReopenDialogOpen(false); }}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ResumeIcon color="primary" />
+          Reopen Request
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            {reopenError && <Alert severity="error">{reopenError}</Alert>}
+            <Typography>
+              Return {request.requestorName || 'this request'} to In Progress?
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Timeline history, budget deductions, and existing evaluation forms will be kept.
+              {request.isStopped ? ' The request will remain stopped until progress is resumed.' : ''}
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button color="inherit" onClick={() => setReopenDialogOpen(false)} disabled={reopening}>Cancel</Button>
+          <Button variant="contained" onClick={() => void handleReopenRequest()} disabled={reopening} startIcon={<ResumeIcon />}>
+            {reopening ? 'Reopening...' : 'Reopen Request'}
           </Button>
         </DialogActions>
       </Dialog>

@@ -3,9 +3,9 @@
 import React, { Suspense, useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { AppBar, Box, Chip, IconButton, Stack, Toolbar, Tooltip, Typography } from '@mui/material';
-import { ArrowBack as ArrowBackIcon, ExitToApp as ExitToAppIcon, Fullscreen as FullscreenIcon, FullscreenExit as FullscreenExitIcon, Settings as SettingsIcon } from '@mui/icons-material';
+import { ArrowBack as ArrowBackIcon, ExitToApp as ExitToAppIcon, FolderOpenOutlined as DriveFolderIcon, Fullscreen as FullscreenIcon, FullscreenExit as FullscreenExitIcon, Settings as SettingsIcon } from '@mui/icons-material';
 import { authClient } from '@/lib/auth/client';
-import { getCurrentUserAccess, type AppRole } from '@/app/actions';
+import { getCurrentUserAccess, getRootDriveFolderLink, type AppRole } from '@/app/actions';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import NotificationsMenu from '@/components/NotificationsMenu';
 import PortalChatbot from '@/components/PortalChatbot';
@@ -29,6 +29,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [role, setRole] = useState<AppRole | null>(null);
   const [department, setDepartment] = useState<string | null>(null);
+  const [rootDriveUrl, setRootDriveUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const interval = window.setInterval(() => setGreeting(getGreeting()), 60_000);
@@ -45,6 +46,12 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
       if (access.success) {
         setRole(access.role);
         setDepartment(access.department || null);
+        if (access.role === 'admin') {
+          const drive = await getRootDriveFolderLink();
+          setRootDriveUrl(drive.success ? drive.url : null);
+        } else {
+          setRootDriveUrl(null);
+        }
         return;
       }
       await authClient.signOut();
@@ -139,6 +146,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
           <Stack direction="row" spacing={0.75} sx={{ gridColumn: { xs: 2, md: 3 }, gridRow: 1, justifySelf: 'end', flexShrink: 0, alignItems: 'center' }}>
             {!isDashboard && <Tooltip title="Back"><IconButton color="primary" onClick={() => router.push(backHref)} aria-label="Back"><ArrowBackIcon /></IconButton></Tooltip>}
             <PortalChatbot userRole={role} />
+            {rootDriveUrl && <Tooltip title="Open Drive folder"><IconButton color="primary" component="a" href={rootDriveUrl} target="_blank" rel="noopener noreferrer" aria-label="Open Drive folder"><DriveFolderIcon /></IconButton></Tooltip>}
             <NotificationsMenu />
             {role && role !== 'employee' && role !== 'employee-department' && !isSettingsPage && <Tooltip title="Settings"><IconButton color="primary" onClick={() => router.push(settingsHref)} aria-label="Settings"><SettingsIcon /></IconButton></Tooltip>}
             <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}><IconButton color="primary" onClick={handleFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>{isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}</IconButton></Tooltip>

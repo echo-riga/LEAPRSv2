@@ -44,3 +44,12 @@ test('stop and resume events change the historical stopped count', () => {
   assert.equal(summarizeAnalytics(active, { ...filters, snapshotDate: '2026-02-28' }, '2026-10-04').stoppedCount, 1);
   assert.equal(summarizeAnalytics(active, filters, '2026-10-04').inProgressCount, 1);
 });
+
+test('reopening clears a prior resolution without erasing its history', () => {
+  const reopened = { ...data, requests: [{ ...data.requests[0], status: 'in_progress' }], requestEvents: [
+    { requestId: 10, createdAt: '2026-03-10T00:00:00+08:00', complete: true, denied: false, stopped: false, resumed: false, reopened: false, deductedAmount: null },
+    { requestId: 10, createdAt: '2026-03-20T00:00:00+08:00', complete: false, denied: false, stopped: false, resumed: false, reopened: true, deductedAmount: null },
+  ] };
+  assert.equal(summarizeAnalytics(reopened, { ...filters, snapshotDate: '2026-03-15' }, '2026-10-04').inProgressCount, 0);
+  assert.equal(summarizeAnalytics(reopened, filters, '2026-10-04').inProgressCount, 1);
+});
