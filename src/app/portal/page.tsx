@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Add as AddIcon, ChevronRight as ChevronRightIcon, ContentCopy as DuplicateIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
+import { Add as AddIcon, ChevronRight as ChevronRightIcon, FilterList as FilterIcon, FolderOpen as CapdevIcon, LibraryAddOutlined as DuplicateIcon, Search as SearchIcon, VisibilityOutlined as VisibilityIcon } from '@mui/icons-material';
 import { Alert, Autocomplete, Box, Button, Card, CardContent, Checkbox, Container, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, FormControlLabel, Grid, IconButton, InputAdornment, MenuItem, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import ArchiveActions from '@/components/ArchiveActions';
 import ReadOnlyDynamicField from '@/components/ReadOnlyDynamicField';
@@ -481,8 +481,8 @@ export default function PortalPage() {
           <Stack direction="row" spacing={2} sx={{ width: { xs: '100%', sm: 'auto' }, alignItems: 'center' }}>
             <TextField size="small" placeholder="Search projects..." value={search} onChange={(event) => { setSearch(event.target.value); resetPage(); }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> } }} sx={{ bgcolor: '#ffffff', borderRadius: 2, minWidth: { sm: 260 }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} />
             <Button size="small" sx={{ height: 40 }} variant="outlined" startIcon={<FilterIcon />} onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}>Filter</Button>
-            {isAdmin && !showArchived && <Tooltip title="Duplicate CapDev projects"><IconButton color="primary" onClick={() => void openDuplicate()} aria-label="Duplicate CapDev projects" sx={{ width: 40, height: 40, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}><DuplicateIcon /></IconButton></Tooltip>}
             <Button size="small" sx={{ height: 40, whiteSpace: 'nowrap' }} variant="outlined" onClick={() => { setShowArchived(!showArchived); setNotificationFocus(null); resetPage(); }}>{showArchived ? 'See Active Projects' : 'See Archives'}</Button>
+            {isAdmin && !showArchived && <Tooltip title="Duplicate CapDev projects"><IconButton color="primary" onClick={() => void openDuplicate()} aria-label="Duplicate CapDev projects" sx={{ width: 40, height: 40, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}><DuplicateIcon /></IconButton></Tooltip>}
         </Stack>
       </Stack>
 
