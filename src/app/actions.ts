@@ -41,6 +41,7 @@ import { getRequestInactivitySummaries, readInactivityDays, syncRequestReminders
 import { DEFAULT_INACTIVITY_DAYS, INACTIVITY_SETTING_KEY, inactivityMessage, validInactivityDays } from '@/lib/request-inactivity';
 import { renderRequestReportPdf } from '@/lib/request-report-pdf';
 import { getDynamicFieldValue, getInvalidComboboxFields, hasComboboxOptions } from '@/lib/dynamic-fields';
+import { getDynamicFieldAttachmentIds, hasStoredDynamicFieldValue, removeDynamicFieldValue } from '@/lib/dynamic-field-deletion';
 import { PORTAL_CHATBOT_GUIDE } from '@/lib/portal-chatbot-guide';
 import {
   findCapdevByAipCodeService,
@@ -1865,20 +1866,27 @@ export async function deleteCapdevFieldDefinition(id: number, updatedById: strin
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
-    const [field] = await db.select({ name: capdevFieldDefinitions.name }).from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.id, id)).limit(1);
-    await db
-      .update(capdevFieldDefinitions)
-      .set({
-        isActive: false,
-        updatedById: updatedById,
-        updatedAt: new Date(),
-      })
-      .where(eq(capdevFieldDefinitions.id, id));
-    await writeAuditLog(access, { action: 'deleted', entityType: 'capdev_field', entityId: id, entityLabel: field?.name || `CapDev field #${id}` });
+    const result = await withTransaction(async (tx) => {
+      const [field] = await tx.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.id, id)).for('update');
+      if (!field) throw new Error('Form field not found.');
+      const records = await tx.select({ id: capdevs.id, additionalInfo: capdevs.additionalInfo }).from(capdevs).for('update');
+      const rootFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
+      const attachments = records.flatMap((record) => getDynamicFieldAttachmentIds((record.additionalInfo || {}) as Record<string, unknown>, field));
+      if (attachments.length && !rootFolderId) throw new Error('Google Drive storage is not configured.');
+      await deleteManagedDriveAttachments(attachments.map((fileId) => ({ fileId, parentFolderId: rootFolderId! })));
+      for (const record of records) {
+        const additionalInfo = (record.additionalInfo || {}) as Record<string, unknown>;
+        if (!hasStoredDynamicFieldValue(additionalInfo, field)) continue;
+        await tx.update(capdevs).set({ additionalInfo: removeDynamicFieldValue(additionalInfo, field), updatedAt: new Date() }).where(eq(capdevs.id, record.id));
+      }
+      await tx.update(capdevFieldDefinitions).set({ isActive: false, updatedById, updatedAt: new Date() }).where(eq(capdevFieldDefinitions.id, id));
+      return { field, attachmentCount: new Set(attachments).size };
+    });
+    await writeAuditLog(access, { action: 'deleted', entityType: 'capdev_field', entityId: id, entityLabel: result.field.name, details: { deletedAttachments: result.attachmentCount } });
     return { success: true };
   } catch (error) {
     console.error('Failed to delete CapDev field:', error);
-    return { success: false, error: 'Database delete failed' };
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to delete the field.' };
   }
 }
 
@@ -2010,16 +2018,35 @@ export async function deleteRequestFieldDefinition(id: number, setting: RequestS
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
     if (!isRequestSetting(setting)) return { success: false, error: 'Invalid request setting.' };
-    const [field] = await db.select({ name: requestFieldDefinitions.name }).from(requestFieldDefinitions).where(and(eq(requestFieldDefinitions.id, id), eq(requestFieldDefinitions.setting, setting))).limit(1);
-    await db
-      .update(requestFieldDefinitions)
-      .set({ isActive: false, updatedById, updatedAt: new Date() })
-      .where(and(eq(requestFieldDefinitions.id, id), eq(requestFieldDefinitions.setting, setting)));
-    await writeAuditLog(access, { action: 'deleted', entityType: 'request_field', entityId: id, entityLabel: field?.name || `Request field #${id}`, details: { setting } });
+    const result = await withTransaction(async (tx) => {
+      const [field] = await tx.select().from(requestFieldDefinitions).where(and(eq(requestFieldDefinitions.id, id), eq(requestFieldDefinitions.setting, setting))).for('update');
+      if (!field) throw new Error('Form field not found.');
+      const records = await tx.select({ id: requests.id, additionalInfo: requests.additionalInfo }).from(requests).where(eq(requests.setting, setting)).for('update');
+      const folders = records.length
+        ? await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, records.map((record) => record.id)))
+        : [];
+      const folderByRequest = new Map(folders.map((folder) => [folder.requestId, folder]));
+      const attachments: Array<{ fileId: string; parentFolderId: string }> = [];
+      for (const record of records) {
+        const fileIds = getDynamicFieldAttachmentIds((record.additionalInfo || {}) as Record<string, unknown>, field);
+        const folder = folderByRequest.get(record.id);
+        if (fileIds.length && (!folder || folder.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID)) throw new Error(`The attachment folder for Request #${record.id} could not be verified.`);
+        attachments.push(...fileIds.map((fileId) => ({ fileId, parentFolderId: folder!.folderId })));
+      }
+      await deleteManagedDriveAttachments(attachments);
+      for (const record of records) {
+        const additionalInfo = (record.additionalInfo || {}) as Record<string, unknown>;
+        if (!hasStoredDynamicFieldValue(additionalInfo, field)) continue;
+        await tx.update(requests).set({ additionalInfo: removeDynamicFieldValue(additionalInfo, field), updatedAt: new Date() }).where(eq(requests.id, record.id));
+      }
+      await tx.update(requestFieldDefinitions).set({ isActive: false, updatedById, updatedAt: new Date() }).where(and(eq(requestFieldDefinitions.id, id), eq(requestFieldDefinitions.setting, setting)));
+      return { field, attachmentCount: new Set(attachments.map((attachment) => attachment.fileId)).size };
+    });
+    await writeAuditLog(access, { action: 'deleted', entityType: 'request_field', entityId: id, entityLabel: result.field.name, details: { setting, deletedAttachments: result.attachmentCount } });
     return { success: true };
   } catch (error) {
     console.error('Failed to delete Request field:', error);
-    return { success: false, error: 'Database delete failed' };
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to delete the field.' };
   }
 }
 
@@ -2191,20 +2218,40 @@ export async function deleteStatusUpdateFieldDefinition(id: number, updatedById:
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
-    const [field] = await db.select({ name: statusUpdateFieldDefinitions.name }).from(statusUpdateFieldDefinitions).where(eq(statusUpdateFieldDefinitions.id, id)).limit(1);
-    await db
-      .update(statusUpdateFieldDefinitions)
-      .set({
-        isActive: false,
-        updatedById: updatedById,
-        updatedAt: new Date(),
-      })
-      .where(eq(statusUpdateFieldDefinitions.id, id));
-    await writeAuditLog(access, { action: 'deleted', entityType: 'status_update_field', entityId: id, entityLabel: field?.name || `Status Update field #${id}` });
+    const result = await withTransaction(async (tx) => {
+      const [field] = await tx.select().from(statusUpdateFieldDefinitions).where(eq(statusUpdateFieldDefinitions.id, id)).for('update');
+      if (!field) throw new Error('Form field not found.');
+      const records = await tx.select({ id: requestStatusUpdates.id, requestId: requestStatusUpdates.requestId, files: requestStatusUpdates.files, additionalInfo: requestStatusUpdates.additionalInfo }).from(requestStatusUpdates).for('update');
+      const requestIds = [...new Set(records.map((record) => record.requestId))];
+      const folders = requestIds.length ? await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, requestIds)) : [];
+      const folderByRequest = new Map(folders.map((folder) => [folder.requestId, folder]));
+      const attachments: Array<{ fileId: string; parentFolderId: string }> = [];
+      const attachmentIdsByRecord = new Map<number, Set<string>>();
+      for (const record of records) {
+        const fileIds = getDynamicFieldAttachmentIds((record.additionalInfo || {}) as Record<string, unknown>, field);
+        attachmentIdsByRecord.set(record.id, new Set(fileIds));
+        const folder = folderByRequest.get(record.requestId);
+        if (fileIds.length && (!folder || folder.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID)) throw new Error(`The attachment folder for Request #${record.requestId} could not be verified.`);
+        attachments.push(...fileIds.map((fileId) => ({ fileId, parentFolderId: folder!.folderId })));
+      }
+      await deleteManagedDriveAttachments(attachments);
+      for (const record of records) {
+        const additionalInfo = (record.additionalInfo || {}) as Record<string, unknown>;
+        if (!hasStoredDynamicFieldValue(additionalInfo, field)) continue;
+        const removedIds = attachmentIdsByRecord.get(record.id) || new Set<string>();
+        const files = Array.isArray(record.files)
+          ? (record.files as StatusAttachment[]).filter((attachment) => !removedIds.has(attachment.id))
+          : [];
+        await tx.update(requestStatusUpdates).set({ additionalInfo: removeDynamicFieldValue(additionalInfo, field), files }).where(eq(requestStatusUpdates.id, record.id));
+      }
+      await tx.update(statusUpdateFieldDefinitions).set({ isActive: false, updatedById, updatedAt: new Date() }).where(eq(statusUpdateFieldDefinitions.id, id));
+      return { field, attachmentCount: new Set(attachments.map((attachment) => attachment.fileId)).size };
+    });
+    await writeAuditLog(access, { action: 'deleted', entityType: 'status_update_field', entityId: id, entityLabel: result.field.name, details: { deletedAttachments: result.attachmentCount } });
     return { success: true };
   } catch (error) {
     console.error('Failed to delete Status Update field:', error);
-    return { success: false, error: 'Database delete failed' };
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to delete the field.' };
   }
 }
 
@@ -2545,6 +2592,47 @@ async function verifyManagedDriveFolder(accessToken: string, folderId: string, r
   const folder = await response.json() as { mimeType?: string; parents?: string[]; appProperties?: Record<string, string>; trashed?: boolean };
   if (folder.trashed || folder.mimeType !== 'application/vnd.google-apps.folder' || !folder.parents?.includes(rootFolderId) || folder.appProperties?.leaprsManaged !== 'true') {
     throw new Error('Attachment folder ownership could not be verified.');
+  }
+}
+
+type ManagedDriveAttachment = { fileId: string; parentFolderId: string };
+
+async function deleteManagedDriveAttachments(attachments: ManagedDriveAttachment[]) {
+  if (!attachments.length) return;
+  const rootFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
+  if (!rootFolderId) throw new Error('Google Drive storage is not configured.');
+  const parentsByFile = new Map<string, Set<string>>();
+  for (const attachment of attachments) {
+    const expectedParents = parentsByFile.get(attachment.fileId) || new Set<string>();
+    expectedParents.add(attachment.parentFolderId);
+    parentsByFile.set(attachment.fileId, expectedParents);
+  }
+
+  const accessToken = await getGoogleDriveAccessToken();
+  const managedFolders = [...new Set(attachments.map((attachment) => attachment.parentFolderId).filter((folderId) => folderId !== rootFolderId))];
+  for (const folderId of managedFolders) await verifyManagedDriveFolder(accessToken, folderId, rootFolderId);
+
+  // Verify every database reference before deleting any file. This prevents a
+  // malformed attachment ID from deleting a Drive file outside LEAPRS storage.
+  const existingFiles: string[] = [];
+  for (const [fileId, expectedParents] of parentsByFile) {
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,parents,trashed`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (response.status === 404) continue;
+    if (!response.ok) throw new Error('Unable to verify a Google Drive attachment.');
+    const file = await response.json() as { parents?: string[]; trashed?: boolean };
+    if (file.trashed) continue;
+    if (!file.parents?.some((parent) => expectedParents.has(parent))) throw new Error('A Google Drive attachment is outside its managed LEAPRS folder.');
+    existingFiles.push(fileId);
+  }
+
+  for (const fileId of existingFiles) {
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok && response.status !== 404) throw new Error('Unable to delete a Google Drive attachment.');
   }
 }
 

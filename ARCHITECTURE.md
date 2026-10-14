@@ -70,6 +70,8 @@ The schema also retains a connection-check table and legacy columns, including s
 
 Dynamic values use the canonical key `field:<definition id>` in `additional_info`. `getDynamicFieldValue` falls back to the old field label when a canonical key is absent. The current helper does not implement a general `field-<id>` fallback. Request form definitions include `setting` to separate In-House and External schemas. Request Title is persisted in `requests.description`, and Event Date in `requests.event_date`, as fixed fields for both settings. Migrations 0018 and 0019 promote matching legacy dynamic values before deactivating those definitions.
 
+Dynamic-field deletion retains the definition as an inactive identity tombstone, removes both its canonical key and legacy label from applicable records, and deletes completed file attachments after verifying their managed Drive parent. Status-field deletion also removes those attachment IDs from the denormalized status `files` list. Pending descriptors are removed with the field value, so the browser queue cancels them during reconciliation.
+
 Requests and timeline entries keep numeric IDs for joins/routes. Requestor name is a display identifier, not a uniqueness constraint. Budget columns use PostgreSQL numeric values with two decimal places.
 
 ## 4. Authentication, authorization, and validation

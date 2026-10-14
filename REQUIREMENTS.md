@@ -91,6 +91,7 @@ Despite its stored name `employee-department`, Employee (All Department Requests
 - Supported types include text with optional suggestions, suggestions-only combobox, number, date, file, and table. Legacy select fields remain supported.
 - Definitions control label, required/active state, options, order, width, and column position. Tables occupy a full row; an unpaired half-width field can occupy the left or right column.
 - Values use stable field identity, with a legacy label fallback. Renaming a field must not disconnect values saved under its stable identity.
+- Deleting a dynamic field permanently removes that field's saved values from existing records. For file fields, it also deletes the associated files from managed Google Drive storage; merely editing a field preserves its values and files.
 - Fixed fields remain usable in previews but cannot be deleted, reordered, or configured as dynamic fields. Title and required Event Date are fixed for both In-House and External request forms.
 - Add Field and edits stage changes. Save Configuration is the explicit persistence action; Cancel discards or restores the current draft.
 
