@@ -2,6 +2,7 @@
 
 import React from 'react';
 import {
+  AutoAwesome as AiIcon,
   BarChart as ChartIcon,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
@@ -30,18 +31,21 @@ type Props = {
   onRefresh: () => void;
 };
 
-function SummaryList({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) return null;
+function SummarySection({ title, items, emptyText }: { title: string; items: string[]; emptyText: string }) {
   return (
-    <Box>
-      <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 0.75 }}>{title}</Typography>
-      <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 2.5 }}>
-        {items.map((item, index) => (
-          <Typography component="li" variant="body2" key={`${title}-${index}`} sx={{ lineHeight: 1.5 }}>
-            {item}
-          </Typography>
-        ))}
-      </Stack>
+    <Box sx={{ p: 2, borderRadius: 2, bgcolor: '#f7faf7', minHeight: 132 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>{title}</Typography>
+      {items.length > 0 ? (
+        <Stack component="ul" spacing={0.75} sx={{ m: 0, pl: 2.25 }}>
+          {items.map((item, index) => (
+            <Typography component="li" variant="body2" key={`${title}-${index}`} sx={{ lineHeight: 1.5 }}>
+              {item}
+            </Typography>
+          ))}
+        </Stack>
+      ) : (
+        <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>{emptyText}</Typography>
+      )}
     </Box>
   );
 }
@@ -82,6 +86,33 @@ export default function EvaluationSummaryDialog({ open, loading, error, summary,
           <Stack spacing={2.5}>
             <Typography variant="h6" sx={{ fontWeight: 800 }}>{summary.formTitle}</Typography>
 
+            {summary.aiSummary && (
+              <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#ffffff' }}>
+                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 2 }}>
+                    <AiIcon color="primary" fontSize="small" />
+                    <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>AI Summary</Typography>
+                    <Chip label="Written feedback" size="small" variant="outlined" color="primary" sx={{ ml: 'auto', fontWeight: 700 }} />
+                  </Stack>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 1.5 }}>
+                    <SummarySection title="What participants liked" items={summary.aiSummary.highlights} emptyText="No specific highlights were provided." />
+                    <SummarySection title="Suggested improvements" items={summary.aiSummary.improvements} emptyText="No specific improvements were suggested." />
+                    <SummarySection title="Topics requested" items={summary.aiSummary.requestedTopics} emptyText="No specific future topics were requested." />
+                  </Box>
+                </CardContent>
+              </Card>
+            )}
+
+            {summary.aiError && (
+              <Card variant="outlined" sx={{ borderRadius: 2, borderColor: 'error.light', bgcolor: '#ffffff' }}>
+                <CardContent>
+                  <Typography sx={{ fontWeight: 800, mb: 0.5 }}>AI summary is unavailable</Typography>
+                  <Typography variant="body2" color="text.secondary">{summary.aiError} Refresh to try again. Rating results are still available below.</Typography>
+                </CardContent>
+              </Card>
+            )}
+
+            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Rating Results</Typography>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
               {summary.ratingQuestions.map((rating) => {
                 const largestCount = Math.max(1, ...rating.distribution);
@@ -109,21 +140,6 @@ export default function EvaluationSummaryDialog({ open, loading, error, summary,
               })}
             </Box>
 
-            {summary.aiSummary && (summary.aiSummary.strengths.length > 0 || summary.aiSummary.improvements.length > 0 || summary.aiSummary.recommendations.length > 0) && (
-              <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: '#ffffff' }}>
-                <CardContent>
-                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2.5 }}>
-                    <SummaryList title="Strengths" items={summary.aiSummary.strengths} />
-                    <SummaryList title="Improvements" items={summary.aiSummary.improvements} />
-                    <SummaryList title="Recommended Actions" items={summary.aiSummary.recommendations} />
-                  </Box>
-                </CardContent>
-              </Card>
-            )}
-
-            {summary.aiError && (
-              <Typography variant="body2" color="error.main" sx={{ fontWeight: 600 }}>{summary.aiError} Charts are still available.</Typography>
-            )}
           </Stack>
         ) : null}
       </DialogContent>

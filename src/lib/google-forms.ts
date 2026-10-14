@@ -42,9 +42,14 @@ type GoogleFormResponse = {
 };
 
 type AiSummary = {
-  strengths: string[];
+  highlights: string[];
   improvements: string[];
-  recommendations: string[];
+  requestedTopics: string[];
+};
+
+type WrittenResponseSummary = {
+  question: string;
+  responses: string[];
 };
 
 export type EvaluationSummary = {
@@ -63,6 +68,8 @@ export type GeneratedGoogleForm = {
   formId: string;
   responderUrl: string;
 };
+
+const CERTIFICATE_NAME_QUESTION = 'Name to appear in certificate (Firstname MI. Lastname)';
 
 const EVALUATION_SECTIONS: EvaluationSection[] = [
   {
@@ -105,10 +112,19 @@ const EVALUATION_SECTIONS: EvaluationSection[] = [
     title: 'Skills or Training Areas',
     questions: [
       { title: 'What topics or areas of personal and professional growth would you like to see included in future seminars to support you in your role as an admin?', kind: 'short', required: true },
-      { title: 'Name to appear in certificate (Firstname MI. Lastname)', kind: 'short', required: true },
+      { title: CERTIFICATE_NAME_QUESTION, kind: 'short', required: true },
     ],
   },
 ];
+
+function isCertificateNameQuestion(title: string) {
+  return title.trim().toLowerCase().startsWith('name to appear in certificate');
+}
+
+function isPlaceholderResponse(value: string) {
+  const normalized = value.trim().toLowerCase().replace(/[.!?]+$/g, '');
+  return /^(?:none|n\/?a|na|nil|nothing|no comment|not applicable|all|everything)$/i.test(normalized);
+}
 
 async function getGoogleAccessToken() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -263,9 +279,7 @@ async function getAllResponses(formId: string, accessToken: string) {
 
 async function summarizeWithGroq(input: {
   formTitle: string;
-  responseCount: number;
-  ratings: EvaluationSummary['ratingQuestions'];
-  comments: Array<{ question: string; responses: string[] }>;
+  writtenResponses: WrittenResponseSummary[];
 }): Promise<AiSummary> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('Groq is not configured.');
@@ -279,7 +293,7 @@ async function summarizeWithGroq(input: {
       reasoning_format: 'hidden',
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'user', content: `Identify written-response strengths, improvements, and recommended actions for government staff. Rating charts are already displayed separately: never repeat, summarize, mention, or infer a rating, score, average, count, or chart result. Base every item only on written comments. Do not infer identities, quote personal information, or overstate findings from a small sample. Return only JSON in this shape: {"strengths":["..."],"improvements":["..."],"recommendations":["..."]}. Use empty arrays when the written comments do not support a section.\n\n${JSON.stringify(input)}` },
+        { role: 'user', content: `Summarize seminar evaluation comments into three categories: what participants liked, specific improvements they suggested, and future topics they requested. Group repeated ideas into short, plain-language themes. Do not describe individual answers, mention respondents or question wording, recommend new actions, quote personal information, or invent details. Return at most four items per category and keep each item under 18 words. Return only JSON in this shape: {"highlights":["..."],"improvements":["..."],"requestedTopics":["..."]}. Use an empty array when comments do not support a category.\n\n${JSON.stringify(input)}` },
       ],
     }),
   });
@@ -293,13 +307,18 @@ async function summarizeWithGroq(input: {
   const text = payload.choices?.[0]?.message?.content;
   if (!text) throw new Error('Groq returned an empty summary.');
   const summary = JSON.parse(text) as Partial<AiSummary>;
-  if (!Array.isArray(summary.strengths) || !Array.isArray(summary.improvements) || !Array.isArray(summary.recommendations)) {
+  if (!Array.isArray(summary.highlights) || !Array.isArray(summary.improvements) || !Array.isArray(summary.requestedTopics)) {
     throw new Error('Groq returned an invalid summary.');
   }
+  const cleanItems = (items: unknown[]) => items
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 4);
   return {
-    strengths: summary.strengths.filter((item): item is string => typeof item === 'string'),
-    improvements: summary.improvements.filter((item): item is string => typeof item === 'string'),
-    recommendations: summary.recommendations.filter((item): item is string => typeof item === 'string'),
+    highlights: cleanItems(summary.highlights),
+    improvements: cleanItems(summary.improvements),
+    requestedTopics: cleanItems(summary.requestedTopics),
   };
 }
 
@@ -311,7 +330,7 @@ export async function getEvaluationSummary(formId: string): Promise<EvaluationSu
   ]);
 
   const ratingQuestions: EvaluationSummary['ratingQuestions'] = [];
-  const comments: Array<{ question: string; responses: string[] }> = [];
+  const writtenResponses: WrittenResponseSummary[] = [];
   for (const item of form.items || []) {
     const question = item.questionItem?.question;
     const questionId = question?.questionId;
@@ -331,20 +350,26 @@ export async function getEvaluationSummary(formId: string): Promise<EvaluationSu
           : 0,
         distribution,
       });
-    } else if (question.textQuestion && values.length > 0) {
-      comments.push({ question: item.title, responses: values.slice(0, 200).map((value) => value.slice(0, 500)) });
+    } else if (question.textQuestion && values.length > 0 && !isCertificateNameQuestion(item.title)) {
+      const substantiveResponses = values
+        .filter((value) => !isPlaceholderResponse(value))
+        .slice(0, 200)
+        .map((value) => value.slice(0, 500));
+      if (substantiveResponses.length > 0) {
+        writtenResponses.push({ question: item.title, responses: substantiveResponses });
+      }
     }
   }
 
-  let aiSummary: AiSummary | null = null;
+  let aiSummary: AiSummary | null = writtenResponses.length === 0
+    ? { highlights: [], improvements: [], requestedTopics: [] }
+    : null;
   let aiError: string | undefined;
-  if (responses.length > 0) {
+  if (writtenResponses.length > 0) {
     try {
       aiSummary = await summarizeWithGroq({
         formTitle: form.info?.title || 'Evaluation',
-        responseCount: responses.length,
-        ratings: ratingQuestions,
-        comments,
+        writtenResponses,
       });
     } catch (error) {
       aiError = error instanceof Error ? error.message : 'AI summary is temporarily unavailable.';

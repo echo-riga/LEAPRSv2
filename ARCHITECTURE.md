@@ -226,7 +226,7 @@ All roles can discover tools, while services determine which calls succeed. Clau
 - Portal help uses Gemini with grounded tool calls. Activity-design intake sends supported source content to Gemini, combines extraction with the active request schema, and returns an editable draft. Submission uses the shared request service only after user confirmation.
 - Portal AI drafts keep a local source File through review and enqueue Drive storage after successful submission. The extraction request itself still depends on transferring source content before review.
 - In-House completion creates/reuses one seminar evaluation Form. Legacy participant/supervisor pairs can be replaced by the current participant form and the supervisor fields cleared. External completion skips creation.
-- Summary retrieval fetches Forms responses, computes numeric rating results, and optionally calls Groq for written-response summaries. Missing/failing AI does not remove rating summaries.
+- Summary retrieval fetches Forms responses, removes placeholder answers and certificate names, computes numeric rating results locally, and sends only substantive written feedback to Groq. The UI shows friendly empty states for unsupported qualitative categories, while rating summaries remain available when AI is missing or fails.
 - Analytics uses live authorized records and shared metric helpers. Monitoring exports use ExcelJS and selected fixed/configured fields. Request Reports are rendered in memory as landscape PDFs from the same authorized live data. Report/UI data is not a separate warehouse.
 
 ## 10. Environment configuration

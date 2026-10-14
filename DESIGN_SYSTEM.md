@@ -80,6 +80,7 @@ Admin Settings retains six equal outlined cards in a desktop three-column, two-r
 ## 6. Forms and dialogs
 
 - Reuse MUI Dialog title, divided content, and bottom-right action row. Cancel is secondary; the commit action is primary.
+- Evaluation summaries place one clearly labeled AI Summary card before rating charts. Group it into What participants liked, Suggested improvements, and Topics requested; use friendly empty states instead of exposing placeholder or raw responses. Keep charts visible when AI is unavailable, and never show or summarize certificate names.
 - The CapDev toolbar places the icon-only Duplicate control at the far right for Admins, after the Active/Archives view toggle. Use the standard outlined overlapping-records-with-plus symbol so it reads as adding duplicates rather than a generic copy action. Its dialog provides a target Date Added and Select all/Clear controls with AIP-based project checkboxes. Duplication preserves the exact AIP Code; state explicitly that requests and status updates are excluded. The standard CapDev filter uses Date Added from/to fields and date shortcuts; it does not include a separate Year Added selector.
 - CapDev, request, and user filter dialogs save applied selections per account in the same browser. Date shortcuts use a contained/highlighted state when their exact Today, This month, or This year range is selected.
 - Show fixed and active configured fields using the existing required/optional sections and form grid.

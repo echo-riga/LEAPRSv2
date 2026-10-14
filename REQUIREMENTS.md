@@ -178,7 +178,7 @@ The seven categories are Inactivity Reminders, Request Submissions, Status Updat
 
 - Completing an In-House request creates or reuses its seminar evaluation Google Form. External requests do not generate this seminar evaluation workflow.
 - Evaluation sections cover speaker, content/learnings, satisfaction, comments, and training needs. The final view provides open/edit/copy actions and See Summary.
-- Fetch responses on demand. Compute rating summaries from actual responses; optional AI summarizes written responses. Rating results remain usable when AI summarization is unavailable.
+- Fetch responses on demand. Summarize substantive written feedback into participant highlights, suggested improvements, and requested topics before showing rating results. Ignore placeholder answers such as None or N/A, and exclude certificate names from summaries and AI input. Rating results remain usable when AI summarization is unavailable.
 - Admin and Viewers can view analytics and export monitoring workbooks and Request Report PDFs from authorized live data. Department Viewer access remains scoped to their department.
 - Reports can include selected projects and fixed/configured fields. AIP Code identifies projects; stored numeric IDs remain internal lookup keys.
 - Request Reports filter by Event Date month/year and group rows into Completed, In Progress, and Rejected. Each row shows Title, Event Date, the CapDev initial budget as Allotted Budget, the request amount as Utilized Budget, and the overall In-House evaluation average. External or unrated requests show None for evaluation.
