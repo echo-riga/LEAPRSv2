@@ -124,6 +124,7 @@ Source: [BackgroundUploads.tsx](src/components/BackgroundUploads.tsx).
 - The notification popover uses vertical category checkboxes on the left and notifications on the right. Each area can scroll and must remain usable on narrow screens.
 - All categories start selected. All selects/clears everything and shows an indeterminate state for partial selection.
 - The header shows unread count, Configure Email Notifications, and Mark all read. In-app filters and saved email preferences are independent controls.
+- Request-linked notification titles state the action and requestor name. Status-update titles use “Requestor's Request Timeline,” with the specific update in the detail line. Keep details short: show only the amount, update status or actor when needed. Do not repeat the request type, description or AIP Code as request identifiers.
 - Email Notifications uses one concise purpose sentence with an email icon, All and the same seven category checkboxes, then Cancel/Save. Do not add recipient chips or implementation details.
 - Inactivity settings uses a bell icon, a concise trigger description, a days value with decrement/increment controls, and Cancel/Save.
 - Eligible inactive request cards and the latest activity card receive a red outline and prominent red bell. The outline stays red on hover.

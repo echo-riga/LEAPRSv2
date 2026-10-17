@@ -6,7 +6,7 @@ import { db } from '@/db';
 import { capdevs, requests, notifications, emailNotificationPreferences, notificationEmailDeliveries, type NotificationEmailPayload } from '@/db/schema';
 import { notificationAudienceCondition } from '@/lib/notification-audience';
 import { DEFAULT_EMAIL_TYPES } from '@/lib/notification-types';
-import { requestNotificationWording } from '@/lib/notification-wording';
+import { formatRequestNotification } from '@/lib/notification-wording';
 
 type Recipient = { id: string; role: string; department: string; email: string; enabled_types: string[] | null };
 
@@ -68,21 +68,28 @@ export async function deliverNotificationEmails() {
   const members = await recipients();
   // Durable recipient rows also record opted-out events, so enabling a type never floods old mail.
   for (const member of members) {
-    const events = await db.select({ event: notifications, requestorName: requests.requestorName }).from(notifications)
+    const events = await db.select({
+      event: notifications,
+      request: {
+        requestorName: requests.requestorName,
+        setting: requests.setting,
+        requestedBudget: requests.requestedBudget,
+      },
+    }).from(notifications)
       .leftJoin(requests, eq(notifications.requestId, requests.id))
       .leftJoin(capdevs, eq(notifications.capdevId, capdevs.id))
       .leftJoin(notificationEmailDeliveries, and(eq(notificationEmailDeliveries.notificationId, notifications.id), eq(notificationEmailDeliveries.userId, member.id)))
       .where(and(eq(notifications.emailEligible, true), audience(member), isNull(notificationEmailDeliveries.id)))
       .orderBy(asc(notifications.id)).limit(50);
     if (!events.length) continue;
-    await db.insert(notificationEmailDeliveries).values(events.map(({ event, requestorName }) => ({
-      notificationId: event.id, userId: member.id,
-      status: (member.enabled_types ?? DEFAULT_EMAIL_TYPES).includes(event.type) ? 'pending' : 'skipped',
-      payload: notificationEmailPayload({ ...event,
-        title: requestNotificationWording(event.title, requestorName),
-        message: requestNotificationWording(event.message, requestorName),
-      }, member.email, origin),
-    }))).onConflictDoNothing();
+    await db.insert(notificationEmailDeliveries).values(events.map(({ event, request }) => {
+      const copy = formatRequestNotification(event, event.requestId ? request : null);
+      return {
+        notificationId: event.id, userId: member.id,
+        status: (member.enabled_types ?? DEFAULT_EMAIL_TYPES).includes(event.type) ? 'pending' : 'skipped',
+        payload: notificationEmailPayload({ ...event, ...copy }, member.email, origin),
+      };
+    })).onConflictDoNothing();
   }
 
   const client = new Resend(apiKey);

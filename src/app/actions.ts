@@ -3,7 +3,7 @@
 import { db } from '@/db';
 import { isPendingAttachment, validatePendingAttachments, replacePendingAttachment, reconcilePendingAttachments, type UploadTarget } from '@/lib/background-attachments';
 import { notificationAudienceCondition } from '@/lib/notification-audience';
-import { requestNotificationWording } from '@/lib/notification-wording';
+import { formatRequestNotification } from '@/lib/notification-wording';
 import { scheduleNotificationEmails } from '@/lib/notification-email';
 import { insertNotificationEvent } from '@/lib/notification-events';
 import { requestAccessScope } from '@/lib/access-scope';
@@ -2999,6 +2999,7 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
     if (req.isStopped && access.role === 'employee') {
       return { success: false, error: 'This request is stopped. Progress must be resumed before you can complete or deny it.' };
     }
+    const { data: session } = await auth.getSession();
 
     const forms = await withTransaction(async (tx) => {
       const [current] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
@@ -3014,7 +3015,7 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
         capdevId: current.capdevId,
         requestId,
         title: `${current.requestorName || 'Requestor'} · Request ${status === 'completed' ? 'Completed' : 'Denied'}`,
-        message: `The request for ${current.requestorName || 'Requestor'} was resolved as ${status}.`,
+        message: `Resolved by ${session?.user?.name || session?.user?.email || 'Staff member'}.`,
         link: `/portal/capdev/${current.capdevId}/requests/${requestId}/status#request-status-resolution`,
         type: status,
       });
@@ -3305,7 +3306,14 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
       .where(eq(notificationReads.userId, access.userId));
     const readIds = new Set(userReads.map(r => r.notificationId));
 
-    const rows = await db.select({ notification: getTableColumns(notifications), requestorName: requests.requestorName })
+    const rows = await db.select({
+      notification: getTableColumns(notifications),
+      request: {
+        requestorName: requests.requestorName,
+        setting: requests.setting,
+        requestedBudget: requests.requestedBudget,
+      },
+    })
       .from(notifications)
       .leftJoin(requests, eq(notifications.requestId, requests.id))
       .leftJoin(capdevs, eq(notifications.capdevId, capdevs.id))
@@ -3316,20 +3324,23 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
     const reminderRequestIds = rows.filter(({ notification }) => notification.type === 'inactivity_reminder')
       .map(({ notification }) => notification.requestId).filter((id): id is number => id !== null);
     const inactivity = await getRequestInactivitySummaries(reminderRequestIds);
-    const formatted: NotificationItem[] = rows.map(({ notification: n, requestorName }) => ({
-      id: n.id,
-      userId: n.userId,
-      actorId: n.actorId,
-      capdevId: n.capdevId,
-      requestId: n.requestId,
-      title: requestNotificationWording(n.title, requestorName),
-      message: n.type === 'inactivity_reminder' && n.requestId && inactivity.has(n.requestId)
-        ? inactivityMessage(inactivity.get(n.requestId)!.days) : requestNotificationWording(n.message, requestorName),
-      link: n.link,
-      type: n.type,
-      isRead: n.isRead || readIds.has(n.id),
-      createdAt: n.createdAt,
-    }));
+    const formatted: NotificationItem[] = rows.map(({ notification: n, request }) => {
+      const copy = formatRequestNotification(n, n.requestId ? request : null,
+        n.type === 'inactivity_reminder' && n.requestId && inactivity.has(n.requestId)
+          ? inactivityMessage(inactivity.get(n.requestId)!.days) : undefined);
+      return {
+        id: n.id,
+        userId: n.userId,
+        actorId: n.actorId,
+        capdevId: n.capdevId,
+        requestId: n.requestId,
+        ...copy,
+        link: n.link,
+        type: n.type,
+        isRead: n.isRead || readIds.has(n.id),
+        createdAt: n.createdAt,
+      };
+    });
 
     const unreadCount = formatted.filter(n => !n.isRead).length;
 

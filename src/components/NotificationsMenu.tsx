@@ -409,11 +409,15 @@ export default function NotificationsMenu() {
                     <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: { xs: 0.25, sm: 1 }, flexDirection: { xs: 'column', sm: 'row' } }}>
                       <Typography
                         variant="body2"
-                        noWrap
                         sx={{
                           fontWeight: n.isRead ? 600 : 800,
                           color: n.isRead ? 'text.primary' : 'primary.dark',
                           fontSize: '0.85rem',
+                          lineHeight: 1.3,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
                         }}
                       >
                         {n.title}
@@ -430,21 +434,23 @@ export default function NotificationsMenu() {
                         {formatRelativeTime(n.createdAt)}
                       </Typography>
                     </Stack>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        color: 'text.secondary',
-                        fontSize: '0.8rem',
-                        lineHeight: 1.35,
-                        mt: 0.25,
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      {n.message}
-                    </Typography>
+                    {n.message && (
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                          fontSize: '0.8rem',
+                          lineHeight: 1.35,
+                          mt: 0.25,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {n.message}
+                      </Typography>
+                    )}
                   </Box>
   
                   {/* Unread indicator dot */}
