@@ -19,13 +19,9 @@ function clean(value: string | null | undefined) {
   return value?.trim().replace(/\s+/g, ' ') || '';
 }
 
-function statusUpdateLabel(title: string) {
+function markedStatusLabel(title: string) {
   const marked = title.match(/Update:\s*\[([^\]]+)]/i)?.[1];
-  if (marked) return `Update status: ${marked.charAt(0).toUpperCase()}${marked.slice(1).toLowerCase()}`;
-  if (/Request Reopened/i.test(title)) return 'Request reopened';
-  if (/Request Stopped/i.test(title)) return 'Progress stopped';
-  if (/Request Resumed/i.test(title)) return 'Progress resumed';
-  return '';
+  return marked ? `${marked.charAt(0).toUpperCase()}${marked.slice(1).toLowerCase()}` : '';
 }
 
 function money(value: string | number | null | undefined) {
@@ -62,7 +58,7 @@ export function formatRequestNotification(
   if (event.type === 'inactivity_reminder') {
     const reminder = inactivityText || event.message.match(/No progress for \d+ days\./i)?.[0] || event.message;
     return {
-      title: `No activity: ${requestor}`,
+      title: `${requestor}'s Request`,
       message: reminder,
     };
   }
@@ -71,16 +67,27 @@ export function formatRequestNotification(
     const outcome = event.type === 'completed' ? 'completed' : 'denied';
     const legacyResolution = /^The request for .+ was resolved as (completed|denied)\.?$/i.test(event.message.trim());
     return {
-      title: `Request ${outcome}: ${requestor}`,
+      title: `${requestor}'s Request ${outcome === 'completed' ? 'Completed' : 'Denied'}`,
       message: legacyResolution ? '' : clean(event.message),
     };
   }
 
   if (event.type === 'status_update') {
-    const updateLabel = statusUpdateLabel(event.title);
+    const detail = clean(event.message);
+    let message: string;
+    if (/Request Reopened/i.test(event.title)) {
+      message = 'Request reopened';
+    } else if (/Request Stopped/i.test(event.title)) {
+      const reason = detail.replace(/^.*?\bstopped progress:\s*/i, '');
+      message = ['Progress stopped', reason].filter(Boolean).join(' • ');
+    } else if (/Request Resumed/i.test(event.title)) {
+      message = 'Progress resumed';
+    } else {
+      message = [markedStatusLabel(event.title), detail].filter(Boolean).join(' • ');
+    }
     return {
-      title: `${requestor}'s Request Timeline`,
-      message: [updateLabel, clean(event.message)].filter(Boolean).join(' • '),
+      title: `${requestor}'s Request Update`,
+      message,
     };
   }
 
