@@ -1308,12 +1308,12 @@ async function cleanupCapdevStorage(tx: Transaction, projects: (typeof capdevs.$
   }
 }
 
-export async function bulkManageCapdevs(input: { folderId: number; capdevIds: number[]; action: 'archive' | 'delete' }) {
+export async function bulkManageCapdevs(input: { folderId: number; capdevIds: number[]; action: 'archive' | 'delete' | 'move'; destinationFolderId?: number }) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
     const actor = await getActorSnapshot(access);
-    await withTransaction(tx => manageCapdevRecords(tx, input.folderId, input.capdevIds, input.action, actor, projects => cleanupCapdevStorage(tx, projects)));
+    await withTransaction(tx => manageCapdevRecords(tx, input.folderId, input.capdevIds, input.action, actor, projects => cleanupCapdevStorage(tx, projects), input.destinationFolderId));
     return { success: true };
   } catch (error) {
     console.error('Failed to manage selected CapDev projects:', error);

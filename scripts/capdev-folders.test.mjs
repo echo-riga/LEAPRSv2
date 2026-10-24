@@ -101,6 +101,34 @@ test('CapDev folders preserve migration data and isolate cascading deletion', as
       await assert.rejects(run(tx => manageCapdevRecords(tx, 3, [4], 'delete', actor, async () => { throw new Error('storage failed'); })), /storage failed/);
       assert.equal((await run(tx => tx.execute(sql`SELECT count(*)::int AS total FROM capdevs WHERE id=4`))).rows[0].total, 1);
     });
+    await t.test('moving projects preserves active and archived records, children, storage, dates, balances, and the active folder', async () => {
+      await assert.rejects(run(async tx => {
+        const before = (await tx.execute(sql`SELECT * FROM capdevs WHERE id IN (3,4) ORDER BY id`)).rows;
+        const snapshots = {};
+        for (const table of ['requests','request_status_updates','request_storage_folders','notifications','capdev_folders']) snapshots[table] = (await tx.execute(sql.raw('SELECT * FROM ' + table + ' ORDER BY 1'))).rows;
+        await manageCapdevRecords(tx, 3, [3,4], 'move', actor, async () => { throw new Error('Moving must not clean storage'); }, 2);
+        const after = (await tx.execute(sql`SELECT * FROM capdevs WHERE id IN (3,4) ORDER BY id`)).rows;
+        for (let index = 0; index < before.length; index++) {
+          const { updated_at: beforeUpdated, ...original } = before[index];
+          const { updated_at: afterUpdated, ...moved } = after[index];
+          assert.ok(beforeUpdated);
+          assert.ok(afterUpdated);
+          assert.deepEqual(moved, { ...original, folder_id: 2, updated_by_id: 'admin' });
+        }
+        for (const table of Object.keys(snapshots)) assert.deepEqual((await tx.execute(sql.raw('SELECT * FROM ' + table + ' ORDER BY 1'))).rows, snapshots[table]);
+        const logs = (await tx.execute(sql`SELECT details FROM audit_logs WHERE entity_type='capdev'`)).rows;
+        assert.equal(logs.length, 2);
+        assert.equal(logs[0].details.destinationFolderId, 2);
+        assert.deepEqual(logs[0].details.changes[0], { field: 'folderId', label: 'Folder', from: 'Delete', to: 'Keep' });
+        throw new Error('rollback move fixture');
+      }), /rollback move fixture/);
+    });
+    await t.test('move rejects same, missing, invalid, and cross-folder destinations/selections atomically', async () => {
+      for (const destination of [3,0,999,-1,1.5,undefined]) await assert.rejects(run(tx => manageCapdevRecords(tx, 3, [3], 'move', actor, async () => {}, destination)));
+      await assert.rejects(run(tx => manageCapdevRecords(tx, 3, [2,3], 'move', actor, async () => {}, 2)));
+      const result = await run(tx => tx.execute(sql`SELECT folder_id FROM capdevs WHERE id=3`));
+      assert.equal(result.rows[0].folder_id, 3);
+    });
     await t.test('only one folder can be active, including simultaneous activation requests', async () => {
       await Promise.all([run(tx => activateCapdevFolder(tx, 2)), run(tx => activateCapdevFolder(tx, 3))]);
       await run(async tx => {
