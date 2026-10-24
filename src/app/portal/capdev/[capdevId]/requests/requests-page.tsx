@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Add as AddIcon,
   AttachFile as AttachFileIcon,
@@ -38,6 +38,10 @@ import {
   Typography,
 } from '@mui/material';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { readPortal } from '@/lib/portal-read-client';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
+import { useVisibleRefresh } from '@/lib/use-visible-refresh';
 import { authClient } from '@/lib/auth/client';
 import ArchiveActions from '@/components/ArchiveActions';
 import ReadOnlyDynamicField from '@/components/ReadOnlyDynamicField';
@@ -51,11 +55,6 @@ import {
   restoreRequest,
   createRequest,
   deleteRequest,
-  getCapdevById,
-  getCapdevFieldDefinitions,
-  getCurrentUserAccess,
-  getRequestFieldDefinitions,
-  getRequestsByCapdev,
   updateRequest,
   type AppRole,
   type StatusAttachment,
@@ -155,6 +154,11 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   const [definitions, setDefinitions] = useState<DynamicField[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
+  const [total, setTotal] = useState(0);
+  const configurationLoaded = useRef(false);
+  const loadSequence = useRef(0);
+  const [loadError, setLoadError] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<RequestFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState(filters);
@@ -178,7 +182,6 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     setShowScrollArrow(false);
   };
 
-  useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
 
   const userId = session.data?.user.id;
   useEffect(() => {
@@ -228,13 +231,26 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   }, []);
 
   const loadData = useCallback(async () => {
-    const [projectData, requestData, internalFieldData, externalFieldData, capdevFieldData] = await Promise.all([
-      getCapdevById(capdevId),
-      getRequestsByCapdev(capdevId),
-      getRequestFieldDefinitions('internal'),
-      getRequestFieldDefinitions('external'),
-      getCapdevFieldDefinitions(),
-    ]);
+    if (!userId) return;
+    const sequence = ++loadSequence.current;
+    try {
+    const result = await readPortal('requests', { capdevId, page, search: debouncedSearch, filters, archived: showArchived,
+      focusId: notificationFocus ? Number(notificationFocus.targetId.replace('request-record-', '')) : undefined,
+      configuration: !configurationLoaded.current }, userId);
+    if (sequence !== loadSequence.current) return;
+    setLoadError('');
+    const projectData = result.project;
+    if (projectData) window.dispatchEvent(new CustomEvent('leaprs:capdev-parent', { detail: { capdevId: projectData.id, folderId: projectData.folderId } }));
+    const requestData = result.page.records;
+    setTotal(result.page.total);
+    setPage(result.page.page);
+    if (notificationFocus) {
+      if (showArchived !== result.page.archived) setShowArchived(result.page.archived);
+      setSearch('');
+      setFilters(current => JSON.stringify(current) === JSON.stringify(EMPTY_FILTERS) ? current : { ...EMPTY_FILTERS });
+    }
+    const configuration = result.configuration;
+    if (configuration?.access.success) setRole(configuration.access.role);
     setCapdev(
       projectData
         ? {
@@ -250,8 +266,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           }
         : null
     );
-    setCapdevDefinitions(
-      capdevFieldData.map((field) => ({
+    if (configuration) setCapdevDefinitions(
+      configuration.capdev.map((field) => ({
         ...field,
         options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [],
       }))
@@ -270,81 +286,33 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
         };
       })
     );
-    setDefinitions(
-      [...internalFieldData, ...externalFieldData].map((field) => ({
+    if (configuration) setDefinitions(
+      [...configuration.internal, ...configuration.external].map((field) => ({
         ...field,
         setting: field.setting === 'external' ? 'external' as const : 'internal' as const,
         options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [],
       }))
     );
-    setLoading(false);
-  }, [capdevId]);
+    if (configuration) configurationLoaded.current = true;
+    } catch { if (sequence === loadSequence.current) setLoadError('Unable to load requests. Please try again.'); }
+    finally { if (sequence === loadSequence.current) setLoading(false); }
+  }, [capdevId, userId, page, debouncedSearch, filters, showArchived, notificationFocus, setShowArchived]);
 
-  useEffect(() => { void Promise.resolve().then(loadData); }, [loadData]);
+  useEffect(() => { const sequenceRef = loadSequence; void Promise.resolve().then(loadData); return () => { sequenceRef.current++; }; }, [loadData]);
   useAttachmentRefresh(loadData);
-  useEffect(() => {
-    const refreshRequests = () => { void loadData(); };
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') refreshRequests();
-    };
-    const interval = window.setInterval(refreshRequests, 30_000);
-    window.addEventListener('leaprs:reminder-settings-changed', refreshRequests);
-    window.addEventListener('focus', refreshRequests);
-    document.addEventListener('visibilitychange', refreshWhenVisible);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('leaprs:reminder-settings-changed', refreshRequests);
-      window.removeEventListener('focus', refreshRequests);
-      document.removeEventListener('visibilitychange', refreshWhenVisible);
-    };
-  }, [loadData]);
+  useVisibleRefresh(loadData, ['leaprs:reminder-settings-changed']);
 
-  const filtered = useMemo(() => requests.filter((request) => {
-    const date = new Date(request.createdAt).getTime();
-    return (
-      (Boolean(request.archivedAt) === showArchived) &&
-      (request.requestorName || '').toLowerCase().includes(search.toLowerCase()) &&
-      (filters.setting === 'all' || request.setting === filters.setting) &&
-      (!filters.min || Number(request.requestedBudget) >= Number(filters.min)) &&
-      (!filters.max || Number(request.requestedBudget) <= Number(filters.max)) &&
-      (!filters.dateFrom || date >= new Date(filters.dateFrom).getTime()) &&
-      (!filters.dateTo || date <= new Date(`${filters.dateTo}T23:59:59`).getTime())
-    );
-  }).sort((a, b) => filters.sort === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()), [filters, requests, search, showArchived]);
-
-  const pageCount = Math.max(1, Math.ceil(filtered.length / 6));
-  const visible = filtered.slice((page - 1) * 6, page * 6);
+  const pageCount = Math.max(1, Math.ceil(total / 6));
+  const visible = requests;
 
   useEffect(() => {
     if (!notificationFocus || loading) return;
-    const requestIdToFocus = Number(notificationFocus.targetId.replace('request-record-', ''));
-    const filteredIndex = filtered.findIndex((request) => request.id === requestIdToFocus);
-
-    if (filteredIndex < 0 && requests.some((request) => request.id === requestIdToFocus)) {
-      const resetTimeoutId = window.setTimeout(() => {
-        const focused = requests.find((item) => item.id === requestIdToFocus);
-        setShowArchived(Boolean(focused?.archivedAt));
-        setSearch('');
-        setFilters({ setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' });
-      }, 0);
-      return () => window.clearTimeout(resetTimeoutId);
-    }
-    if (filteredIndex < 0) return;
-
-    const targetPage = Math.floor(filteredIndex / 6) + 1;
-    if (page !== targetPage) {
-      const pageTimeoutId = window.setTimeout(() => setPage(targetPage), 0);
-      return () => window.clearTimeout(pageTimeoutId);
-    }
-
     const target = document.getElementById(notificationFocus.targetId);
     if (!target) return;
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const timeoutId = window.setTimeout(() => {
-      setNotificationFocus((current) => current?.nonce === notificationFocus.nonce ? null : current);
-    }, 2500);
-    return () => window.clearTimeout(timeoutId);
-  }, [filtered, loading, notificationFocus, page, requests, setShowArchived]);
+    const timeout = window.setTimeout(() => setNotificationFocus(current => current?.nonce === notificationFocus.nonce ? null : current), 2500);
+    return () => window.clearTimeout(timeout);
+  }, [loading, notificationFocus, requests]);
   const allDefinitions = definitions.filter((field) => field.setting === form.setting);
   const requiredDefinitions = allDefinitions.filter((field) => field.isRequired || field.section === 'required');
   const rightAlignedFieldIds = getHalfFieldLayout(allDefinitions.map((field) => ({ ...field, key: field.id }))).before;
@@ -544,6 +512,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
 
   if (session.isPending || loading) return <ResourceGridSkeleton titleWidth={220} />;
   if (!session.data) return null;
+  if (loadError) return <Alert severity="error">{loadError}<Button onClick={() => void loadData()}>Retry</Button></Alert>;
   if (!capdev) return <Box sx={{ py: 8, textAlign: 'center' }}><Typography variant="h6" color="text.secondary">CapDev project not found.</Typography></Box>;
   const canManageRequest = role === 'admin' || role === 'employee' || role === 'employee-department';
   const currentUserId = session.data.user.id;
@@ -670,7 +639,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                     </Stack>
                     <Divider sx={{ my: 2 }} />
                     <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                      <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/portal/capdev/${capdevId}/requests/${request.id}/status${showArchived || request.archivedAt ? '?archived=1' : ''}`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
+                      <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} component={Link} href={`/portal/capdev/${capdevId}/requests/${request.id}/status${showArchived || request.archivedAt ? '?archived=1' : ''}`} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
                         Track Progress
                       </Button>
                       <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
@@ -689,7 +658,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           </Grid>
         )}
 
-        {filtered.length > 6 && (
+        {total > 6 && (
           <Stack direction="row" spacing={2} sx={{ justifyContent: 'center', alignItems: 'center', mt: 4, mb: 2 }}>
             <Button variant="outlined" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>
               Previous

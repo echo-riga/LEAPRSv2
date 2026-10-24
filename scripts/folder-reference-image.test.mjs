@@ -43,7 +43,7 @@ test('replacing an image commits the new descriptor before cleaning the old file
     const action = compile('../src/app/actions.ts', 'saveCapdevFolderReferenceImage', {
       getCurrentAccess: async () => ({ role: 'admin', userId: 'admin' }), unauthorized: { success: false }, validateFolderReferenceImage,
       getActorSnapshot: async () => ({ actorId: 'admin' }), lockCapdevFolder: async () => ({ name: 'Folder', referenceImage: stored }),
-      getGoogleDriveAccessToken: async () => 'test-token', process: { env: { GOOGLE_DRIVE_PARENT_FOLDER_ID: 'root' } },
+      getActiveGoogleStorage: async () => ({rootFolderId:'root'}), getGoogleDriveAccessToken: async () => 'test-token', process: { env: { GOOGLE_DRIVE_PARENT_FOLDER_ID: 'root' } },
       uploadFileToGoogleDrive: async () => ({ id: 'new' }), crypto: { randomUUID: () => 'new-version' }, capdevFolders: {}, auditLogs: {}, eq: () => true,
       withTransaction: async run => run({ update: () => ({ set: value => { if (fail) throw new Error('save failed'); image = value.referenceImage; return { where: async () => {} }; } }), insert: () => ({ values: async () => {} }) }),
       cleanupFolderReferenceImage: async value => { cleaned.push(value.id); if (!fail) assert.equal(image.id, 'new'); }, console: { error: () => {} },

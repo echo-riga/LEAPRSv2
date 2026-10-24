@@ -7,7 +7,7 @@ import { registerHooks } from 'node:module';
 import ts from 'typescript';
 import { Pool } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-serverless';
-import { and, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, count, gte, lte, ilike, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 
 process.loadEnvFile('.env.local');
 const context = new AsyncLocalStorage();
@@ -18,8 +18,8 @@ registerHooks({ resolve(specifier, ctx, nextResolve) {
   return nextResolve(specifier.startsWith('@/') ? new URL('../src/' + specifier.slice(2) + '.ts', import.meta.url).href : specifier, ctx);
 } });
 const { syncRequestReminders, getRequestInactivitySummaries, activeReminderCondition, readInactivityDays } = await import('../src/lib/request-reminders.ts');
-const { activeFolderScope } = await import('../src/lib/access-scope.ts');
-const { requests, capdevs, notifications } = await import('../src/db/schema.ts');
+const { activeFolderScope, capdevAccessScope } = await import('../src/lib/access-scope.ts');
+const { requests, capdevs, notifications, requestStatusUpdates, auditLogs } = await import('../src/db/schema.ts');
 const source = readFileSync(new URL('../src/lib/notification-audience.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('actions.ts', source, ts.ScriptTarget.Latest, true);
 const declarations = ast.statements.filter((node) => ts.isVariableStatement(node) && node.declarationList.declarations.some((d) => ['REQUEST_NOTIFICATION_TYPES', 'ALL_NOTIFICATION_TYPES', 'OWNER_NOTIFICATION_TYPES'].includes(d.name.getText(ast))));
@@ -27,6 +27,27 @@ const audienceNode = ast.statements.find((node) => ts.isFunctionDeclaration(node
 assert.ok(audienceNode);
 const compiled = ts.transpileModule([...declarations, audienceNode].map((node) => node.getText(ast).replace(/^export /, '')).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 const audience = new Function('deps', 'const { and, eq, inArray, isNotNull, isNull, ne, or, requests, capdevs, notifications, activeReminderCondition, activeFolderScope } = deps; ' + compiled + '\nreturn notificationAudienceCondition;')({ and, eq, inArray, isNotNull, isNull, ne, or, requests, capdevs, notifications, activeReminderCondition, activeFolderScope });
+const { summarizeAnalytics } = await import('../src/lib/analytics-metrics.ts');
+const { manilaDateBoundary } = await import('../src/lib/manila-date.ts');
+const { db } = await import('@/db');
+const actionSource = readFileSync(new URL('../src/app/actions.ts', import.meta.url), 'utf8');
+const actionAst = ts.createSourceFile('actions.ts', actionSource, ts.ScriptTarget.Latest, true);
+const pageCode = ts.transpileModule(['canAccessCapdev', 'getAccessibleCapdev', 'getRequestPage'].map(name => {
+  const node = actionAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+  assert.ok(node, name);
+  return node.getText(actionAst).replace(/^export /, '');
+}).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
+function requestPageFor(user) {
+  const deps = { getCurrentAccess: async () => user, db, requests, capdevs, requestStatusUpdates, capdevAccessScope,
+    getRequestInactivitySummaries, manilaDateBoundary, and, asc, desc, count, gte, lte, ilike, eq, inArray, isNotNull, isNull, or, sql };
+  return new Function(...Object.keys(deps), pageCode + '; return getRequestPage;')(...Object.values(deps));
+}
+const analyticsNode = actionAst.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='getAnalyticsData');
+const analyticsCode = ts.transpileModule(analyticsNode.getText(actionAst).replace(/^export /,''), { compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None} }).outputText;
+function analyticsFor(user) {
+  const deps={getCurrentAccess:async()=>user,db,capdevs,requests,requestStatusUpdates,auditLogs,capdevAccessScope,manilaDateBoundary,sql,and,or,eq,gte,lte};
+  return new Function(...Object.keys(deps),analyticsCode+'; return getAnalyticsData;')(...Object.values(deps));
+}
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const schemaName = 'reminder_test_' + randomUUID().replaceAll('-', '');
 assert.match(schemaName, /^reminder_test_[a-f0-9]{32}$/);
@@ -50,7 +71,7 @@ async function visible(tx, user) {
 test('request reminders use a disposable database schema', async (t) => {
   try {
     await pool.query('CREATE SCHEMA ' + quoted);
-    for (const table of ['capdev_folders', 'system_settings', 'capdevs', 'requests', 'request_status_updates', 'notifications']) {
+    for (const table of ['capdev_folders', 'system_settings', 'capdevs', 'requests', 'request_status_updates', 'notifications', 'audit_logs']) {
       await pool.query('CREATE TABLE ' + quoted + '."' + table + '" (LIKE public."' + table + '" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)');
       // Existing fixtures use one logical folder; cloned tables have no folder foreign key.
       if (table === 'capdevs') await pool.query(`ALTER TABLE ${quoted}.capdevs ALTER COLUMN folder_id SET DEFAULT 1`);
@@ -122,6 +143,66 @@ test('request reminders use a disposable database schema', async (t) => {
         assert.equal((await visible(tx,access('admin'))).length,0);
       });
     });
+    await t.test('paginated requests preserve filters, focus links, stable ordering, and live role/folder scope', async () => {
+      await transaction(async tx => {
+        await tx.execute(sql`INSERT INTO capdev_folders (id,name,is_active) VALUES (2,'Inactive',false)`);
+        await tx.execute(sql`INSERT INTO capdevs (id,folder_id,aip_code,department,initial_budget,budget,updated_by_id)
+          VALUES (100,1,'PAGE-A','Alpha',10000,10000,'owner'),(101,2,'PAGE-B','Alpha',10000,10000,'owner')`);
+        for (let i = 0; i < 20; i++) {
+          await tx.execute(sql`INSERT INTO requests (id,capdev_id,user_id,requestor_name,setting,requested_budget,updated_by_id,created_at,archived_at)
+            VALUES (${1000+i},100,${i%2 ? 'other' : 'owner'},${i===0 ? '100%' : i===1 ? '100X' : 'User '+i},${i%2 ? 'external' : 'internal'},${String((i+1)*10)},'owner',${new Date(Date.UTC(2026,0,i+1))},${i>=16 ? new Date() : null})`);
+        }
+        const base = { capdevId:100, page:1, search:'', archived:false,
+          filters:{setting:'all',min:'',max:'',dateFrom:'',dateTo:'',sort:'newest'} };
+        const read = requestPageFor(access('admin'));
+        const first = await read(base);
+        assert.equal(first.total,16);
+        assert.equal(first.records.length,6);
+        assert.deepEqual(first.records.map(row=>row.id),[1015,1014,1013,1012,1011,1010]);
+        const last = await read({...base,page:999});
+        assert.equal(last.page,3);
+        assert.deepEqual(last.records.map(row=>row.id),[1003,1002,1001,1000]);
+        assert.equal((await read({...base,search:'100%'})).total,1);
+        assert.equal((await read({...base,filters:{...base.filters,setting:'external',min:'40',max:'100'}})).total,4);
+        assert.equal((await read({...base,filters:{...base.filters,dateFrom:'2026-01-03',dateTo:'2026-01-04'}})).total,2);
+        const focus = await read({...base,search:'no-match',focusId:1000});
+        assert.equal(focus.page,3);
+        assert.ok(focus.records.some(row=>row.id===1000));
+        const archived = await read({...base,focusId:1019});
+        assert.equal(archived.archived,true);
+        assert.equal(archived.total,4);
+        assert.ok(archived.records.some(row=>row.id===1019));
+        const employee = await requestPageFor(access('employee'))(base);
+        assert.equal(employee.total,8);
+        assert.ok(employee.records.every(row=>row.userId==='owner'));
+        await assert.rejects(requestPageFor(access('viewer','v','Beta'))(base), /permission/);
+        await assert.rejects(requestPageFor(access('viewer-full'))({...base,capdevId:101}), /permission/);
+        await assert.rejects(requestPageFor(null)(base), /signed in/);
+        await assert.rejects(read({...base,filters:{...base.filters,min:'invalid'}}), /Invalid balance/);
+      });
+    });
+
+    await t.test('smaller analytics payload preserves historical status, balances, and audit totals', async () => {
+      await transaction(async tx => {
+        for(let day=1;day<=10;day++) await tx.execute(sql`INSERT INTO request_status_updates
+          (id,request_id,user_id,status_update,created_at,subtracts_requested_amount,mark_as_complete)
+          VALUES (${9000+day},1000,'owner','History',${new Date(Date.UTC(2026,0,day))},${day===3},${day===8})`);
+        await tx.execute(sql`UPDATE requests SET status='completed' WHERE id=1000`);
+        await tx.execute(sql`INSERT INTO audit_logs (id,actor_id,actor_name,action,entity_type,entity_id,entity_label,details,created_at)
+          VALUES (9000,'owner','Owner','updated','capdev','100','Capdev','{"capdevId":100}','2025-12-01'),
+          (9001,'owner','Owner','updated','capdev','100','Capdev','{"capdevId":100}','2026-01-03')`);
+        const filters={dateFrom:'2026-01-01',dateTo:'2026-01-06',snapshotDate:'2026-01-05',departments:['Alpha'],capdevIds:[100]};
+        const read=analyticsFor(access('admin'));
+        const full=await read();
+        const reduced=await read(filters);
+        assert.ok(full.capdevs.length>0);
+        assert.ok(reduced.requestEvents.length<full.requestEvents.length);
+        assert.deepEqual(summarizeAnalytics(reduced,filters,'2026-10-24'),summarizeAnalytics(full,filters,'2026-10-24'));
+        assert.deepEqual(reduced.auditActivity,full.auditActivity.filter(row=>row.day>=filters.dateFrom&&row.day<=filters.dateTo));
+        assert.equal(reduced.auditItems.length,1);
+      });
+    });
+
   } finally {
     await pool.query('DROP SCHEMA IF EXISTS ' + quoted + ' CASCADE');
     await pool.end();

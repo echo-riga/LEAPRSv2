@@ -8,8 +8,11 @@ import CapdevReferenceImage from '@/components/CapdevReferenceImage';
 import CapdevFoldersPanel from '@/components/CapdevFoldersPanel';
 import ArchiveActions from '@/components/ArchiveActions';
 import ReadOnlyDynamicField from '@/components/ReadOnlyDynamicField';
+import Link from 'next/link';
+import { readPortal } from '@/lib/portal-read-client';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { authClient } from '@/lib/auth/client';
-import { bulkManageCapdevs, archiveCapdev, restoreCapdev, createCapdev, deleteCapdev, duplicateCapdevs, getAllCapdevs, getCapdevById, getCapdevFolders, getCapdevPage, getCapdevBudgetHistory, getCapdevFieldDefinitions, getCurrentUserAccess, getDepartmentOptions, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
+import { bulkManageCapdevs, archiveCapdev, restoreCapdev, createCapdev, deleteCapdev, duplicateCapdevs, getAllCapdevs, getCapdevById, getCapdevFolders, getCapdevBudgetHistory, updateCapdev, type AppRole, type StatusAttachment } from '@/app/actions';
 import { validateMoney } from '@/lib/request-validation';
 import { manilaDate } from '@/lib/manila-date';
 import DateField from '@/components/DateField';
@@ -75,6 +78,8 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
   const [definitions, setDefinitions] = useState<DynamicField[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
+  const configurationLoaded = useRef(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<CapdevFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState(filters);
@@ -107,7 +112,6 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
   const filterAccountId = useRef<string | null>(null);
   const saveProjectInFlight = useRef(false);
 
-  useEffect(() => { if (session.data) void getCurrentUserAccess().then((access) => { if (access.success) setRole(access.role); }); }, [session.data]);
 
   useEffect(() => {
     const focusTarget = (targetId: string) => {
@@ -169,12 +173,21 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
   };
   const loadData = useCallback(async () => {
     if (!userId) return;
-    if (!folderId) { setLoading(false); return; }
     const sequence = ++loadSequence.current;
     try {
-      const result = await getCapdevPage({ folderId, page, search, filters, archived: showArchived,
-        focusId: notificationFocus ? Number(notificationFocus.targetId.replace('capdev-record-', '')) : undefined });
+      const response = await readPortal('capdev', { folderId, page, search: debouncedSearch, filters, archived: showArchived, configuration: !configurationLoaded.current,
+        focusId: notificationFocus ? Number(notificationFocus.targetId.replace('capdev-record-', '')) : undefined }, userId);
       if (sequence !== loadSequence.current) return;
+      const result = response.page;
+      if (response.configuration) {
+        const { fields, departments: options, access, folders } = response.configuration;
+        setDefinitions(fields.map(field => ({ ...field, options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [] })));
+        setDepartmentOptions(options);
+        if (access.success) setRole(access.role);
+        if (folders?.success) setFolderOptions(folders.folders);
+        configurationLoaded.current = true;
+      }
+      if (!result) { setLoadError(''); return; }
       if (!result.success) { setLoadError(result.error); return; }
       if (notificationFocus) setShowArchived(result.archived);
       setLoadError('');
@@ -199,7 +212,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [folderId, userId, page, search, filters, notificationFocus, showArchived]);
+  }, [folderId, userId, page, debouncedSearch, filters, notificationFocus, showArchived]);
 
   useEffect(() => {
     let active = true;
@@ -208,17 +221,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
     return () => { active = false; sequenceRef.current++; };
   }, [loadData]);
   useAttachmentRefresh(loadData);
-  useEffect(() => {
-    if (!userId) return;
-    let active = true;
-    void Promise.all([getCapdevFieldDefinitions(), getDepartmentOptions(), getCapdevFolders()]).then(([fields, options, folders]) => {
-      if (!active) return;
-      setDefinitions(fields.map((field) => ({ ...field, options: Array.isArray(field.options) ? field.options.filter((option): option is string => typeof option === 'string') : [] })));
-      setDepartmentOptions(options);
-      if (folders.success) setFolderOptions(folders.folders);
-    }).catch(() => { if (active) setLoadError('Unable to load project configuration.'); });
-    return () => { active = false; };
-  }, [userId]);
+
 
   const pageCount = Math.max(1, Math.ceil(total / 6));
   const visible = projects;
@@ -544,7 +547,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
                 <Stack spacing={1.5} sx={{ my: 1 }}><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Initial Balance</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: project.archivedAt ? 'text.secondary' : 'primary.dark' }}>{formatCurrency(project.initialBudget)}</Typography></Stack><Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}><Typography variant="body2" color="text.secondary">Remaining Balance</Typography><Typography variant="body2" sx={{ fontWeight: '700', color: project.archivedAt ? 'text.secondary' : Number(project.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(project.budget)}</Typography></Stack></Stack>
                 <Divider sx={{ my: 2 }} />
                 <Stack direction="row" sx={{ mt: 'auto', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                  <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} onClick={() => router.push(`/portal/capdev/${project.id}/requests`)} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
+                  <Button variant="text" color="primary" endIcon={<ChevronRightIcon />} component={Link} href={`/portal/capdev/${project.id}/requests`} sx={{ p: 0, minWidth: 0, fontWeight: '700', '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}>
                     View Requests
                   </Button>
                   <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>

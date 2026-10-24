@@ -7,7 +7,7 @@ import { getEmailNotificationPreferences, saveEmailNotificationPreferences } fro
 import { DEFAULT_EMAIL_TYPES, NOTIFICATION_FILTERS, type NotificationFilterType } from '@/lib/notification-types';
 import ActionErrorDialog from '@/components/ActionErrorDialog';
 
-export default function EmailNotificationSettings() {
+export default function EmailNotificationSettings({ label = 'Configure Email Notifications' }: { label?: string }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<NotificationFilterType[]>(DEFAULT_EMAIL_TYPES);
   const [loading, setLoading] = useState(false);
@@ -43,9 +43,10 @@ export default function EmailNotificationSettings() {
         color="primary"
         endIcon={<ChevronRight />}
         onClick={() => void handleOpen()}
+        aria-label="Configure email notifications"
         sx={{ p: 0, minWidth: 0, fontWeight: 700, '&:hover': { bgcolor: 'transparent', color: 'primary.dark' } }}
       >
-        Configure Email Notifications
+        {label}
       </Button>
       <Dialog open={open} onClose={() => { if (!saving) setOpen(false); }} fullWidth maxWidth="sm" aria-labelledby="email-notification-settings-title">
         <DialogTitle id="email-notification-settings-title" sx={{ fontWeight: 800 }}>Email Notifications</DialogTitle>

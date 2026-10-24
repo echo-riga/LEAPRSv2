@@ -1,0 +1,5 @@
+simulation: google-storage
+routing: path
+mocks:
+  - routeKey: google
+    path: ../mocks/google-storage/config.yaml

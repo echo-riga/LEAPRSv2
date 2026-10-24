@@ -20,6 +20,23 @@ export const connections = pgTable('connections', {
   status: varchar('status', { length: 50 }).notNull(),
 });
 
+export const googleStorageConnections = pgTable('google_storage_connections', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull(),
+  email: text('email').notNull(),
+  encryptedRefreshToken: text('encrypted_refresh_token').notNull(),
+  rootFolderId: text('root_folder_id').notNull().unique(),
+  isActive: boolean('is_active').default(false).notNull(),
+  isLegacy: boolean('is_legacy').default(false).notNull(),
+  connectedById: text('connected_by_id'),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, table => [uniqueIndex('google_storage_one_active_idx').on(table.isActive).where(sql`${table.isActive} = true`)]);
+
+export const googleDriveResources = pgTable('google_drive_resources', {
+  fileId: text('file_id').primaryKey(),
+  rootFolderId: text('root_folder_id').notNull(),
+});
+
 export const users = pgTable('users', {
   id: text('id').primaryKey(),
   role: varchar('role', { length: 50 }).default('employee').notNull(),
@@ -40,7 +57,7 @@ export const requestStorageFolders = pgTable('request_storage_folders', {
   requestId: integer('request_id').references(() => requests.id, { onDelete: 'cascade' }),
   userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   rootFolderId: text('root_folder_id').notNull(),
-}, (table) => [uniqueIndex('request_storage_folders_request_idx').on(table.requestId)]);
+}, (table) => [uniqueIndex('request_storage_folders_request_root_idx').on(table.requestId, table.rootFolderId)]);
 
 // OAuth grants for remote MCP clients. Only hashes of bearer credentials are stored.
 export const mcpOAuthClients = pgTable('mcp_oauth_clients', {

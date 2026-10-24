@@ -1,5 +1,6 @@
 "use client";
 
+import { readPortal } from '@/lib/portal-read-client';
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Assessment as ReportIcon,
@@ -10,6 +11,7 @@ import {
   Refresh as ResetIcon,
 } from "@mui/icons-material";
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -37,7 +39,7 @@ import {
 import {
   generateMonitoringSheet,
   generateRequestReportPdf,
-  getMonitoringReportData,
+  type getMonitoringReportData,
   getRequestReportData,
   type RequestReportData,
   type RequestReportRow,
@@ -407,6 +409,8 @@ export default function ReportsPage() {
     requestFields: [],
   });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [retry, setRetry] = useState(0);
   const [selectedCapdevIds, setSelectedCapdevIds] = useState<number[]>([]);
   const [selectedCapdevFields, setSelectedCapdevFields] = useState<number[]>(
     [],
@@ -437,12 +441,16 @@ export default function ReportsPage() {
   const reportTableRef = useRef<HTMLTableElement>(null);
 
   useEffect(() => {
-    void getMonitoringReportData().then((result) => {
+    let active = true;
+    void readPortal('reports', {}).then((result) => {
+      if (!active) return;
+      setLoadError('');
       setData(result);
       setSelectedCapdevIds(result.capdevs.map((capdev) => capdev.id));
       setLoading(false);
-    });
-  }, []);
+    }).catch(() => { if (active) { setLoading(false); setLoadError('Unable to load reports. Please try again.'); } });
+    return () => { active = false; };
+  }, [retry]);
 
   const visibleCapdevs = useMemo(
     () =>
@@ -583,6 +591,7 @@ export default function ReportsPage() {
     setGenerating(false);
   };
 
+  if (loadError) return <Alert severity="error">{loadError}<Button onClick={() => setRetry(value => value + 1)}>Retry</Button></Alert>;
   if (loading) return <ReportsSkeleton />;
 
   return (

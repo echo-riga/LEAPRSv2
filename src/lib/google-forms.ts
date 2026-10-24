@@ -1,3 +1,4 @@
+import { getActiveGoogleStorage, getGoogleDriveAccessToken, getGoogleResourceRoot, registerGoogleResource } from '@/lib/google-storage';
 type QuestionTemplate = {
   title: string;
   kind: 'rating' | 'short';
@@ -126,28 +127,8 @@ function isPlaceholderResponse(value: string) {
   return /^(?:none|n\/?a|na|nil|nothing|no comment|not applicable|all|everything)$/i.test(normalized);
 }
 
-async function getGoogleAccessToken() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error('Google OAuth is not configured.');
-  }
-
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    }),
-  });
-  if (!response.ok) throw new Error('Unable to authorize Google Forms.');
-  const token = await response.json() as { access_token?: string };
-  if (!token.access_token) throw new Error('Google did not return an access token.');
-  return token.access_token;
+async function getGoogleAccessToken(formId?: string) {
+  return getGoogleDriveAccessToken(formId ? await getGoogleResourceRoot(formId) : undefined);
 }
 
 async function googleJson<T>(url: string, accessToken: string, init?: RequestInit): Promise<T> {
@@ -174,7 +155,8 @@ export async function createRequestEvaluationForm(input: {
   requestId: number;
   aipCode: string;
 }): Promise<GeneratedGoogleForm> {
-  const accessToken = await getGoogleAccessToken();
+  const root = (await getActiveGoogleStorage()).rootFolderId;
+  const accessToken = await getGoogleDriveAccessToken(root);
   // Google Forms keeps this as the editable Section 1 title. Coordinators set
   // the actual seminar name with the Edit Form action after generation.
   const title = 'TITLE';
@@ -184,6 +166,8 @@ export async function createRequestEvaluationForm(input: {
     body: JSON.stringify({ info: { title, documentTitle: title } }),
   });
   if (!created.formId) throw new Error('Google Forms did not return a form ID.');
+  await registerGoogleResource(created.formId, root);
+  await googleJson('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(created.formId) + '?addParents=' + encodeURIComponent(root) + '&removeParents=root&fields=id', accessToken, { method: 'PATCH', body: JSON.stringify({ appProperties: { leaprsStorageRoot: root, leaprsRequestId: String(input.requestId) } }) });
 
   // The form title and description are Section 1. Every evaluation group,
   // including Guest Speaker, must begin with its own page break.
@@ -251,7 +235,7 @@ export async function createRequestEvaluationForm(input: {
 
 export async function isLegacyRequestEvaluationForm(formId: string) {
   try {
-    const accessToken = await getGoogleAccessToken();
+    const accessToken = await getGoogleAccessToken(formId);
     const form = await googleJson<GoogleForm>(`https://forms.googleapis.com/v1/forms/${formId}`, accessToken);
     const title = form.info?.title?.trim() || '';
     const hasGuestSpeakerSection = form.items?.some((item) => item.pageBreakItem && item.title === 'Guest Speaker');
@@ -323,7 +307,7 @@ async function summarizeWithGroq(input: {
 }
 
 export async function getEvaluationSummary(formId: string): Promise<EvaluationSummary> {
-  const accessToken = await getGoogleAccessToken();
+  const accessToken = await getGoogleAccessToken(formId);
   const [form, responses] = await Promise.all([
     googleJson<GoogleForm>(`https://forms.googleapis.com/v1/forms/${formId}`, accessToken),
     getAllResponses(formId, accessToken),
@@ -386,7 +370,7 @@ export async function getEvaluationSummary(formId: string): Promise<EvaluationSu
 }
 
 export async function getEvaluationAverage(formId: string): Promise<number | null> {
-  const accessToken = await getGoogleAccessToken();
+  const accessToken = await getGoogleAccessToken(formId);
   const [form, responses] = await Promise.all([
     googleJson<GoogleForm>(`https://forms.googleapis.com/v1/forms/${formId}`, accessToken),
     getAllResponses(formId, accessToken),

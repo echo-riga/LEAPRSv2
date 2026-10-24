@@ -1,6 +1,6 @@
 'use client';
 
-import { createGoogleDriveUploadSessions, type StatusAttachment, type RequestUploadContext } from '@/app/actions';
+import { createGoogleDriveUploadSessions, registerDirectGoogleDriveUploads, type StatusAttachment, type RequestUploadContext } from '@/app/actions';
 
 export async function uploadFilesDirectlyToGoogleDrive(files: File[], context?: RequestUploadContext) {
   try {
@@ -27,6 +27,11 @@ export async function uploadFilesDirectlyToGoogleDrive(files: File[], context?: 
         url: uploaded.webViewLink || `https://drive.google.com/open?id=${uploaded.id}`,
       };
     }));
+    if (uploadedFiles.length) {
+      if (!prepared.folderId) throw new Error('The upload folder is unavailable.');
+      const confirmed = await registerDirectGoogleDriveUploads(uploadedFiles.map(file => file.id), prepared.folderId);
+      if (!confirmed.success) throw new Error(confirmed.error);
+    }
     return { success: true as const, files: uploadedFiles, folderId: prepared.folderId };
   } catch (error) {
     console.error('Direct Google Drive upload failed:', error);

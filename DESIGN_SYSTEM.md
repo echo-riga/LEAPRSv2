@@ -50,6 +50,8 @@ The legacy guide describes Paper as `#fafcfa`; the theme currently uses white Pa
 
 ## 4. Page shell and cards
 
+- Admin System Settings includes Change Drive Storage opening a simple dialog showing only the current storage owner email and a Change account button. Omit connection lists, Active badges, folder links, and explanatory paragraphs. Reopen the dialog after Google authorization to show its result. Load storage settings only when opened; retain the existing card grid without a separate storage card. Explain automatic folder creation/reuse and preservation of older files. Never show credentials or ask for folder IDs.
+
 - `/portal` sends every role inside the active CapDev folder. The project list has no folder-root Back action for any role. Preserve normal Back navigation in requests and timelines.
 - An Admin-only stacked-folder icon (`FolderCopyOutlined`) beside See Archives opens a floating panel styled like LEAPRS Help, with a green header, Add folder (+), Close, and a scrollable list. Highlight the active row in green with a check; selecting a row activates that folder system-wide. Each row has Rename and Delete icons. Rename replaces the name with a focused input and Save/Cancel icons; Enter saves and Escape cancels. Add uses an inline input in the panel. Disable deletion of the selected folder and retain the shared permanent-deletion confirmation. There is no separate activation action or folder-management page; legacy `/portal/folders` links redirect to the project list.
 - Project editors include a Folder selector for Admins. Folder deletion explicitly names the folder and warns that active and archived projects, requests, progress, notifications, and managed attachments will be permanently deleted.
@@ -58,6 +60,7 @@ The legacy guide describes Paper as `#fafcfa`; the theme currently uses white Pa
 - Use fluid portal containers with the established responsive gutters. Titles and content share the left edge.
 - Preserve the current fixed, light portal header: greeting, role/department indicators, help, Admin-only Open Drive Folder, notifications, eligible Settings, fullscreen, and sign-out controls. Open Drive Folder uses the three-color triangular Google Drive logo, opens a new tab, and does not imply that the link grants Google permissions. Do not restore the legacy description of a solid green header with a clock.
 - Resource pages show up to six concise summary boxes in a desktop three-column, two-row grid with pagination. Reduce columns responsively.
+- CapDev and request searches wait 300 ms after typing before fetching. Request pagination and filters apply on the server, including archive views and notification focus targets. Keep saved filter preferences and existing six-card navigation. Timeline content appears before missing evaluation links finish preparation; header progress shares the loaded timeline. Background refreshes pause while the tab is hidden.
 - Keep card actions aligned at the bottom. Show only fixed core summary properties; configured values and attachments belong in full views/forms.
 - Primary creation actions use the existing green extended FAB with Add icon and label at bottom-right.
 - Use compact MUI chips for status and role indicators. Do not introduce a competing badge system.
@@ -76,7 +79,7 @@ Admin Settings retains six equal outlined cards in a desktop three-column, two-r
 
 - Cards share an icon tile, title, concise description, optional metadata space, divider, and green text-action footer with chevrons.
 - Reserve equivalent content/footer space so dividers and actions align across a row, including cards without metadata chips.
-- System Settings places Configure Email Notifications and the Maintenance Mode switch/label beside each other in its footer. Do not repeat an obvious active/inactive subtitle.
+- System Settings places the compact Maintenance switch in its body, beneath the description. Group Email Notifications and Change Drive Storage as matching green text links in the footer with consistent gaps, wrapping on narrow screens. Keep the full Configure Email Notifications label elsewhere. Do not stretch actions across the card or repeat an active/inactive subtitle.
 - Status Update Configuration places Configure Fields and Configure Inactivity Reminders in the same footer.
 - Request Configuration provides Configure External Fields and Configure In-House Fields as equal actions.
 - Viewers receive the Reports & Analytics card only. Employees do not get Settings access; their email preferences and AI guide remain reachable from header tools.

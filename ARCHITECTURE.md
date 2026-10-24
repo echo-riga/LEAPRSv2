@@ -4,6 +4,18 @@ Reviewed against the workspace on October 10, 2026, including uncommitted backgr
 
 ## 1. Components and boundaries
 
+### Dynamic Google storage
+
+Admin System Settings uses `DriveStorageAction` to open a dialog that mounts `GoogleStorageSettings` on demand, backed by `/api/google-storage` routes. The dialog opens automatically on return from Google authorization. Its status endpoint returns only the active owner email and configuration availability; legacy placeholder identities are resolved once through Drive About and persisted. Previous connections stay retained server-side. `POST /connect` validates the same-origin request and live Admin role, then starts Google authorization with offline access, explicit consent/account selection, state, and S256 PKCE. An encrypted HttpOnly, SameSite=Lax cookie binds the verifier/state to the initiating Admin, canonical callback URI, and ten-minute expiry. The callback clears that exact cookie path, rechecks Admin access/state, exchanges the code, requires Drive/Forms scopes, and obtains account identity from Drive About. Tokens and authorization codes are never returned to the browser or logged.
+
+`google-storage-oauth.ts` finds the saved folder ID or a private client-specific marker. A single owned, writable LEAPRS folder directly in My Drive can be adopted and marked; otherwise it creates LEAPRS. Multiple ambiguous matches fail safely. A PostgreSQL advisory lock serializes folder discovery/creation and activation across callbacks and manual selection. A partial unique index permits only one active connection. Provider failures/cancellation preserve the previous selection; an external folder created just before a database failure is found by its marker on retry.
+
+`google_storage_connections` retains encrypted refresh tokens, original roots, account IDs/emails, activation flags, and legacy provenance. AES-256-GCM uses a key derived from `GOOGLE_STORAGE_ENCRYPTION_KEY`, falling back to the existing `NEON_AUTH_COOKIE_SECRET`; keep that key stable or re-encrypt credentials when rotating it. `google_drive_resources` binds file/Form IDs to immutable original roots. Legacy unregistered resources resolve to the retained legacy connection, never the newly active account. Upload preparation pins root/token; completion locates tagged files across retained accounts and checks existing record/user/upload/parent ownership before registering them. Multipart and older direct-upload helpers also register origins. Request folders are unique per `(request_id, root_folder_id)`. Cleanup and reference-file streaming use the original account. New Forms are registered and placed in the active root; existing Forms use their recorded/legacy connection.
+
+Apply `npm run db:google-storage-migrate` before deploying this version. Migration 0024 creates the tables/indexes and imports the current environment refresh token/root as an encrypted active legacy connection without contacting Google. It is idempotent and does not overwrite reconnected credentials. Keep the old environment values until migration/import is verified; after that both are optional legacy fallbacks. Keep `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Set `APP_URL` to the website origin and register `<APP_URL>/api/google-storage/callback` as an authorized redirect URI on that OAuth client. Enable Drive and Forms APIs and configure the consent audience/scopes (including test users if the Google app is in Testing). Changing domains requires updating the allowed callback and APP_URL, not creating another OAuth client.
+
+`scripts/google-storage.test.mjs` exercises encryption, state/PKCE binding, folder creation/reuse/adoption, authorization failures, and Admin permissions against a local HTTP provider. `scripts/google-storage-database.test.mjs` runs actual callback logic in disposable schemas to verify rollback, concurrent activation, reconnects, original-root resolution, and upload recovery. The provider subset and local fixture live under `postman/`; the fixture is also run directly by the tests because the local Postman dataset runner encountered TLS initialization failures. No real Google account is switched by these tests. `GOOGLE_STORAGE_TOKEN_URL` and `GOOGLE_STORAGE_DRIVE_API_URL` are server-only local test overrides; leave them unset in production.
+
 ### CapDev folders
 
 `capdev_folders.reference_image` stores a single nullable Drive descriptor (ID, name, MIME type, original managed root, and version). Apply `0023_capdev_folder_reference_image.sql` through `npm run db:folder-reference-image-migrate`. `CapdevReferenceImage` is shared by the folder's active/archive views. Admin-only save/remove actions lock the folder and audit descriptor changes. Uploads accept PDF, JPG, PNG, and WebP, validate the file signature and 4 MiB limit, then wait for managed Drive storage before saving; they do not use the background business-record uploader. Replacement cleans the previous file after commit and tries to remove newly uploaded bytes on a failed save. Drive cleanup failures are logged and may leave unused bytes in storage; descriptor changes remain committed. Folder deletion also attempts image cleanup.
@@ -61,6 +73,18 @@ flowchart LR
 | AI help and setup guide | [PortalChatbot.tsx](src/components/PortalChatbot.tsx), [ConnectAiAppsDialog.tsx](src/components/ConnectAiAppsDialog.tsx), [ai-app-guides.ts](src/lib/ai-app-guides.ts) |
 | Evaluation / reporting | [google-forms.ts](src/lib/google-forms.ts), [analytics-metrics.ts](src/lib/analytics-metrics.ts), report actions in `actions.ts` |
 | Presentation | [ThemeRegistry.tsx](src/theme/ThemeRegistry.tsx), [Skeletons.tsx](src/components/Skeletons.tsx) |
+
+### Portal read performance
+
+`POST /api/portal/read` dispatches allowlisted CapDev, request-page, timeline, portal-context, notification, analytics, and monitoring-report reads with private/no-store responses. It rejects cross-origin calls, oversized input, unknown operations, and invalid IDs. Underlying actions retain live authorization checks. `read-context.ts` shares the access-check promise only within this HTTP request through AsyncLocalStorage; roles/sessions are never cached across requests. Bundles run independent database work concurrently and avoid the client Server Action dispatch queue. Mutations retain Server Actions.
+
+`/portal` resolves the active folder on the server and renders its projects directly, preserving hash targets without a client landing redirect. Request lists use SQL filters/counts and stable date/ID ordering with six-row pagination. Notification targets resolve the correct archive view/page within live ownership/folder scope. CapDev and request search debounce for 300 ms. Form definitions load once per page mount rather than per poll; returning from configuration remounts the page. Dynamic request/timeline components are keyed by their IDs.
+
+Header progress consumes the timeline page's loaded data. Existing evaluation links render immediately; missing links are prepared after the timeline appears. Periodic refreshes skip hidden tabs, coalesce focus/visibility events, and avoid overlapping refreshes. The read client deduplicates only in-flight calls with an explicit account key and retains no completed response cache.
+
+Reminder synchronization selects only due, uncreated activity episodes. Inactivity summaries fetch the latest row per request plus a completion-existence check rather than full histories. Notification read state joins only returned notifications. Analytics restricts audit details to the chosen activity window and transfers milestone events plus the latest progress at the snapshot date, preserving historical status/budget reconstruction. Monthly reports filter their month in SQL. Spreadsheet/PDF modules load only for exports. Monitoring-report previews still load eligible records, and timelines still load their visible history; these remain growth costs. Deployment cold starts and network latency require production measurement.
+
+`scripts/portal-reads.test.mjs` covers request-local access isolation, account-scoped in-flight deduplication/retry, and endpoint validation/cache headers. `scripts/request-reminders-database.test.mjs` also exercises request pagination/filter/focus permissions and compares optimized historical analytics with complete-history results in disposable schemas.
 
 ## 3. Data model
 
@@ -262,8 +286,9 @@ Values are intentionally omitted. Local `.env.local` is for development; configu
 | `CRON_SECRET` | Secret | Authenticates scheduled email/reminder processing |
 | `GOOGLE_CLIENT_ID` | Config | Google OAuth application identifier |
 | `GOOGLE_CLIENT_SECRET` | Secret | Google OAuth application credential |
-| `GOOGLE_REFRESH_TOKEN` | Secret | Server Google Drive/Forms authorization |
-| `GOOGLE_DRIVE_PARENT_FOLDER_ID` | Config | Managed Drive storage root identifier |
+| `GOOGLE_REFRESH_TOKEN` | Optional legacy secret | Imported into encrypted storage by migration 0024; fallback for older installations |
+| `GOOGLE_DRIVE_PARENT_FOLDER_ID` | Optional legacy config | Original root imported by migration 0024; new roots are discovered/created automatically |
+| `GOOGLE_STORAGE_ENCRYPTION_KEY` | Optional secret | Stable 32+ character storage encryption secret; defaults to existing `NEON_AUTH_COOKIE_SECRET` |
 | `GEMINI_API_KEY` | Secret | Gemini access |
 | `GEMINI_CHAT_MODEL` | Config | Gemini model override; default coded as `gemini-2.5-flash` |
 | `GROQ_API_KEY` | Secret | Written evaluation summary provider |

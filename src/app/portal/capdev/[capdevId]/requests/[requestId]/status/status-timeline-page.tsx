@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Add as AddIcon,
@@ -50,16 +50,13 @@ import {
 import { TimelineGridSkeleton } from '@/components/Skeletons';
 import ReadOnlyDynamicField from '@/components/ReadOnlyDynamicField';
 import EvaluationSummaryDialog from '@/components/EvaluationSummaryDialog';
+import { readPortal } from '@/lib/portal-read-client';
+import { useVisibleRefresh } from '@/lib/use-visible-refresh';
 import { authClient } from '@/lib/auth/client';
 import {
   createRequestStatusUpdate,
-  getCapdevById,
-  getCurrentUserAccess,
   getOrCreateRequestEvaluationForms,
-  getRequestById,
   getRequestEvaluationSummary,
-  getRequestStatusUpdates,
-  getStatusUpdateFieldDefinitions,
   reopenRequest,
   resumeRequestProgress,
   stopRequestProgress,
@@ -337,6 +334,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
   const [reopenDialogOpen, setReopenDialogOpen] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [reopenError, setReopenError] = useState('');
+  const configurationLoaded = useRef(false);
+  const loadSequence = useRef(0);
+  const [loadError, setLoadError] = useState('');
+  const formsPreparation = useRef<{ id: number; promise: ReturnType<typeof getOrCreateRequestEvaluationForms> } | null>(null);
   const [formsModalOpen, setFormsModalOpen] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [summaryModalOpen, setSummaryModalOpen] = useState(false);
@@ -427,23 +428,15 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     return () => window.clearTimeout(timeoutId);
   }, [loading, reminderRequested, timelineFocus, updates]);
 
-  useEffect(() => {
-    if (session.data) {
-      void getCurrentUserAccess().then((access) => {
-        if (access.success) setRole(access.role);
-      });
-    }
-  }, [session.data]);
-
   const loadData = useCallback(async () => {
-    const [requestData, updateData, capdevData, fieldDefs] = await Promise.all([
-      getRequestById(requestId),
-      getRequestStatusUpdates(requestId),
-      getCapdevById(capdevId),
-      getStatusUpdateFieldDefinitions(),
-    ]);
+    const sequence = ++loadSequence.current;
+    try {
+    const result = await readPortal('timeline', { capdevId, requestId, configuration: !configurationLoaded.current });
+    if (sequence !== loadSequence.current) return;
+    setLoadError('');
+    const { request: requestData, updates: updateData, project: capdevData, fields: fieldDefs } = result;
 
-    setDefinitions(
+    if (fieldDefs) setDefinitions(
       fieldDefs.map((field) => ({
         ...field,
         options: Array.isArray(field.options)
@@ -452,7 +445,9 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       }))
     );
 
+    if (result.access.success) setRole(result.access.role);
     if (capdevData) {
+      window.dispatchEvent(new CustomEvent('leaprs:capdev-parent', { detail: { capdevId: capdevData.id, folderId: capdevData.folderId } }));
       setCapdev({
         id: capdevData.id,
         archivedAt: capdevData.archivedAt,
@@ -469,15 +464,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false });
         }
       }
-      let formFields = {
+      const formFields = {
         participantFeedbackFormId: requestData.participantFeedbackFormId,
         participantFeedbackFormUrl: requestData.participantFeedbackFormUrl,
       };
-      if (!requestData.archivedAt && !capdevData?.archivedAt && requestData.status === 'completed' && requestData.setting === 'internal') {
-        const generated = await getOrCreateRequestEvaluationForms(requestId);
-        if (generated.success) formFields = generated.forms;
-        else setError(generated.error);
-      }
       setRequest({
         id: requestData.id,
         inactivity: requestData.inactivity,
@@ -501,27 +491,37 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             : {}) as Record<string, unknown>,
         }))
       );
-      window.dispatchEvent(new CustomEvent('leaprs:request-timeline-changed', { detail: requestId }));
+      window.dispatchEvent(new CustomEvent('leaprs:request-timeline-changed', { detail: { requestId, request: requestData, updates: updateData } }));
     }
-    setLoading(false);
+    if (fieldDefs) configurationLoaded.current = true;
+    } catch { if (sequence === loadSequence.current) setLoadError('Unable to load the timeline. Please try again.'); }
+    finally { if (sequence === loadSequence.current) setLoading(false); }
   }, [capdevId, requestId, router]);
 
   useEffect(() => {
+    const sequenceRef = loadSequence;
     void Promise.resolve().then(loadData);
+    return () => { sequenceRef.current++; };
   }, [loadData]);
   useAttachmentRefresh(loadData);
 
+  useVisibleRefresh(loadData, ['leaprs:reminder-settings-changed']);
+
+  // Existing links render immediately. Only repair missing links after the
+  // timeline is visible, rather than waiting on Google during every refresh.
+  const needsEvaluationForm = request?.status === 'completed' && request.setting === 'internal'
+    && !request.archivedAt && !capdev?.archivedAt && (!request.participantFeedbackFormId || !request.participantFeedbackFormUrl);
   useEffect(() => {
-    const refresh = () => { void loadData(); };
-    const interval = window.setInterval(refresh, 30_000);
-    window.addEventListener('leaprs:reminder-settings-changed', refresh);
-    window.addEventListener('focus', refresh);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('leaprs:reminder-settings-changed', refresh);
-      window.removeEventListener('focus', refresh);
-    };
-  }, [loadData]);
+    if (!needsEvaluationForm) return;
+    if (formsPreparation.current?.id !== requestId) formsPreparation.current = { id: requestId, promise: getOrCreateRequestEvaluationForms(requestId) };
+    let active = true;
+    void formsPreparation.current.promise.then(result => {
+      if (!active) return;
+      if (result.success) setRequest(current => current?.id === requestId ? { ...current, ...result.forms } : current);
+      else setError(result.error);
+    }).catch(() => { if (active) setError('Unable to prepare the evaluation form.'); });
+    return () => { active = false; };
+  }, [needsEvaluationForm, requestId]);
 
   const hasDeductedBudget = useMemo(
     () => Boolean(request?.budgetDeductedAt) || updates.some((update) => update.subtractsRequestedAmount),
@@ -1012,6 +1012,8 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     return <TimelineGridSkeleton />;
   }
   if (!session.data) return null;
+  if (loadError) return <Alert severity="error">{loadError}<Button onClick={() => void loadData()}>Retry</Button></Alert>;
+
   if (!request) {
     return (
       <Box sx={{ py: 8, textAlign: 'center' }}>

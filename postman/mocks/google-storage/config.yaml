@@ -1,0 +1,10 @@
+version: 1
+name: google-storage
+slug: google-storage
+protocol: http
+port: 4500
+interceptRequests: false
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

@@ -4,8 +4,11 @@ import React, { Suspense, useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { AppBar, Box, Chip, IconButton, Stack, Toolbar, Tooltip, Typography, SvgIcon } from '@mui/material';
 import { ArrowBack as ArrowBackIcon, ExitToApp as ExitToAppIcon, Fullscreen as FullscreenIcon, FullscreenExit as FullscreenExitIcon, Settings as SettingsIcon } from '@mui/icons-material';
+import { readPortal } from '@/lib/portal-read-client';
+import { useVisibleRefresh } from '@/lib/use-visible-refresh';
+import { useCallback, useRef } from 'react';
 import { authClient } from '@/lib/auth/client';
-import { getCurrentUserAccess, getRootDriveFolderLink, getCapdevById, getPortalContext, type AppRole } from '@/app/actions';
+import { type AppRole } from '@/app/actions';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import NotificationsMenu from '@/components/NotificationsMenu';
 import PortalChatbot from '@/components/PortalChatbot';
@@ -28,34 +31,13 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
   const [capdevParent, setCapdevParent] = useState<{ capdevId: number; folderId: number } | null>(null);
   const capdevRouteId = Number(pathname.match(/^\/portal\/capdev\/(\d+)\/requests/)?.[1]);
   useEffect(() => {
-    if (!capdevRouteId) return;
-    let active = true;
-    void getCapdevById(capdevRouteId).then(project => { if (active && project) setCapdevParent({ capdevId: project.id, folderId: project.folderId }); });
-    return () => { active = false; };
-  }, [capdevRouteId]);
-  useEffect(() => {
-    if (!session.data) return;
-    let active = true;
-    let previousFolderId: number | null | undefined;
-    const refreshFolder = async () => {
-      try {
-        const context = await getPortalContext();
-        if (!active || !context.success) return;
-        const folderId = context.activeFolder?.id ?? null;
-        if (previousFolderId !== undefined && previousFolderId !== folderId) {
-          const path = window.location.pathname;
-          if (path === '/portal' && folderId !== null) router.replace('/portal/folders/' + folderId);
-          else if (path !== '/portal' && path !== '/portal/folders/' + folderId) router.replace('/portal');
-        }
-        previousFolderId = folderId;
-      } catch { /* The next refresh rechecks availability. */ }
+    const onParent = (event: Event) => {
+      const parent = (event as CustomEvent<{ capdevId: number; folderId: number }>).detail;
+      if (parent) setCapdevParent(parent);
     };
-    void refreshFolder();
-    const interval = window.setInterval(() => void refreshFolder(), 30000);
-    const onFocus = () => void refreshFolder();
-    window.addEventListener('focus', onFocus);
-    return () => { active = false; window.clearInterval(interval); window.removeEventListener('focus', onFocus); };
-  }, [router, session.data]);
+    window.addEventListener('leaprs:capdev-parent', onParent);
+    return () => window.removeEventListener('leaprs:capdev-parent', onParent);
+  }, []);
   const [greeting, setGreeting] = useState(getGreeting);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [role, setRole] = useState<AppRole | null>(null);
@@ -71,24 +53,28 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
     if (!session.isPending && !session.data) router.replace('/');
   }, [router, session.data, session.isPending]);
 
-  useEffect(() => {
+  const previousFolderId = useRef<number | null | undefined>(undefined);
+  const refreshContext = useCallback(async () => {
     if (!session.data) return;
-    void getCurrentUserAccess().then(async (access) => {
-      if (access.success) {
-        setRole(access.role);
-        setDepartment(access.department || null);
-        if (access.role === 'admin') {
-          const drive = await getRootDriveFolderLink();
-          setRootDriveUrl(drive.success ? drive.url : null);
-        } else {
-          setRootDriveUrl(null);
-        }
-        return;
-      }
+    const { context, access, drive } = await readPortal('context', {}, session.data.user.id);
+    if (!context.success || !access.success) {
       await authClient.signOut();
       router.replace('/');
-    });
+      return;
+    }
+    setRole(access.role);
+    setDepartment(access.department || null);
+    setRootDriveUrl(drive?.success ? drive.url : null);
+    const folderId = context.activeFolder?.id ?? null;
+    if (previousFolderId.current !== undefined && previousFolderId.current !== folderId) {
+      const path = window.location.pathname;
+      if (path === '/portal' && folderId !== null) router.replace('/portal/folders/' + folderId);
+      else if (path !== '/portal' && path !== '/portal/folders/' + folderId) router.replace('/portal');
+    }
+    previousFolderId.current = folderId;
   }, [router, session.data]);
+  useEffect(() => { void Promise.resolve().then(refreshContext).catch(() => {}); }, [refreshContext]);
+  useVisibleRefresh(refreshContext, ['leaprs:google-storage-changed']);
 
   useEffect(() => {
     PORTAL_ROUTES.forEach((route) => router.prefetch(route));
@@ -178,12 +164,12 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
             {!isDashboard && <Tooltip title="Back"><IconButton color="primary" onClick={() => router.push(backHref)} aria-label="Back"><ArrowBackIcon /></IconButton></Tooltip>}
             <PortalChatbot userRole={role} />
             {rootDriveUrl && <Tooltip title="Open Drive folder"><IconButton color="primary" component="a" href={rootDriveUrl} target="_blank" rel="noopener noreferrer" aria-label="Open Drive folder"><SvgIcon viewBox="0 0 24 26"><path fill="#0F9D58" d="M9 3 0 18h6L12 8Z" /><path fill="#F4B400" d="M9 3h6l9 15h-6Z" /><path fill="#4285F4" d="M0 18h24l-3 5H3Z" /></SvgIcon></IconButton></Tooltip>}
-            <NotificationsMenu />
+            <NotificationsMenu userId={session.data.user.id} />
             {role && role !== 'employee' && role !== 'employee-department' && !isSettingsPage && <Tooltip title="Settings"><IconButton color="primary" onClick={() => router.push(settingsHref)} aria-label="Settings"><SettingsIcon /></IconButton></Tooltip>}
             <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}><IconButton color="primary" onClick={handleFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>{isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}</IconButton></Tooltip>
             <Tooltip title="Sign out"><IconButton color="error" onClick={handleSignOut} aria-label="Sign out"><ExitToAppIcon /></IconButton></Tooltip>
           </Stack>
-          {statusRouteMatch && <Box sx={{ display: { xs: 'none', md: 'block' }, gridColumn: 2, gridRow: 1, minWidth: 0 }}><RequestTimelineProgress requestId={Number(statusRouteMatch[2])} /></Box>}
+          {statusRouteMatch && <Box sx={{ display: { xs: 'none', md: 'block' }, gridColumn: 2, gridRow: 1, minWidth: 0 }}><RequestTimelineProgress key={Number(statusRouteMatch[2])} requestId={Number(statusRouteMatch[2])} /></Box>}
         </Toolbar>
       </AppBar>
       <Box component="main" sx={{ minHeight: '100vh', boxSizing: 'border-box', px: { xs: 2, md: 3 }, pb: { xs: 2, md: 3 }, pt: { xs: '80px', md: '96px' } }}>{children}</Box>

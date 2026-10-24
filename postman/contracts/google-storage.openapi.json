@@ -1,0 +1,182 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Google storage integration dependency",
+    "version": "1.0.0",
+    "description": "Task-specific subset of Google OAuth and Drive v3. Sources: developers.google.com/identity/protocols/oauth2/web-server and developers.google.com/workspace/drive/api/reference/rest/v3/files."
+  },
+  "paths": {
+    "/token": {
+      "post": {
+        "summary": "post /token",
+        "responses": {
+          "200": {
+            "description": "Google response subset; see provider documentation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or authorization"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Unknown file"
+          }
+        }
+      }
+    },
+    "/about": {
+      "get": {
+        "summary": "get /about",
+        "responses": {
+          "200": {
+            "description": "Google response subset; see provider documentation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or authorization"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Unknown file"
+          }
+        }
+      }
+    },
+    "/files": {
+      "get": {
+        "summary": "get /files",
+        "responses": {
+          "200": {
+            "description": "Google response subset; see provider documentation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or authorization"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Unknown file"
+          }
+        }
+      },
+      "post": {
+        "summary": "post /files",
+        "responses": {
+          "200": {
+            "description": "Google response subset; see provider documentation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or authorization"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Unknown file"
+          }
+        }
+      }
+    },
+    "/files/{fileId}": {
+      "get": {
+        "summary": "get /files/{fileId}",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Google response subset; see provider documentation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or authorization"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Unknown file"
+          }
+        }
+      },
+      "patch": {
+        "summary": "patch /files/{fileId}",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Google response subset; see provider documentation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or authorization"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Unknown file"
+          }
+        }
+      }
+    }
+  }
+}

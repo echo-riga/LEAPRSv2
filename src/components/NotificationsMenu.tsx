@@ -1,5 +1,7 @@
 'use client';
 
+import { readPortal } from '@/lib/portal-read-client';
+import { useVisibleRefresh } from '@/lib/use-visible-refresh';
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import EmailNotificationSettings from '@/components/EmailNotificationSettings';
@@ -32,7 +34,6 @@ import {
   NotificationsActiveRounded as ReminderIcon,
 } from '@mui/icons-material';
 import {
-  getNotifications,
   markNotificationAsRead,
   markAllNotificationsAsRead,
   type NotificationItem,
@@ -109,7 +110,7 @@ function getNotificationDestination(item: NotificationItem) {
   return item.link;
 }
 
-export default function NotificationsMenu() {
+export default function NotificationsMenu({ userId }: { userId: string }) {
   const router = useRouter();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -131,7 +132,7 @@ export default function NotificationsMenu() {
 
   const fetchNotifications = useCallback(async () => {
     try {
-      const res = await getNotifications();
+      const res = await readPortal('notifications', {}, userId);
       if (res.success) {
         setNotifications(res.notifications);
         setUnreadCount(res.unreadCount);
@@ -139,19 +140,12 @@ export default function NotificationsMenu() {
     } catch (e) {
       console.error('Failed to load notifications:', e);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     void Promise.resolve().then(fetchNotifications);
-    const interval = window.setInterval(() => {
-      void fetchNotifications();
-    }, 30_000);
-    window.addEventListener('leaprs:reminder-settings-changed', fetchNotifications);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('leaprs:reminder-settings-changed', fetchNotifications);
-    };
   }, [fetchNotifications]);
+  useVisibleRefresh(fetchNotifications, ['leaprs:reminder-settings-changed']);
 
   const handleOpen = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);

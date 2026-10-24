@@ -112,6 +112,9 @@ For non-Admin roles, all project/request permissions above apply only inside the
 
 ## 8. Attachments and background uploads
 
+- Admins manage Google Drive storage from Settings. Connecting or changing an account uses Google authorization; entering an email alone never grants storage access. The system automatically reuses its saved/marked LEAPRS folder, adopts a single owned LEAPRS folder in My Drive, or creates one. Ambiguous folders or failed/cancelled authorization leave the existing active storage unchanged.
+- Exactly one connected storage root is active for new uploads and new evaluation forms. Retain previous encrypted connections and original resource roots for older files/forms, cleanup, and uploads already in progress. Switching does not move existing files. Requests may have one managed attachment folder per storage root. Reconnecting an account refreshes its authorization without discarding its previous roots. Only Admins see connection controls; credentials remain server-side.
+
 ### Saving and viewing
 
 - CapDev, request, progress, stopper, stopper response, and portal AI draft submissions save fields and pending file descriptors first. After successful saving, the form closes and Drive uploads continue in the background.
@@ -212,6 +215,10 @@ The seven categories are Inactivity Reminders, Request Submissions, Status Updat
 - Notifying business mutations and their notification event must commit in one transaction; notification failure rolls back the mutation. Email delivery remains asynchronous.
 - External tools support project lookup/listing, form schema, request status/summary, department budget, request drafts, attachment metadata references, and confirmed request submission. The attachment tool does not transfer file bytes to Drive.
 - Clients need remote HTTP MCP, OAuth discovery, dynamic client registration, and S256 PKCE support. Compatibility is not promised for every AI product.
+
+### Page loading
+
+- Portal navigation must preserve live role, ownership, department, active-folder, and archive checks while batching reads. Requests use six-record server pagination with matching filters and direct notification focus. Background refreshes must not repeatedly reload unchanged form configuration or block timeline display on Google Forms preparation.
 
 ## 13. Acceptance review
 

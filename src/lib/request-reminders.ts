@@ -22,10 +22,13 @@ export async function getRequestInactivitySummaries(requestIds: number[]) {
     readInactivityDays(),
     db.select({ request: requests, parentArchivedAt: capdevs.archivedAt }).from(requests)
       .innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(inArray(requests.id, requestIds)),
-    db.select({ id: requestStatusUpdates.id, requestId: requestStatusUpdates.requestId,
-      createdAt: requestStatusUpdates.createdAt, markAsComplete: requestStatusUpdates.markAsComplete })
+    db.selectDistinctOn([requestStatusUpdates.requestId], { id: requestStatusUpdates.id, requestId: requestStatusUpdates.requestId,
+      createdAt: requestStatusUpdates.createdAt, markAsComplete: sql<boolean>`EXISTS (
+        SELECT 1 FROM request_status_updates completed
+        WHERE completed.request_id = request_status_updates.request_id AND completed.mark_as_complete = true
+      )` })
       .from(requestStatusUpdates).where(inArray(requestStatusUpdates.requestId, requestIds))
-      .orderBy(desc(requestStatusUpdates.createdAt), desc(requestStatusUpdates.id)),
+      .orderBy(asc(requestStatusUpdates.requestId), desc(requestStatusUpdates.createdAt), desc(requestStatusUpdates.id)),
   ]);
   const latest = new Map<number, typeof updates[number]>();
   const completed = new Set<number>();
@@ -62,12 +65,23 @@ export function activeReminderCondition() {
 }
 
 export async function syncRequestReminders(access: ReminderAccess) {
+  const days = await readInactivityDays();
+  const latestId = sql`(SELECT u.id FROM request_status_updates u WHERE u.request_id = ${requests.id}
+    ORDER BY u.created_at DESC, u.id DESC LIMIT 1)`;
+  const lastActivity = sql`COALESCE((SELECT u.created_at FROM request_status_updates u
+    WHERE u.request_id = ${requests.id} ORDER BY u.created_at DESC, u.id DESC LIMIT 1), ${requests.createdAt})`;
+  const episodeKey = sql`'request:' || ${requests.id}::text || ':' ||
+    CASE WHEN ${latestId} IS NULL THEN 'submitted' ELSE 'update:' || (${latestId})::text END`;
   const scope = access.role === 'employee' ? eq(requests.userId, access.userId)
     : access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
   const records = await db.select({ id: requests.id, capdevId: requests.capdevId,
     requestorName: requests.requestorName, aipCode: capdevs.aipCode }).from(requests)
     .innerJoin(capdevs, eq(requests.capdevId, capdevs.id))
-    .where(and(activeFolderScope(), requestAccessScope(access), scope, eq(requests.status, 'in_progress'), isNull(requests.archivedAt), isNull(capdevs.archivedAt)))
+    .where(and(activeFolderScope(), requestAccessScope(access), scope, eq(requests.status, 'in_progress'), isNull(requests.archivedAt), isNull(capdevs.archivedAt),
+      sql`${lastActivity} <= NOW() - ${days} * INTERVAL '1 day'`,
+      notExists(db.select({ id: requestStatusUpdates.id }).from(requestStatusUpdates)
+        .where(and(eq(requestStatusUpdates.requestId, requests.id), eq(requestStatusUpdates.markAsComplete, true)))),
+      notExists(db.select({ id: notifications.id }).from(notifications).where(eq(notifications.reminderKey, episodeKey)))))
     .orderBy(asc(requests.id));
   // Bounded batches prevent oversized IN lists and inserts in large portals.
   for (let offset = 0; offset < records.length; offset += 100) {

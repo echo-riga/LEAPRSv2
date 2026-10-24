@@ -1,7 +1,9 @@
 'use server';
 
 import { db } from '@/db';
+import { readAccessOnce } from '@/lib/read-context';
 import { getGoogleDriveAccessToken } from '@/lib/google-drive-auth';
+import { getActiveGoogleStorage, getGoogleStorageForRoot, getGoogleResourceRoot, registerGoogleResource, getStorageRootForParent, findGoogleUpload, listGoogleStorages, getGoogleStorageToken } from '@/lib/google-storage';
 import { validateFolderReferenceImage } from '@/lib/folder-reference-image';
 import { isPendingAttachment, validatePendingAttachments, replacePendingAttachment, reconcilePendingAttachments, type UploadTarget } from '@/lib/background-attachments';
 import { notificationAudienceCondition } from '@/lib/notification-audience';
@@ -38,13 +40,11 @@ import {
 } from '@/lib/google-forms';
 import { hashPassword } from 'better-auth/crypto';
 import { getPasswordValidationError } from '@/lib/password-validation';
-import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { headers } from 'next/headers';
 import { getRequestInactivitySummaries, readInactivityDays, syncRequestReminders } from '@/lib/request-reminders';
 import { DEFAULT_INACTIVITY_DAYS, INACTIVITY_SETTING_KEY, inactivityMessage, validInactivityDays } from '@/lib/request-inactivity';
-import { renderRequestReportPdf } from '@/lib/request-report-pdf';
 import { getDynamicFieldValue, getInvalidComboboxFields, hasComboboxOptions } from '@/lib/dynamic-fields';
 import { getDynamicFieldAttachmentIds, hasStoredDynamicFieldValue, removeDynamicFieldValue } from '@/lib/dynamic-field-deletion';
 import { PORTAL_CHATBOT_GUIDE } from '@/lib/portal-chatbot-guide';
@@ -89,19 +89,21 @@ async function readMaintenanceMode() {
 }
 
 async function getCurrentAccess(): Promise<UserAccess | null> {
-  const { data: session } = await auth.getSession();
-  if (!session?.user) return null;
-  const [storedUser] = await db.select({ role: users.role, department: users.department, archivedAt: users.archivedAt }).from(users).where(eq(users.id, session.user.id)).limit(1);
-  if (!storedUser || storedUser.archivedAt) return null;
-  const role = VALID_ROLES.includes(storedUser.role as AppRole) ? storedUser.role as AppRole : 'employee';
-  if (role !== 'admin' && await readMaintenanceMode()) return null;
-  return {
-    userId: session.user.id,
-    role,
-    department: storedUser.department,
-    name: session.user.name || session.user.email || 'LEAPRS User',
-    email: session.user.email || undefined,
-  };
+  return readAccessOnce(async () => {
+    const { data: session } = await auth.getSession();
+    if (!session?.user) return null;
+    const [storedUser] = await db.select({ role: users.role, department: users.department, archivedAt: users.archivedAt }).from(users).where(eq(users.id, session.user.id)).limit(1);
+    if (!storedUser || storedUser.archivedAt) return null;
+    const role = VALID_ROLES.includes(storedUser.role as AppRole) ? storedUser.role as AppRole : 'employee';
+    if (role !== 'admin' && await readMaintenanceMode()) return null;
+    return {
+      userId: session.user.id,
+      role,
+      department: storedUser.department,
+      name: session.user.name || session.user.email || 'LEAPRS User',
+      email: session.user.email || undefined,
+    };
+  });
 }
 
 export async function askPortalChatbot(message: string, history: Array<{ sender: 'assistant' | 'user'; text: string }> = []) {
@@ -386,11 +388,13 @@ export async function getCurrentUserAccess() {
 export async function getRootDriveFolderLink() {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin') return unauthorized;
-  const folderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID?.trim();
+  try {
+  const folderId = (await getActiveGoogleStorage()).rootFolderId;
   if (!folderId || !/^[A-Za-z0-9_-]+$/.test(folderId)) {
     return { success: false as const, error: 'The root Google Drive folder is not configured.' };
   }
   return { success: true as const, url: `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}` };
+  } catch { return { success: false as const, error: 'Connect Google Drive in Settings.' }; }
 }
 
 export async function getMaintenanceMode() {
@@ -1156,7 +1160,7 @@ export async function getCapdevFolderReferenceImage(folderId: number) {
 async function cleanupFolderReferenceImage(image: (typeof capdevFolders.$inferSelect)['referenceImage']) {
   if (!image) return;
   try {
-    if (image.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID) throw new Error('Untrusted image storage root.');
+    await getGoogleStorageForRoot(image.rootFolderId);
     await deleteManagedDriveAttachments([{ fileId: image.id, parentFolderId: image.rootFolderId }]);
   } catch (error) { console.warn('Unable to clean up replaced folder reference image:', error); }
 }
@@ -1172,8 +1176,8 @@ export async function saveCapdevFolderReferenceImage(folderId: number, form: For
     const actor = await getActorSnapshot(access);
     const result = await withTransaction(async tx => {
       const folder = await lockCapdevFolder(tx, folderId);
-      const token = await getGoogleDriveAccessToken();
-      const rootFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID!;
+      const rootFolderId = (await getActiveGoogleStorage()).rootFolderId;
+      const token = await getGoogleDriveAccessToken(rootFolderId);
       const stored = await uploadFileToGoogleDrive(file, token, rootFolderId);
       const image = { id: stored.id, name: file.name, mimeType: file.type, rootFolderId, version: crypto.randomUUID() };
       uploaded = image;
@@ -1289,13 +1293,11 @@ async function cleanupCapdevStorage(tx: Transaction, projects: (typeof capdevs.$
     const attachmentIds = (info: unknown) => fields.flatMap(field => getDynamicFieldAttachmentIds((info || {}) as Record<string, unknown>, field));
     const retained = new Set(otherProjects.flatMap(project => attachmentIds(project.additionalInfo)));
     const files = [...new Set(projects.flatMap(project => attachmentIds(project.additionalInfo)))].filter(fileId => !retained.has(fileId));
-    const root = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
-    if (files.length && !root) throw new Error('Google Drive storage is not configured.');
+
     // Never delete a legacy JSON folder ID; only trusted server mappings qualify.
     if (storageFolders.length) {
-      const token = await getGoogleDriveAccessToken();
       for (const stored of storageFolders) {
-        if (stored.rootFolderId !== root) throw new Error('Untrusted storage root.');
+        const token = await getGoogleDriveAccessToken(stored.rootFolderId);
         const metadata = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(stored.folderId) + '?fields=id', { headers: { Authorization: 'Bearer ' + token } });
         if (metadata.status === 404) continue;
         if (!metadata.ok) throw new Error('Unable to verify request attachment folder.');
@@ -1304,7 +1306,7 @@ async function cleanupCapdevStorage(tx: Transaction, projects: (typeof capdevs.$
         if (!deletion.ok && deletion.status !== 404) throw new Error('Unable to delete request attachment folder.');
       }
     }
-    await deleteManagedDriveAttachments(files.map(fileId => ({ fileId, parentFolderId: root! })));
+    await deleteManagedDriveAttachments(await Promise.all(files.map(async fileId => ({ fileId, parentFolderId: await getGoogleResourceRoot(fileId) }))));
   }
 }
 
@@ -1401,11 +1403,19 @@ export async function getCapdevPage(input: { page: number; search: string; filte
   }
 }
 
-export async function getAnalyticsData() {
+export async function getAnalyticsData(input?: { dateFrom: string; dateTo: string; snapshotDate: string }) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [], requestEvents: [], auditActivity: [], auditItems: [] };
     const scope = capdevAccessScope(access, true);
+    const auditFrom = input ? manilaDateBoundary(input.dateFrom) : undefined;
+    const auditTo = input ? manilaDateBoundary(input.dateTo, true) : undefined;
+    const snapshotAt = input ? manilaDateBoundary(input.snapshotDate, true) : undefined;
+    const relevantTimeline = input ? or(eq(requestStatusUpdates.markAsComplete, true), eq(requestStatusUpdates.isStopper, true),
+      eq(requestStatusUpdates.isResume, true), eq(requestStatusUpdates.subtractsRequestedAmount, true),
+      sql`${requestStatusUpdates.id} = (SELECT latest.id FROM request_status_updates latest
+        WHERE latest.request_id = ${requestStatusUpdates.requestId} AND latest.created_at <= ${snapshotAt}
+        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)`) : undefined;
     const auditDay = sql<string>`to_char(${auditLogs.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Manila', 'YYYY-MM-DD')`;
     const auditCapdevId = sql<number>`COALESCE(
       CASE WHEN jsonb_typeof(${auditLogs.details}->'capdevId') = 'number' THEN (${auditLogs.details}->>'capdevId')::integer END,
@@ -1425,7 +1435,7 @@ export async function getAnalyticsData() {
         subtracts: requestStatusUpdates.subtractsRequestedAmount, amount: requests.requestedBudget })
         .from(requestStatusUpdates)
         .innerJoin(requests, eq(requestStatusUpdates.requestId, requests.id))
-        .innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(scope),
+        .innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(and(scope, relevantTimeline)),
       db.select({ id: auditLogs.id, requestId: requests.id, createdAt: auditLogs.createdAt, details: auditLogs.details })
         .from(auditLogs)
         .innerJoin(requests, and(eq(auditLogs.entityType, 'request'), sql`${auditLogs.entityId} = ${requests.id}::text`))
@@ -1437,7 +1447,7 @@ export async function getAnalyticsData() {
         .from(auditLogs)
         .leftJoin(requests, and(eq(auditLogs.entityType, 'request'), sql`${auditLogs.entityId} = ${requests.id}::text`))
         .innerJoin(capdevs, eq(capdevs.id, auditCapdevId))
-        .where(scope),
+        .where(and(scope, auditFrom ? gte(auditLogs.createdAt, auditFrom) : undefined, auditTo ? lte(auditLogs.createdAt, auditTo) : undefined)),
     ]);
     const auditActivity = Array.from(auditRows.reduce((totals, row) => {
       const key = `${row.capdevId}:${row.day}`;
@@ -1543,14 +1553,15 @@ async function buildRequestReportData(access: UserAccess, month: number, year: n
     where ${requestStatusUpdates.requestId} = ${requests.id}
       and ${requestStatusUpdates.markAsComplete} = true
   ))`;
+  const period = `${year}-${String(month).padStart(2, '0')}`;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const records = await db
     .select({ request: getTableColumns(requests), initialBudget: capdevs.initialBudget, isComplete: completeExpression })
     .from(requests)
     .innerJoin(capdevs, eq(requests.capdevId, capdevs.id))
-    .where(scope)
+    .where(and(scope, gte(requests.eventDate, period + '-01'), lte(requests.eventDate, period + '-' + lastDay)))
     .orderBy(requests.eventDate, requests.id);
-  const period = `${year}-${String(month).padStart(2, '0')}`;
-  const selected = records.filter(({ request }) => request.eventDate?.slice(0, 7) === period);
+  const selected = records;
   const rows = await Promise.all(selected.map(async ({ request, initialBudget, isComplete }): Promise<RequestReportRow> => {
     let evaluationAverage: number | null = null;
     if (isComplete && request.setting === 'internal' && request.participantFeedbackFormId) {
@@ -1602,6 +1613,7 @@ export async function generateRequestReportPdf(month: number, year: number) {
     const access = await getCurrentAccess();
     if (!access || access.role === 'employee' || access.role === 'employee-department') return unauthorized;
     const report = await buildRequestReportData(access, month, year);
+    const { renderRequestReportPdf } = await import('@/lib/request-report-pdf');
     const pdf = renderRequestReportPdf(report);
     return {
       success: true,
@@ -1651,6 +1663,7 @@ export async function generateMonitoringSheet(input: { capdevIds: number[]; capd
     const capacityColumns = Math.max(1, fields.length);
     const originalCapacityColumns = 8;
     const template = await readFile(path.join(process.cwd(), 'public', 'monitoring-sheet-template.xlsx'));
+    const { default: ExcelJS } = await import('exceljs');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(template as unknown as Parameters<typeof workbook.xlsx.load>[0]);
     const sheet = workbook.getWorksheet('Sheet1');
@@ -2098,10 +2111,8 @@ export async function deleteCapdevFieldDefinition(id: number, updatedById: strin
       const [field] = await tx.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.id, id)).for('update');
       if (!field) throw new Error('Form field not found.');
       const records = await tx.select({ id: capdevs.id, additionalInfo: capdevs.additionalInfo }).from(capdevs).for('update');
-      const rootFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
       const attachments = records.flatMap((record) => getDynamicFieldAttachmentIds((record.additionalInfo || {}) as Record<string, unknown>, field));
-      if (attachments.length && !rootFolderId) throw new Error('Google Drive storage is not configured.');
-      await deleteManagedDriveAttachments(attachments.map((fileId) => ({ fileId, parentFolderId: rootFolderId! })));
+      await deleteManagedDriveAttachments(await Promise.all(attachments.map(async fileId => ({ fileId, parentFolderId: await getGoogleResourceRoot(fileId) }))));
       for (const record of records) {
         const additionalInfo = (record.additionalInfo || {}) as Record<string, unknown>;
         if (!hasStoredDynamicFieldValue(additionalInfo, field)) continue;
@@ -2253,13 +2264,15 @@ export async function deleteRequestFieldDefinition(id: number, setting: RequestS
       const folders = records.length
         ? await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, records.map((record) => record.id)))
         : [];
-      const folderByRequest = new Map(folders.map((folder) => [folder.requestId, folder]));
       const attachments: Array<{ fileId: string; parentFolderId: string }> = [];
       for (const record of records) {
         const fileIds = getDynamicFieldAttachmentIds((record.additionalInfo || {}) as Record<string, unknown>, field);
-        const folder = folderByRequest.get(record.id);
-        if (fileIds.length && (!folder || folder.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID)) throw new Error(`The attachment folder for Request #${record.id} could not be verified.`);
-        attachments.push(...fileIds.map((fileId) => ({ fileId, parentFolderId: folder!.folderId })));
+        for (const fileId of fileIds) {
+          const root = await getGoogleResourceRoot(fileId);
+          const folder = folders.find(folder => folder.requestId === record.id && folder.rootFolderId === root);
+          if (!folder) throw new Error('The original request attachment folder could not be verified.');
+          attachments.push({ fileId, parentFolderId: folder.folderId });
+        }
       }
       await deleteManagedDriveAttachments(attachments);
       for (const record of records) {
@@ -2452,15 +2465,17 @@ export async function deleteStatusUpdateFieldDefinition(id: number, updatedById:
       const records = await tx.select({ id: requestStatusUpdates.id, requestId: requestStatusUpdates.requestId, files: requestStatusUpdates.files, additionalInfo: requestStatusUpdates.additionalInfo }).from(requestStatusUpdates).for('update');
       const requestIds = [...new Set(records.map((record) => record.requestId))];
       const folders = requestIds.length ? await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, requestIds)) : [];
-      const folderByRequest = new Map(folders.map((folder) => [folder.requestId, folder]));
       const attachments: Array<{ fileId: string; parentFolderId: string }> = [];
       const attachmentIdsByRecord = new Map<number, Set<string>>();
       for (const record of records) {
         const fileIds = getDynamicFieldAttachmentIds((record.additionalInfo || {}) as Record<string, unknown>, field);
         attachmentIdsByRecord.set(record.id, new Set(fileIds));
-        const folder = folderByRequest.get(record.requestId);
-        if (fileIds.length && (!folder || folder.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID)) throw new Error(`The attachment folder for Request #${record.requestId} could not be verified.`);
-        attachments.push(...fileIds.map((fileId) => ({ fileId, parentFolderId: folder!.folderId })));
+        for (const fileId of fileIds) {
+          const root = await getGoogleResourceRoot(fileId);
+          const folder = folders.find(folder => folder.requestId === record.requestId && folder.rootFolderId === root);
+          if (!folder) throw new Error('The original request attachment folder could not be verified.');
+          attachments.push({ fileId, parentFolderId: folder.folderId });
+        }
       }
       await deleteManagedDriveAttachments(attachments);
       for (const record of records) {
@@ -2582,6 +2597,63 @@ export async function getRequestsByCapdev(capdevId: number) {
     console.error('Failed to fetch requests:', error);
     return [];
   }
+}
+
+export type RequestPageInput = {
+  capdevId: number; page: number; search: string; archived: boolean; focusId?: number;
+  filters: { setting: string; min: string; max: string; dateFrom: string; dateTo: string; sort: string };
+};
+
+export async function getRequestPage(input: RequestPageInput) {
+  const access = await getCurrentAccess();
+  if (!access) throw new Error('You must be signed in.');
+  const parent = await getAccessibleCapdev(access, input.capdevId);
+  if (!parent) throw new Error('You do not have permission to open this project.');
+  if (typeof input.search !== 'string' || input.search.length > 300 || !input.filters) throw new Error('Invalid filters.');
+  const base = and(eq(requests.capdevId, parent.id), access.role === 'employee' ? eq(requests.userId, access.userId) : undefined);
+  const focus = input.focusId ? (await db.select().from(requests).where(and(base, eq(requests.id, input.focusId))).limit(1))[0] : null;
+  const archived = focus ? Boolean(focus.archivedAt) : input.archived;
+  const conditions: (SQL | undefined)[] = [base, archived ? isNotNull(requests.archivedAt) : isNull(requests.archivedAt)];
+  if (!focus) {
+    if (input.search) conditions.push(ilike(requests.requestorName, '%' + input.search.replace(/[\\%_]/g, '\\$&') + '%'));
+    if (input.filters.setting !== 'all') {
+      if (!['internal', 'external'].includes(input.filters.setting)) throw new Error('Invalid setting.');
+      conditions.push(eq(requests.setting, input.filters.setting));
+    }
+    if (!['newest', 'oldest'].includes(input.filters.sort)) throw new Error('Invalid sort.');
+    for (const [value, minimum] of [[input.filters.min, true], [input.filters.max, false]] as const) {
+      if (value !== '') {
+        if (typeof value !== 'string' || !Number.isFinite(Number(value))) throw new Error('Invalid balance.');
+        conditions.push(minimum ? gte(requests.requestedBudget, value) : lte(requests.requestedBudget, value));
+      }
+    }
+    if (input.filters.dateFrom) conditions.push(gte(requests.createdAt, manilaDateBoundary(input.filters.dateFrom)));
+    if (input.filters.dateTo) conditions.push(lte(requests.createdAt, manilaDateBoundary(input.filters.dateTo, true)));
+  }
+  const where = and(...conditions);
+  const ascending = !focus && input.filters.sort === 'oldest';
+  const [totalRow] = await db.select({ total: count() }).from(requests).where(where);
+  const total = Number(totalRow.total);
+  let page = Math.max(1, Math.min(Number.isSafeInteger(input.page) ? input.page : 1, Math.max(1, Math.ceil(total / 6))));
+  if (focus) {
+    const [before] = await db.select({ total: count() }).from(requests).where(and(where,
+      sql`(${requests.createdAt}, ${requests.id}) > (SELECT created_at, id FROM requests WHERE id = ${focus.id})`));
+    page = Math.floor(Number(before.total) / 6) + 1;
+  }
+  const records = await db.select().from(requests).where(where)
+    .orderBy(ascending ? asc(requests.createdAt) : desc(requests.createdAt), ascending ? asc(requests.id) : desc(requests.id))
+    .limit(6).offset((page - 1) * 6);
+  const ids = records.map(record => record.id);
+  const [inactivity, updates] = await Promise.all([
+    getRequestInactivitySummaries(ids),
+    ids.length ? db.select({ requestId: requestStatusUpdates.requestId, complete: requestStatusUpdates.markAsComplete,
+      deducted: requestStatusUpdates.subtractsRequestedAmount }).from(requestStatusUpdates)
+      .where(and(inArray(requestStatusUpdates.requestId, ids), or(eq(requestStatusUpdates.markAsComplete, true), eq(requestStatusUpdates.subtractsRequestedAmount, true)))) : [],
+  ]);
+  const completed = new Set(updates.filter(row => row.complete).map(row => row.requestId));
+  const deducted = new Set(updates.filter(row => row.deducted).map(row => row.requestId));
+  return { records: records.map(record => ({ ...record, inactivity: inactivity.get(record.id) ?? null,
+    isComplete: record.status === 'completed' || completed.has(record.id), hasDeductedBudget: Boolean(record.budgetDeductedAt) || deducted.has(record.id) })), total, page, archived };
 }
 
 export async function getRequestById(id: number) {
@@ -2715,13 +2787,11 @@ export async function deleteRequest(id: number) {
       if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (!isArchiveReadOnly(current, parent)) return { success: false, error: 'Archive this request before deleting permanently.' };
 
-      const [storageFolder] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, id)).limit(1);
-      const driveFolderId = storageFolder?.folderId;
-
-      if (typeof driveFolderId === 'string' && driveFolderId.trim()) {
+      const storageFolders = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, id));
+      for (const storageFolder of storageFolders) {
+      const driveFolderId = storageFolder.folderId;
       try {
-        const accessToken = await getGoogleDriveAccessToken();
-        if (storageFolder.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID) throw new Error('Untrusted storage root.');
+        const accessToken = await getGoogleDriveAccessToken(storageFolder.rootFolderId);
         await verifyManagedDriveFolder(accessToken, storageFolder.folderId, storageFolder.rootFolderId);
         const deletion = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFolderId.trim())}`, {
           method: 'DELETE',
@@ -2804,49 +2874,43 @@ async function verifyManagedDriveFolder(accessToken: string, folderId: string, r
 type ManagedDriveAttachment = { fileId: string; parentFolderId: string };
 
 async function deleteManagedDriveAttachments(attachments: ManagedDriveAttachment[]) {
-  if (!attachments.length) return;
-  const rootFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
-  if (!rootFolderId) throw new Error('Google Drive storage is not configured.');
-  const parentsByFile = new Map<string, Set<string>>();
-  for (const attachment of attachments) {
-    const expectedParents = parentsByFile.get(attachment.fileId) || new Set<string>();
-    expectedParents.add(attachment.parentFolderId);
-    parentsByFile.set(attachment.fileId, expectedParents);
-  }
-
-  const accessToken = await getGoogleDriveAccessToken();
-  const managedFolders = [...new Set(attachments.map((attachment) => attachment.parentFolderId).filter((folderId) => folderId !== rootFolderId))];
-  for (const folderId of managedFolders) await verifyManagedDriveFolder(accessToken, folderId, rootFolderId);
-
-  // Verify every database reference before deleting any file. This prevents a
-  // malformed attachment ID from deleting a Drive file outside LEAPRS storage.
-  const existingFiles: string[] = [];
-  for (const [fileId, expectedParents] of parentsByFile) {
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,parents,trashed`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (response.status === 404) continue;
+  const verified: { fileId: string; token: string }[] = [];
+  const tokens = new Map<string,string>();
+  const folders = new Set<string>();
+  // Verify all references before performing the first external deletion.
+  for (const { fileId, parentFolderId } of attachments) {
+    const root = await getStorageRootForParent(parentFolderId);
+    let token = tokens.get(root);
+    if (!token) { token = await getGoogleDriveAccessToken(root); tokens.set(root,token); }
+    if (parentFolderId !== root && !folders.has(parentFolderId)) {
+      await verifyManagedDriveFolder(token,parentFolderId,root);
+      folders.add(parentFolderId);
+    }
+    const response = await fetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(fileId)+'?fields=id,parents,trashed', {headers:{Authorization:'Bearer '+token}});
+    if (response.status===404) continue;
     if (!response.ok) throw new Error('Unable to verify a Google Drive attachment.');
-    const file = await response.json() as { parents?: string[]; trashed?: boolean };
+    const file = await response.json() as {parents?:string[];trashed?:boolean};
     if (file.trashed) continue;
-    if (!file.parents?.some((parent) => expectedParents.has(parent))) throw new Error('A Google Drive attachment is outside its managed LEAPRS folder.');
-    existingFiles.push(fileId);
+    if (!file.parents?.includes(parentFolderId)) throw new Error('A Google Drive attachment is outside its managed LEAPRS folder.');
+    if (!verified.some(item=>item.fileId===fileId)) verified.push({fileId,token});
   }
-
-  for (const fileId of existingFiles) {
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!response.ok && response.status !== 404) throw new Error('Unable to delete a Google Drive attachment.');
+  for (const {fileId,token} of verified) {
+    const response=await fetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(fileId),{method:'DELETE',headers:{Authorization:'Bearer '+token}});
+    if(!response.ok&&response.status!==404) throw new Error('Unable to delete a Google Drive attachment.');
   }
 }
 
-async function ensureRequestGoogleDriveFolder(accessToken: string, access: UserAccess, context?: RequestUploadContext): Promise<string> {
-  const rootParentFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
-  if (!rootParentFolderId) throw new Error('Google Drive storage is not configured.');
+async function ensureRequestGoogleDriveFolder(access: UserAccess, context?: RequestUploadContext) {
+  let storage = await getActiveGoogleStorage();
+  if (context?.folderId && !context.requestId) {
+    const [folder] = await db.select().from(requestStorageFolders).where(eq(requestStorageFolders.folderId, context.folderId));
+    if (!folder || folder.userId !== access.userId || folder.requestId !== null) throw new Error(unauthorized.error);
+    storage = await getGoogleStorageForRoot(folder.rootFolderId);
+  }
+  const rootParentFolderId = storage.rootFolderId;
+  const accessToken = await getGoogleDriveAccessToken(rootParentFolderId);
   if (context?.requestId !== undefined && (!Number.isSafeInteger(context.requestId) || !await getWritableRequest(access, context.requestId))) throw new Error(unauthorized.error);
-  return withTransaction(async (tx) => {
+  const folderId = await withTransaction(async (tx) => {
     let req: typeof requests.$inferSelect | undefined;
     if (context?.requestId) {
       [req] = await tx.select().from(requests).where(eq(requests.id, context.requestId)).for('update');
@@ -2854,7 +2918,7 @@ async function ensureRequestGoogleDriveFolder(accessToken: string, access: UserA
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, req.capdevId)).for('update');
       if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(req, parent)) throw new Error(ARCHIVED_READ_ONLY);
-      const [folder] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, req.id));
+      const [folder] = await tx.select().from(requestStorageFolders).where(and(eq(requestStorageFolders.requestId, req.id), eq(requestStorageFolders.rootFolderId, rootParentFolderId)));
       if (folder) {
         if (folder.rootFolderId !== rootParentFolderId) throw new Error('Invalid attachment folder.');
         await verifyManagedDriveFolder(accessToken, folder.folderId, rootParentFolderId);
@@ -2879,11 +2943,13 @@ async function ensureRequestGoogleDriveFolder(accessToken: string, access: UserA
     await tx.insert(requestStorageFolders).values({ folderId: folder.id, requestId: req?.id, userId: access.userId, rootFolderId: rootParentFolderId });
     return folder.id;
   });
+  return { folderId, rootFolderId: rootParentFolderId, accessToken };
 }
 
 async function uploadFileToGoogleDrive(file: File, accessToken: string, parentFolderId: string): Promise<StatusAttachment> {
   const boundary = `leaprs-${crypto.randomUUID()}`;
-  const metadata = JSON.stringify({ name: file.name, parents: [parentFolderId] });
+  const storageRoot = await getStorageRootForParent(parentFolderId);
+  const metadata = JSON.stringify({ name: file.name, parents: [parentFolderId], appProperties: { leaprsStorageRoot: storageRoot } });
   const body = new Blob([
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`,
     `--${boundary}\r\nContent-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
@@ -2902,6 +2968,7 @@ async function uploadFileToGoogleDrive(file: File, accessToken: string, parentFo
 
   const uploaded = await response.json() as { id?: string; name?: string; mimeType?: string; webViewLink?: string };
   if (!uploaded.id || !uploaded.name) throw new Error(`Google Drive did not return a file for “${file.name}”.`);
+  await registerGoogleResource(uploaded.id, storageRoot);
   return {
     id: uploaded.id,
     name: uploaded.name,
@@ -2970,22 +3037,25 @@ export async function reconcileBackgroundAttachment(target: UploadTarget, upload
       pending = Object.values(record.info).some(value => Array.isArray(value) && value.some(item => isPendingAttachment(item) && item.pendingUploadId === uploadId && item.uploadedById === access.userId));
     }
     if (pending && !recoverFile) return { success: true as const, state: 'pending' as const };
-    const token = await getGoogleDriveAccessToken();
-    // Values are constrained IDs, not arbitrary Drive query fragments.
     const query = `trashed = false and appProperties has { key='leaprsUploadId' and value='${uploadId}' } and appProperties has { key='leaprsRecord' and value='${target.kind}:${target.id}' } and appProperties has { key='leaprsUserId' and value='${access.userId.replaceAll("'", "\\'")}' }`;
-    const url = new URL('https://www.googleapis.com/drive/v3/files');
-    url.search = new URLSearchParams({ q: query, fields: 'files(id)', pageSize: '100' }).toString();
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!response.ok) throw new Error('Unable to recover attachment.');
-    const { files } = await response.json() as { files: { id: string }[] };
-    if (pending) return { success: true as const, state: 'pending' as const, fileId: files[0]?.id };
-    // The saved record or pending attachment was removed. Clean up the orphan;
-    // valid pending attachments and completed record references are preserved.
-    for (const file of files) {
-      const removed = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-      if (!removed.ok && removed.status !== 404) throw new Error('Unable to remove an unused attachment.');
+    let availableAccounts = 0;
+    for (const storage of await listGoogleStorages()) {
+      let token: string;
+      try { token = await getGoogleStorageToken(storage); } catch { continue; }
+      const url = new URL('https://www.googleapis.com/drive/v3/files');
+      url.search = new URLSearchParams({ q: query, fields: 'files(id)', pageSize: '100' }).toString();
+      const response = await fetch(url, {headers:{Authorization:'Bearer '+token}});
+      if (!response.ok) continue;
+      availableAccounts++;
+      const { files } = await response.json() as { files: {id:string}[] };
+      if (pending && files[0]) return {success:true as const,state:'pending' as const,fileId:files[0].id};
+      if (!pending) for (const file of files) {
+        const removed=await fetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(file.id),{method:'DELETE',headers:{Authorization:'Bearer '+token}});
+        if(!removed.ok&&removed.status!==404) throw new Error('Unable to remove an unused attachment.');
+      }
     }
-    return { success: true as const, state: 'cancelled' as const };
+    if (!availableAccounts) throw new Error('Reconnect Google Drive storage to recover this attachment.');
+    return {success:true as const,state:pending ? 'pending' as const : 'cancelled' as const};
   } catch (error) { return { success: false as const, error: error instanceof Error ? error.message : 'Unable to recover attachment.' }; }
 }
 
@@ -2999,10 +3069,9 @@ export async function prepareBackgroundAttachment(target: UploadTarget, uploadId
     const origin = requestHeaders.get('origin');
     const host = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host');
     if (!origin || new URL(origin).host !== host) throw new Error('The upload origin could not be verified.');
-    const token = await getGoogleDriveAccessToken();
-    const folder = await ensureRequestGoogleDriveFolder(token, access, record.requestId ? { requestId: record.requestId } : undefined);
+    const { folderId: folder, rootFolderId, accessToken: token } = await ensureRequestGoogleDriveFolder(access, record.requestId ? { requestId: record.requestId } : undefined);
     const session = await createGoogleDriveUploadSession(pending, token, origin, folder, {
-      leaprsUploadId: uploadId, leaprsRecord: `${target.kind}:${target.id}`, leaprsUserId: access.userId,
+      leaprsUploadId: uploadId, leaprsRecord: `${target.kind}:${target.id}`, leaprsUserId: access.userId, leaprsStorageRoot: rootFolderId,
     });
     return { success: true as const, session };
   } catch (error) { return { success: false as const, error: error instanceof Error ? error.message : 'Unable to prepare attachment.' }; }
@@ -3013,10 +3082,7 @@ export async function finishBackgroundAttachment(target: UploadTarget, uploadId:
     const access = await getCurrentAccess();
     if (!access || !/^[\w-]+$/.test(fileId)) return unauthorized;
     await getUploadRecord(access, target);
-    const token = await getGoogleDriveAccessToken();
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,webViewLink,parents,appProperties,trashed`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!response.ok) throw new Error('Unable to verify uploaded attachment.');
-    const file = await response.json() as { id: string; name: string; mimeType: string; size: string; webViewLink?: string; appProperties?: Record<string, string>; parents?: string[]; trashed?: boolean };
+    const { file, storage } = await findGoogleUpload(fileId);
     if (file.trashed || file.appProperties?.leaprsUploadId !== uploadId || file.appProperties?.leaprsRecord !== `${target.kind}:${target.id}` || file.appProperties?.leaprsUserId !== access.userId) throw new Error('Attachment ownership could not be verified.');
     const attachment: StatusAttachment & { backgroundUploadId: string } = { id: file.id, name: file.name, mimeType: file.mimeType, url: file.webViewLink || `https://drive.google.com/open?id=${file.id}`, backgroundUploadId: uploadId };
     await withTransaction(async tx => {
@@ -3025,12 +3091,13 @@ export async function finishBackgroundAttachment(target: UploadTarget, uploadId:
       if (Object.values(record.info).some(value => Array.isArray(value) && value.some(item => item && typeof item === 'object' && 'id' in item && item.id === file.id))) return;
       const pending = findPendingUpload(record.info, uploadId, access.userId);
       if (Number(file.size) !== pending.size || file.name !== pending.name) throw new Error('Uploaded file does not match the selected attachment.');
-      let folder = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
+      let folder: string | undefined = storage.rootFolderId;
       if (record.requestId) {
-        const [stored] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, record.requestId));
+        const [stored] = await tx.select().from(requestStorageFolders).where(and(eq(requestStorageFolders.requestId, record.requestId), eq(requestStorageFolders.rootFolderId, storage.rootFolderId)));
         folder = stored?.folderId;
       }
       if (!folder || !file.parents?.includes(folder)) throw new Error('Invalid attachment folder.');
+      await registerGoogleResource(file.id, storage.rootFolderId);
       const additionalInfo = replacePendingAttachment(record.info, uploadId, attachment);
       if (target.kind === 'request') additionalInfo.googleDriveFolderId = folder;
       if (target.kind === 'status' && record.requestId) await tx.update(requests).set({ additionalInfo: sql`coalesce(${requests.additionalInfo}, '{}'::jsonb) || ${JSON.stringify({ googleDriveFolderId: folder })}::jsonb` }).where(eq(requests.id, record.requestId));
@@ -3043,6 +3110,8 @@ export async function finishBackgroundAttachment(target: UploadTarget, uploadId:
 }
 
 async function createGoogleDriveUploadSession(file: GoogleDriveUploadFile, accessToken: string, origin: string, parentFolderId: string, appProperties?: Record<string, string>) {
+  const root = await getStorageRootForParent(parentFolderId);
+  appProperties = { ...appProperties, leaprsStorageRoot: root };
   const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink', {
     method: 'POST',
     headers: {
@@ -3082,14 +3151,35 @@ export async function createGoogleDriveUploadSessions(files: GoogleDriveUploadFi
     if (!origin || !requestHost || new URL(origin).host !== requestHost) {
       return { success: false, error: 'The upload origin could not be verified.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[] };
     }
-    const accessToken = await getGoogleDriveAccessToken();
-    const parentFolderId = await ensureRequestGoogleDriveFolder(accessToken, access, context);
+    const { folderId: parentFolderId, accessToken } = await ensureRequestGoogleDriveFolder(access, context);
     const sessions = await Promise.all(files.map((file) => createGoogleDriveUploadSession(file, accessToken, origin, parentFolderId)));
     return { success: true, sessions, folderId: parentFolderId };
   } catch (error) {
     console.error('Failed to create Google Drive upload sessions:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Unable to prepare file uploads.', sessions: [] as { uploadUrl: string; name: string; mimeType: string }[], folderId: undefined };
   }
+}
+
+export async function registerDirectGoogleDriveUploads(fileIds: string[], parentFolderId: string) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !canManageRequests(access)) return unauthorized;
+    if (!Array.isArray(fileIds) || !fileIds.length || fileIds.length > MAX_STATUS_ATTACHMENTS || fileIds.some(id => typeof id !== 'string' || !/^[\w-]+$/.test(id))) throw new Error('Invalid files.');
+    const root = await getStorageRootForParent(parentFolderId);
+    if (parentFolderId !== root) {
+      const [folder] = await db.select().from(requestStorageFolders).where(eq(requestStorageFolders.folderId, parentFolderId));
+      if (!folder || (folder.requestId ? !await getWritableRequest(access, folder.requestId) : folder.userId !== access.userId)) return unauthorized;
+    }
+    const token = await getGoogleDriveAccessToken(root);
+    for (const id of fileIds) {
+      const response = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?fields=id,parents,appProperties,trashed', { headers: { Authorization: 'Bearer ' + token } });
+      if (!response.ok) throw new Error('Unable to verify the uploaded file.');
+      const file = await response.json() as { parents?: string[]; appProperties?: Record<string, string>; trashed?: boolean };
+      if (file.trashed || !file.parents?.includes(parentFolderId) || file.appProperties?.leaprsStorageRoot !== root) throw new Error('The uploaded file is outside its managed folder.');
+    }
+    for (const id of fileIds) await registerGoogleResource(id, root);
+    return { success: true as const };
+  } catch { return { success: false as const, error: 'Unable to confirm the uploaded files.' }; }
 }
 
 export async function uploadFilesToGoogleDrive(formData: FormData, context?: RequestUploadContext) {
@@ -3102,8 +3192,7 @@ export async function uploadFilesToGoogleDrive(formData: FormData, context?: Req
     if (files.reduce((total, file) => total + file.size, 0) > MAX_STATUS_ATTACHMENT_BYTES) return { success: false, error: 'Attachments must total 100 MB or less.', files: [] as StatusAttachment[] };
     if (files.length === 0) return { success: true, files: [] as StatusAttachment[] };
 
-    const accessToken = await getGoogleDriveAccessToken();
-    const parentFolderId = await ensureRequestGoogleDriveFolder(accessToken, access, context);
+    const { folderId: parentFolderId, accessToken } = await ensureRequestGoogleDriveFolder(access, context);
     const uploadedFiles = await Promise.all(files.map((file) => uploadFileToGoogleDrive(file, accessToken, parentFolderId)));
     return { success: true, files: uploadedFiles };
   } catch (error) {
@@ -3516,13 +3605,9 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
     await syncRequestReminders(access);
     scheduleNotificationEmails();
 
-    const userReads = await db.select({ notificationId: notificationReads.notificationId })
-      .from(notificationReads)
-      .where(eq(notificationReads.userId, access.userId));
-    const readIds = new Set(userReads.map(r => r.notificationId));
-
     const rows = await db.select({
       notification: getTableColumns(notifications),
+      readId: notificationReads.notificationId,
       request: {
         requestorName: requests.requestorName,
         setting: requests.setting,
@@ -3530,6 +3615,7 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
       },
     })
       .from(notifications)
+      .leftJoin(notificationReads, and(eq(notificationReads.notificationId, notifications.id), eq(notificationReads.userId, access.userId)))
       .leftJoin(requests, eq(notifications.requestId, requests.id))
       .leftJoin(capdevs, eq(notifications.capdevId, capdevs.id))
       .where(notificationAudienceCondition(access))
@@ -3539,7 +3625,7 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
     const reminderRequestIds = rows.filter(({ notification }) => notification.type === 'inactivity_reminder')
       .map(({ notification }) => notification.requestId).filter((id): id is number => id !== null);
     const inactivity = await getRequestInactivitySummaries(reminderRequestIds);
-    const formatted: NotificationItem[] = rows.map(({ notification: n, request }) => {
+    const formatted: NotificationItem[] = rows.map(({ notification: n, request, readId }) => {
       const copy = formatRequestNotification(n, n.requestId ? request : null,
         n.type === 'inactivity_reminder' && n.requestId && inactivity.has(n.requestId)
           ? inactivityMessage(inactivity.get(n.requestId)!.days) : undefined);
@@ -3552,7 +3638,7 @@ export async function getNotifications(): Promise<{ success: boolean; notificati
         ...copy,
         link: n.link,
         type: n.type,
-        isRead: n.isRead || readIds.has(n.id),
+        isRead: n.isRead || readId !== null,
         createdAt: n.createdAt,
       };
     });

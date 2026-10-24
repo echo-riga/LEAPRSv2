@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import { readPortal } from '@/lib/portal-read-client';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Assessment as AnalyticsIcon,
@@ -35,7 +36,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material';
-import { getAnalyticsData } from '@/app/actions';
+import type { getAnalyticsData } from '@/app/actions';
 import { AnalyticsSkeleton } from '@/components/Skeletons';
 import { summarizeAnalytics } from '@/lib/analytics-metrics';
 import { manilaDate } from '@/lib/manila-date';
@@ -138,6 +139,8 @@ export default function AnalyticsPage() {
   const router = useRouter();
   const [data, setData] = useState<AnalyticsData>({ capdevs: [], requests: [], requestEvents: [], auditActivity: [], auditItems: [] });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [retry, setRetry] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [detailsModal, setDetailsModal] = useState<{ title: string; rows: DetailRow[] } | null>(null);
   const [filters, setFilters] = useState<AnalyticsFilters>({
@@ -148,9 +151,14 @@ export default function AnalyticsPage() {
     snapshotDate: today(),
   });
   const [draftFilters, setDraftFilters] = useState<AnalyticsFilters>(filters);
+  const initialized = useRef(false);
 
   useEffect(() => {
-    void getAnalyticsData().then((result) => {
+    let active = true;
+    void Promise.resolve().then(() => { if (active) setLoading(true); });
+    void readPortal('analytics', { dateFrom: filters.dateFrom, dateTo: filters.dateTo, snapshotDate: filters.snapshotDate }).then((result) => {
+      if (!active) return;
+      setLoadError('');
       setData(result);
       const allDepts = Array.from(new Set(result.capdevs.map((c) => c.department))).sort();
       const allCapdevIds = result.capdevs.map((c) => c.id);
@@ -161,11 +169,11 @@ export default function AnalyticsPage() {
         dateTo: today(),
         snapshotDate: today(),
       };
-      setFilters(initial);
-      setDraftFilters(initial);
+      if (!initialized.current) { setFilters(initial); setDraftFilters(initial); initialized.current = true; }
       setLoading(false);
-    });
-  }, []);
+    }).catch(() => { if (active) { setLoading(false); setLoadError('Unable to load analytics. Please try again.'); } });
+    return () => { active = false; };
+  }, [filters.dateFrom, filters.dateTo, filters.snapshotDate, retry]);
 
   const allDepartments = useMemo(() => Array.from(new Set(data.capdevs.map((capdev) => capdev.department))).sort(), [data.capdevs]);
 
@@ -278,6 +286,7 @@ export default function AnalyticsPage() {
   const activityDatesInvalid = !draftFilters.dateFrom || !draftFilters.dateTo || draftFilters.dateFrom > draftFilters.dateTo;
   const snapshotDateInvalid = !draftFilters.snapshotDate || draftFilters.snapshotDate > today();
 
+  if (loadError) return <Alert severity="error">{loadError}<Button onClick={() => setRetry(value => value + 1)}>Retry</Button></Alert>;
   if (loading) {
     return <AnalyticsSkeleton />;
   }

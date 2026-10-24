@@ -10,7 +10,6 @@ import {
   PlayArrow as ResumeIcon,
   PushPin as StopperIcon,
 } from '@mui/icons-material';
-import { getRequestById, getRequestStatusUpdates } from '@/app/actions';
 
 type ProgressStep = 'completed' | 'denied' | 'pending' | 'stopper' | 'resumed' | 'final-completed' | 'final-denied';
 
@@ -82,8 +81,7 @@ function ProgressNode({ step, targetId, requestId, isLast }: ProgressNodeData & 
 export default function RequestTimelineProgress({ requestId }: { requestId: number }) {
   const [steps, setSteps] = useState<ProgressNodeData[]>([]);
 
-  const loadProgress = useCallback(async () => {
-    const [request, updates] = await Promise.all([getRequestById(requestId), getRequestStatusUpdates(requestId)]);
+  const loadProgress = useCallback((request: { status: string }, updates: TimelineUpdate[]) => {
     if (!request) return;
     const timelineEvents = (updates as TimelineUpdate[]).filter(
       (update) => !update.isStopperResponse && !update.isResume
@@ -102,12 +100,12 @@ export default function RequestTimelineProgress({ requestId }: { requestId: numb
     });
     const finalStep: ProgressStep | null = request.status === 'completed' ? 'final-completed' : request.status === 'denied' ? 'final-denied' : null;
     setSteps(finalStep ? [...updateSteps, { step: finalStep, targetId: 'request-status-resolution' }] : updateSteps);
-  }, [requestId]);
+  }, []);
 
   useEffect(() => {
-    void Promise.resolve().then(loadProgress);
     const handleTimelineChange = (event: Event) => {
-      if ((event as CustomEvent<number>).detail === requestId) void loadProgress();
+      const detail = (event as CustomEvent<{ requestId: number; request: { status: string }; updates: TimelineUpdate[] }>).detail;
+      if (detail?.requestId === requestId && detail.request && detail.updates) loadProgress(detail.request, detail.updates);
     };
     window.addEventListener('leaprs:request-timeline-changed', handleTimelineChange);
     return () => window.removeEventListener('leaprs:request-timeline-changed', handleTimelineChange);

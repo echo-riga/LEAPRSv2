@@ -1,5 +1,5 @@
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
-import { requestStorageFolders } from '@/db/schema';
+import { requestStorageFolders, googleStorageConnections } from '@/db/schema';
 import type { Transaction } from '@/db/transaction';
 
 export async function claimRequestFolder(tx: Transaction, userId: string, requestId: number, additionalInfo: Record<string, unknown>) {
@@ -14,10 +14,12 @@ export async function claimRequestFolder(tx: Transaction, userId: string, reques
     const existing = await tx.execute(sql`SELECT additional_info->>'googleDriveFolderId' AS folder FROM requests WHERE id = ${requestId}`);
     if (existing.rows[0]?.folder === folderId) return;
   }
-  if (!folder || folder.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID ||
+  if (!folder ||
       (folder.requestId !== requestId && (folder.requestId !== null || folder.userId !== userId))) {
     throw new Error('You do not have permission to use this attachment folder.');
   }
+  const [storage] = await tx.select({ id: googleStorageConnections.id }).from(googleStorageConnections).where(eq(googleStorageConnections.rootFolderId, folder.rootFolderId));
+  if (!storage && !(folder.rootFolderId === process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID && process.env.GOOGLE_REFRESH_TOKEN)) throw new Error('The original storage connection is unavailable.');
   await tx.update(requestStorageFolders).set({ requestId }).where(and(eq(requestStorageFolders.folderId, folderId),
     or(isNull(requestStorageFolders.requestId), eq(requestStorageFolders.requestId, requestId))));
   // Kept for existing UI consumers; operations always use the trusted mapping.

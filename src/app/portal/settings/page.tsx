@@ -17,6 +17,7 @@ import {
   Divider,
 } from '@mui/material';
 import { SettingsGridSkeleton } from '@/components/Skeletons';
+import DriveStorageAction from '@/components/DriveStorageAction';
 import StatusNotificationSettings from '@/components/StatusNotificationSettings';
 import EmailNotificationSettings from '@/components/EmailNotificationSettings';
 import {
@@ -122,15 +123,12 @@ export default function SettingsPage() {
     {
       title: 'System Settings',
       icon: <MaintenanceIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'Manage maintenance mode and email notifications.',
-      footer: (
-        <Box>
-          <Stack direction="row" useFlexGap spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
-          <EmailNotificationSettings />
-          <FormControlLabel
+      description: 'Manage maintenance, email notifications, and Drive storage.',
+      control: <Box sx={{ mt: 2 }}><FormControlLabel
             sx={{ m: 0 }}
             control={
               <Switch
+                size="small"
                 checked={maintenanceMode}
                 onChange={(event) => void handleMaintenanceChange(event.target.checked)}
                 color="primary"
@@ -145,10 +143,15 @@ export default function SettingsPage() {
                   color: maintenanceMode ? 'error.main' : 'text.secondary',
                 }}
               >
-                Maintenance Mode
+                Maintenance
               </Typography>
             }
-          />
+          /></Box>,
+      footer: (
+        <Box>
+          <Stack direction="row" useFlexGap spacing={3} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
+          <EmailNotificationSettings label="Email Notifications" />
+          <DriveStorageAction />
           </Stack>
           {maintenanceError && <Typography variant="caption" color="error">{maintenanceError}</Typography>}
         </Box>
