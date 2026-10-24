@@ -1,3 +1,4 @@
+import { activeFolderScope, requestAccessScope } from '@/lib/access-scope';
 import { and, asc, desc, eq, inArray, isNull, notExists, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { capdevs, notifications, requests, requestStatusUpdates, systemSettings } from '@/db/schema';
@@ -50,7 +51,7 @@ export function activeReminderCondition() {
     WHERE u.request_id = ${requests.id} ORDER BY u.created_at DESC, u.id DESC LIMIT 1), ${requests.createdAt})`;
   const days = sql`COALESCE((SELECT number_value FROM system_settings WHERE key = ${INACTIVITY_SETTING_KEY}), ${DEFAULT_INACTIVITY_DAYS})`;
   return and(
-    eq(notifications.type, 'inactivity_reminder'), eq(requests.status, 'in_progress'),
+    activeFolderScope(), eq(notifications.type, 'inactivity_reminder'), eq(requests.status, 'in_progress'),
     isNull(requests.archivedAt), isNull(capdevs.archivedAt),
     sql`${notifications.reminderKey} = 'request:' || ${requests.id}::text || ':' ||
       CASE WHEN ${latestId} IS NULL THEN 'submitted' ELSE 'update:' || (${latestId})::text END`,
@@ -66,7 +67,7 @@ export async function syncRequestReminders(access: ReminderAccess) {
   const records = await db.select({ id: requests.id, capdevId: requests.capdevId,
     requestorName: requests.requestorName, aipCode: capdevs.aipCode }).from(requests)
     .innerJoin(capdevs, eq(requests.capdevId, capdevs.id))
-    .where(and(scope, eq(requests.status, 'in_progress'), isNull(requests.archivedAt), isNull(capdevs.archivedAt)))
+    .where(and(activeFolderScope(), requestAccessScope(access), scope, eq(requests.status, 'in_progress'), isNull(requests.archivedAt), isNull(capdevs.archivedAt)))
     .orderBy(asc(requests.id));
   // Bounded batches prevent oversized IN lists and inserts in large portals.
   for (let offset = 0; offset < records.length; offset += 100) {

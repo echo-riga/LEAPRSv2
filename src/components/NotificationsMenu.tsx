@@ -88,7 +88,7 @@ function getIconBgColor(type: string) {
 
 function getNotificationDestination(item: NotificationItem) {
   if (item.type === 'capdev_created' && item.capdevId) {
-    return `/portal#capdev-record-${item.capdevId}`;
+    return /^\/portal\/folders\/\d+#capdev-record-\d+$/.test(item.link) ? item.link : `/portal#capdev-record-${item.capdevId}`;
   }
   if (item.type === 'new_request' && item.capdevId && item.requestId) {
     return `/portal/capdev/${item.capdevId}/requests#request-record-${item.requestId}`;

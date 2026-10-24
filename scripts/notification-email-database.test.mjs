@@ -60,8 +60,11 @@ async function transaction(run) {
 test('notification emails preserve audience, preferences and idempotency in disposable tables', async t => {
   try {
     await pool.query('CREATE SCHEMA ' + quoted);
-    for (const table of ['users', 'capdevs', 'requests', 'request_status_updates', 'system_settings', 'notifications', 'email_notification_preferences', 'notification_email_deliveries']) {
+    for (const table of ['capdev_folders', 'users', 'capdevs', 'requests', 'request_status_updates', 'system_settings', 'notifications', 'email_notification_preferences', 'notification_email_deliveries']) {
       await pool.query(`CREATE TABLE ${quoted}."${table}" (LIKE public."${table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)`);
+      // Existing fixtures use one logical folder; cloned tables have no folder foreign key.
+      if (table === 'capdevs') await pool.query(`ALTER TABLE ${quoted}.capdevs ALTER COLUMN folder_id SET DEFAULT 1`);
+      if (table === 'capdev_folders') await pool.query(`INSERT INTO ${quoted}.capdev_folders (id,name,is_active) VALUES (1,'Active',true)`);
     }
     await pool.query(`CREATE SEQUENCE ${quoted}.delivery_id`);
     await pool.query(`ALTER TABLE ${quoted}.notification_email_deliveries ALTER COLUMN id SET DEFAULT nextval('${name}.delivery_id')`);

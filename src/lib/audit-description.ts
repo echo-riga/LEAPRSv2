@@ -44,6 +44,7 @@ export function describeAudit(entry: AuditEntry) {
   const userLabel = /^[0-9a-f-]{36}$/i.test(entry.entityLabel) ? (d.email || 'a user account') : entry.entityLabel;
   const storedRequestName = /'s request$/i.test(entry.entityLabel) ? entry.entityLabel.slice(0, -10) : undefined;
   const target = isRequest ? requestLabel(d.requestorName || storedRequestName)
+    : entry.entityType === 'capdev_folder' ? `CapDev folder "${entry.entityLabel}"`
     : entry.entityType === 'capdev' ? `CapDev project ${entry.entityLabel}`
     : entry.entityType === 'user' ? userLabel === 'a user account' ? 'a user account' : `user account for ${userLabel}`
     : entry.entityType.endsWith('_field') && !/layout|department options/i.test(entry.entityLabel) ? `form field “${entry.entityLabel}”` : entry.entityLabel;

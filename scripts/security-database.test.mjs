@@ -36,8 +36,11 @@ const input = (requestId, overrides = {}) => ({ requestId, userId: 'owner', stat
 test('database security regression suite uses an isolated disposable schema', async (t) => {
   try {
     await pool.query('CREATE SCHEMA ' + quoted);
-    for (const table of ['capdevs', 'requests', 'request_status_updates', 'request_storage_folders', 'security_rate_limits', 'audit_logs']) {
+    for (const table of ['capdev_folders', 'capdevs', 'requests', 'request_status_updates', 'request_storage_folders', 'security_rate_limits', 'audit_logs']) {
       await pool.query(`CREATE TABLE ${quoted}."${table}" (LIKE public."${table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)`);
+      // Existing fixtures use one logical folder; cloned tables have no folder foreign key.
+      if (table === 'capdevs') await pool.query(`ALTER TABLE ${quoted}.capdevs ALTER COLUMN folder_id SET DEFAULT 1`);
+      if (table === 'capdev_folders') await pool.query(`INSERT INTO ${quoted}.capdev_folders (id,name,is_active) VALUES (1,'Active',true)`);
     }
     await pool.query(`CREATE SEQUENCE ${quoted}.status_id`);
     await pool.query(`ALTER TABLE ${quoted}.request_status_updates ALTER COLUMN id SET DEFAULT nextval('${schema}.status_id')`);

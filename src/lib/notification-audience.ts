@@ -1,3 +1,4 @@
+import { activeFolderScope } from '@/lib/access-scope';
 import { and, eq, inArray, isNotNull, isNull, ne, or, type SQL } from 'drizzle-orm';
 import { notifications, requests, capdevs } from '@/db/schema';
 import { activeReminderCondition } from '@/lib/request-reminders';
@@ -35,7 +36,7 @@ export function notificationAudienceCondition(access: UserAccess): SQL {
     isInvolved = inArray(notifications.type, ALL_NOTIFICATION_TYPES);
   }
 
-  const standardVisibility = and(hasLiveRecord, isInvolved, or(
+  const standardVisibility = and(activeFolderScope(), hasLiveRecord, isInvolved, or(
     and(ne(notifications.type, 'inactivity_reminder'), isAnotherUsersAction),
     activeReminderCondition(),
   ))!;

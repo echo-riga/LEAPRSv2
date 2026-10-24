@@ -109,8 +109,18 @@ export const capdevFieldDefinitions = pgTable('capdev_field_definitions', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+export type FolderReferenceImage = { id: string; name: string; mimeType: string; rootFolderId: string; version: string };
+export const capdevFolders = pgTable('capdev_folders', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  isActive: boolean('is_active').default(false).notNull(),
+  referenceImage: jsonb('reference_image').$type<FolderReferenceImage>(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, table => [uniqueIndex('capdev_folders_one_active_idx').on(table.isActive).where(sql`${table.isActive} = true`)]);
+
 // Capdev projects
 export const capdevs = pgTable('capdevs', {
+  folderId: integer('folder_id').references(() => capdevFolders.id, { onDelete: 'restrict' }).notNull(),
   archivedAt: timestamp('archived_at'),
   id: serial('id').primaryKey(),
   aipCode: varchar('aip_code', { length: 100 }).notNull(),
@@ -124,6 +134,7 @@ export const capdevs = pgTable('capdevs', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => [
   index('capdevs_aip_code_idx').on(table.aipCode),
+  index('capdevs_folder_idx').on(table.folderId),
   index('capdevs_department_created_idx').on(table.department, table.createdAt, table.id),
   index('capdevs_created_idx').on(table.createdAt, table.id),
 ]);

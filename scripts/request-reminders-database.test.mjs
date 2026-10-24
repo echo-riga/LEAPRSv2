@@ -18,6 +18,7 @@ registerHooks({ resolve(specifier, ctx, nextResolve) {
   return nextResolve(specifier.startsWith('@/') ? new URL('../src/' + specifier.slice(2) + '.ts', import.meta.url).href : specifier, ctx);
 } });
 const { syncRequestReminders, getRequestInactivitySummaries, activeReminderCondition, readInactivityDays } = await import('../src/lib/request-reminders.ts');
+const { activeFolderScope } = await import('../src/lib/access-scope.ts');
 const { requests, capdevs, notifications } = await import('../src/db/schema.ts');
 const source = readFileSync(new URL('../src/lib/notification-audience.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('actions.ts', source, ts.ScriptTarget.Latest, true);
@@ -25,7 +26,7 @@ const declarations = ast.statements.filter((node) => ts.isVariableStatement(node
 const audienceNode = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'notificationAudienceCondition');
 assert.ok(audienceNode);
 const compiled = ts.transpileModule([...declarations, audienceNode].map((node) => node.getText(ast).replace(/^export /, '')).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
-const audience = new Function('deps', 'const { and, eq, inArray, isNotNull, isNull, ne, or, requests, capdevs, notifications, activeReminderCondition } = deps; ' + compiled + '\nreturn notificationAudienceCondition;')({ and, eq, inArray, isNotNull, isNull, ne, or, requests, capdevs, notifications, activeReminderCondition });
+const audience = new Function('deps', 'const { and, eq, inArray, isNotNull, isNull, ne, or, requests, capdevs, notifications, activeReminderCondition, activeFolderScope } = deps; ' + compiled + '\nreturn notificationAudienceCondition;')({ and, eq, inArray, isNotNull, isNull, ne, or, requests, capdevs, notifications, activeReminderCondition, activeFolderScope });
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const schemaName = 'reminder_test_' + randomUUID().replaceAll('-', '');
 assert.match(schemaName, /^reminder_test_[a-f0-9]{32}$/);
@@ -49,8 +50,11 @@ async function visible(tx, user) {
 test('request reminders use a disposable database schema', async (t) => {
   try {
     await pool.query('CREATE SCHEMA ' + quoted);
-    for (const table of ['system_settings', 'capdevs', 'requests', 'request_status_updates', 'notifications']) {
+    for (const table of ['capdev_folders', 'system_settings', 'capdevs', 'requests', 'request_status_updates', 'notifications']) {
       await pool.query('CREATE TABLE ' + quoted + '."' + table + '" (LIKE public."' + table + '" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)');
+      // Existing fixtures use one logical folder; cloned tables have no folder foreign key.
+      if (table === 'capdevs') await pool.query(`ALTER TABLE ${quoted}.capdevs ALTER COLUMN folder_id SET DEFAULT 1`);
+      if (table === 'capdev_folders') await pool.query(`INSERT INTO ${quoted}.capdev_folders (id,name,is_active) VALUES (1,'Active',true)`);
     }
     await pool.query('CREATE SEQUENCE ' + quoted + '.notification_id');
     await pool.query('ALTER TABLE ' + quoted + ".notifications ALTER COLUMN id SET DEFAULT nextval('" + schemaName + ".notification_id')");

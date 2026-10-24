@@ -43,8 +43,8 @@ LEAPRS (Lifelong Education Advancement Program Requisition System) Knowledge Bas
   * **Maintenance Mode**: Toggle system access during updates.
 
 6. CapDev Projects (/portal):
-- **What it is**: The main dashboard listing all capacity development programs and their budget balances.
-- **How to access**: Click the logo or back arrow to navigate to the portal home page.
+- **What it is**: The main dashboard listing projects and balances in the active CapDev folder, within the user's department permissions.
+- **How to access**: Every role lands inside the active folder after login. Admins open **CapDev folders** using the folder icon beside **See Archives**. Clicking a folder row activates it system-wide; the highlighted row is selected. The floating panel provides **Add folder**, inline **Rename** with Save/Cancel, and **Delete**. Archives are scoped to the selected folder. Non-Admins cannot open the panel or access inactive folders. Analytics, reports, and AI summaries use the active folder.
 - **Key actions**: Click **Add CapDev** -> **Save CapDev** to create a project; click **View & Edit Details** to edit; click **View Requests** to open its requisitions.
 
 7. Requests & Requisitions (/portal/capdev/[capdevId]/requests):

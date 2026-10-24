@@ -1,3 +1,4 @@
+import { assertActiveFolderAccess } from '@/lib/active-capdev-folder';
 import { ARCHIVED_READ_ONLY } from '@/lib/archive-policy';
 import { validatePendingAttachments } from '@/lib/background-attachments';
 import { scheduleNotificationEmails } from '@/lib/notification-email';
@@ -14,7 +15,7 @@ import {
   auditLogs,
 } from '@/db/schema';
 import { isNull, and, desc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
-import { capdevAccessScope, requestAccessScope } from '@/lib/access-scope';
+import { activeFolderScope, capdevAccessScope, requestAccessScope } from '@/lib/access-scope';
 import { dynamicFieldStorageKey, getDynamicFieldValue, getInvalidComboboxFields } from '@/lib/dynamic-fields';
 
 export type AppRole = 'admin' | 'employee' | 'employee-department' | 'viewer' | 'viewer-full';
@@ -128,7 +129,7 @@ export async function findCapdevByAipCodeService(access: UserAccess, aipCode: st
   const [capdev] = await db
     .select()
     .from(capdevs)
-    .where(and(eq(capdevs.aipCode, cleanedCode), capdevAccessScope(access)))
+    .where(and(eq(capdevs.aipCode, cleanedCode), capdevAccessScope(access, true)))
     .orderBy(desc(capdevs.createdAt), desc(capdevs.id))
     .limit(1);
 
@@ -406,6 +407,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
 
   const created = await withTransaction(async (tx) => {
     const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, capdev.id)).for('update');
+    if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
     if (!parent || parent.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
     const [record] = await tx
       .insert(requests)
@@ -471,7 +473,7 @@ export async function getRequestStatusService(access: UserAccess, requestId: num
     .select({ request: getTableColumns(requests), capdevDepartment: capdevs.department, aipCode: capdevs.aipCode, isComplete: requestIsComplete })
     .from(requests)
     .innerJoin(capdevs, eq(requests.capdevId, capdevs.id))
-    .where(eq(requests.id, requestId))
+    .where(and(eq(requests.id, requestId), requestAccessScope(access)))
     .limit(1);
 
   if (!record) {
@@ -536,7 +538,7 @@ export async function getMyRequestsSummaryService(
 ) {
   const limit = Math.min(Math.max(options?.limit || 10, 1), 50);
 
-  const conditions: Array<SQL | undefined> = [requestAccessScope(access), isNull(requests.archivedAt), isNull(capdevs.archivedAt)];
+  const conditions: Array<SQL | undefined> = [activeFolderScope(), requestAccessScope(access), isNull(requests.archivedAt), isNull(capdevs.archivedAt)];
   if (options?.status) {
     const status = options.status === 'complete' ? 'completed' : options.status;
     if (!['in_progress', 'completed', 'denied', 'stopped'].includes(status)) throw new Error('Invalid request status filter.');
@@ -613,7 +615,7 @@ export async function getDepartmentBudgetBalanceService(
       description: capdevs.description,
     })
     .from(capdevs)
-    .where(and(eq(capdevs.department, dept), isNull(capdevs.archivedAt), capdevAccessScope(access)));
+    .where(and(eq(capdevs.department, dept), isNull(capdevs.archivedAt), capdevAccessScope(access, true)));
 
   let totalInitial = 0;
   let totalRemaining = 0;
@@ -655,7 +657,7 @@ export async function listAvailableCapdevProjectsService(
   const limit = Math.min(Math.max(options?.limit || 15, 1), 50);
   const dept = options?.department?.trim();
   if (access.role === 'viewer' && dept && dept !== access.department) throw new Error('You do not have permission to view this department.');
-  const conditions = [isNull(capdevs.archivedAt), capdevAccessScope(access), dept ? eq(capdevs.department, dept) : undefined];
+  const conditions = [isNull(capdevs.archivedAt), capdevAccessScope(access, true), dept ? eq(capdevs.department, dept) : undefined];
 
   const rows = await db
     .select({

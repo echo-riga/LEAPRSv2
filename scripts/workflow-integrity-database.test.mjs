@@ -33,8 +33,11 @@ test('AI scopes, counts and notification rollback in an isolated schema', async 
   const client = await pool.connect();
   try {
     await client.query('CREATE SCHEMA ' + quoted);
-    for (const table of ['capdevs', 'requests', 'request_status_updates', 'request_field_definitions', 'request_storage_folders', 'notifications', 'audit_logs']) {
+    for (const table of ['capdev_folders', 'capdevs', 'requests', 'request_status_updates', 'request_field_definitions', 'request_storage_folders', 'notifications', 'audit_logs']) {
       await client.query(`CREATE TABLE ${quoted}."${table}" (LIKE public."${table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)`);
+      // Existing fixtures use one logical folder; cloned tables have no folder foreign key.
+      if (table === 'capdevs') await client.query(`ALTER TABLE ${quoted}.capdevs ALTER COLUMN folder_id SET DEFAULT 1`);
+      if (table === 'capdev_folders') await client.query(`INSERT INTO ${quoted}.capdev_folders (id,name,is_active) VALUES (1,'Active',true)`);
       if (table !== 'request_storage_folders') {
         await client.query(`CREATE SEQUENCE ${quoted}."${table}_test_id" START 100`);
         await client.query(`ALTER TABLE ${quoted}."${table}" ALTER COLUMN id SET DEFAULT nextval('${schema}.${table}_test_id')`);

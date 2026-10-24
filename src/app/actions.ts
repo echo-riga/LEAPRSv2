@@ -1,17 +1,22 @@
 'use server';
 
 import { db } from '@/db';
+import { getGoogleDriveAccessToken } from '@/lib/google-drive-auth';
+import { validateFolderReferenceImage } from '@/lib/folder-reference-image';
 import { isPendingAttachment, validatePendingAttachments, replacePendingAttachment, reconcilePendingAttachments, type UploadTarget } from '@/lib/background-attachments';
 import { notificationAudienceCondition } from '@/lib/notification-audience';
 import { formatRequestNotification } from '@/lib/notification-wording';
 import { scheduleNotificationEmails } from '@/lib/notification-email';
 import { insertNotificationEvent } from '@/lib/notification-events';
-import { requestAccessScope } from '@/lib/access-scope';
+import { capdevAccessScope, requestAccessScope } from '@/lib/access-scope';
+import { activateCapdevFolder, assertActiveFolderAccess, lockFolderSelection } from '@/lib/active-capdev-folder';
 import { emailNotificationPreferences } from '@/db/schema';
 import { DEFAULT_EMAIL_TYPES, validateEmailTypes } from '@/lib/notification-types';
 import { withTransaction, type Transaction } from '@/db/transaction';
 import { requestStorageFolders, mcpOAuthGrants } from '@/db/schema';
 import { deleteRequestRecords } from '@/lib/request-deletion';
+import { manageCapdevRecords } from '@/lib/capdev-bulk';
+import { deleteCapdevFolderRecords } from '@/lib/capdev-folder-deletion';
 import { writeRequestStatusUpdate } from '@/lib/request-budget';
 import { validateRequestInput, validateMoney } from '@/lib/request-validation';
 import { claimRequestFolder } from '@/lib/request-storage';
@@ -20,8 +25,8 @@ import { manilaDate, manilaDateBoundary } from '@/lib/manila-date';
 import { auditChanges, requestLabel } from '@/lib/audit-description';
 import { ARCHIVED_READ_ONLY, isArchiveReadOnly } from '@/lib/archive-policy';
 import { isAllowedSignupEmail, SIGNUP_EMAIL_ERROR } from '@/lib/signup-email';
-import { connections, users, systemSettings, roleApprovalRequests, capdevs, capdevFieldDefinitions, requestFieldDefinitions, statusUpdateFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
-import { sql, count, and, eq, getTableColumns, lte, gte, asc, desc, or, isNull, isNotNull, ilike, inArray, type SQL } from 'drizzle-orm';
+import { connections, users, systemSettings, roleApprovalRequests, capdevFolders, capdevs, capdevFieldDefinitions, requestFieldDefinitions, statusUpdateFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
+import { sql, count, and, eq, getTableColumns, lte, gte, asc, desc, or, isNull, isNotNull, ilike, inArray, notInArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail, sendSignupVerificationEmail } from '@/lib/email';
 import {
@@ -258,7 +263,7 @@ async function getActorSnapshot(access: UserAccess) {
 
 async function writeAuditLog(access: UserAccess, entry: {
   action: 'created' | 'updated' | 'deleted' | 'archived' | 'restored' | 'status_changed' | 'stopped' | 'resumed';
-  entityType: 'capdev' | 'request' | 'status_update' | 'user' | 'capdev_field' | 'request_field' | 'status_update_field' | 'system_setting';
+  entityType: 'capdev_folder' | 'capdev' | 'request' | 'status_update' | 'user' | 'capdev_field' | 'request_field' | 'status_update_field' | 'system_setting';
   entityId?: string | number | null;
   entityLabel: string;
   details?: Record<string, unknown>;
@@ -354,7 +359,7 @@ function canControlRequestStop(access: UserAccess) {
 }
 
 async function getAccessibleCapdev(access: UserAccess, capdevId: number) {
-  const [capdev] = await db.select().from(capdevs).where(eq(capdevs.id, capdevId)).limit(1);
+  const [capdev] = await db.select().from(capdevs).where(and(eq(capdevs.id, capdevId), capdevAccessScope(access))).limit(1);
   return capdev && canAccessCapdev(access, capdev) ? capdev : null;
 }
 
@@ -1004,6 +1009,8 @@ export async function deleteArchivedDirectoryUser(userId: string) {
 }
 
 export type CapdevInput = {
+  initialBudget?: string;
+  folderId: number;
   aipCode: string;
   description: string;
   budget: string;
@@ -1068,6 +1075,7 @@ async function changeResourceArchive(kind: 'capdev' | 'request' | 'status_update
         [parentRequest] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
         if (!parentRequest || (access.role === 'employee' && parentRequest.userId !== access.userId)) return unauthorized;
         const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, parentRequest.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
         if (parent?.archivedAt || (kind === 'status_update' && parentRequest.archivedAt)) return { success: false as const, error: 'Restore the parent record first.' };
       }
       const result = await tx.execute(sql`SELECT * FROM ${table} WHERE id = ${id} FOR UPDATE`);
@@ -1105,6 +1113,7 @@ export async function deleteRequestStatusUpdate(id: number) {
     return await withTransaction(async (tx) => {
       const [current] = await tx.select().from(requests).where(eq(requests.id, request.id)).for('update');
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       const [target] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, id)).for('update');
       if (!current || !target || (access.role === 'employee' && current.userId !== access.userId)) return unauthorized;
       if (!target.archivedAt && !isArchiveReadOnly(current, parent)) return { success: false as const, error: 'Archive this progress update before deleting permanently.' };
@@ -1124,25 +1133,233 @@ export async function getAllCapdevs() {
   try {
     const access = await getCurrentAccess();
     if (!access) return [];
-    return await db.select().from(capdevs).where(access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined).orderBy(capdevs.aipCode);
+    return await db.select().from(capdevs).where(capdevAccessScope(access)).orderBy(capdevs.aipCode);
   } catch (error) {
     console.error('Failed to fetch CapDev projects:', error);
     return [];
   }
 }
 
+
+export async function getCapdevFolderReferenceImage(folderId: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !Number.isSafeInteger(folderId) || folderId <= 0) return unauthorized;
+    const [folder] = await db.select().from(capdevFolders).where(eq(capdevFolders.id, folderId));
+    if (!folder || (access.role !== 'admin' && !folder.isActive)) return unauthorized;
+    return { success: true as const, image: folder.referenceImage };
+  } catch {
+    return { success: false as const, error: 'Unable to load the reference file.' };
+  }
+}
+
+async function cleanupFolderReferenceImage(image: (typeof capdevFolders.$inferSelect)['referenceImage']) {
+  if (!image) return;
+  try {
+    if (image.rootFolderId !== process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID) throw new Error('Untrusted image storage root.');
+    await deleteManagedDriveAttachments([{ fileId: image.id, parentFolderId: image.rootFolderId }]);
+  } catch (error) { console.warn('Unable to clean up replaced folder reference image:', error); }
+}
+
+export async function saveCapdevFolderReferenceImage(folderId: number, form: FormData) {
+  let uploaded: typeof capdevFolders.$inferSelect.referenceImage = null;
+  let committed = false;
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    if (form.getAll('image').length !== 1) return { success: false as const, error: 'Choose one reference file.' };
+    const file = await validateFolderReferenceImage(form.get('image'));
+    const actor = await getActorSnapshot(access);
+    const result = await withTransaction(async tx => {
+      const folder = await lockCapdevFolder(tx, folderId);
+      const token = await getGoogleDriveAccessToken();
+      const rootFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID!;
+      const stored = await uploadFileToGoogleDrive(file, token, rootFolderId);
+      const image = { id: stored.id, name: file.name, mimeType: file.type, rootFolderId, version: crypto.randomUUID() };
+      uploaded = image;
+      await tx.update(capdevFolders).set({ referenceImage: image }).where(eq(capdevFolders.id, folderId));
+      await tx.insert(auditLogs).values({ ...actor, action: 'updated', entityType: 'capdev_folder', entityId: String(folderId), entityLabel: folder.name, details: { referenceImage: image.name, previousReferenceImage: folder.referenceImage?.name || null } });
+      return { image, previous: folder.referenceImage };
+    });
+    committed = true;
+    await cleanupFolderReferenceImage(result.previous);
+    return { success: true as const, image: result.image };
+  } catch (error) {
+    if (uploaded && !committed) await cleanupFolderReferenceImage(uploaded);
+    console.error('Unable to save folder reference image:', error);
+    return { success: false as const, error: error instanceof Error && (error.message.startsWith('Choose ') || error.message.includes('folder no longer exists')) ? error.message : 'Unable to save the reference file. Please try again.' };
+  }
+}
+
+export async function removeCapdevFolderReferenceImage(folderId: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    const actor = await getActorSnapshot(access);
+    const previous = await withTransaction(async tx => {
+      const folder = await lockCapdevFolder(tx, folderId);
+      await tx.update(capdevFolders).set({ referenceImage: null }).where(eq(capdevFolders.id, folderId));
+      if (folder.referenceImage) await tx.insert(auditLogs).values({ ...actor, action: 'updated', entityType: 'capdev_folder', entityId: String(folderId), entityLabel: folder.name, details: { removedReferenceImage: folder.referenceImage.name } });
+      return folder.referenceImage;
+    });
+    await cleanupFolderReferenceImage(previous);
+    return { success: true as const };
+  } catch {
+    return { success: false as const, error: 'Unable to remove the reference file. Please try again.' };
+  }
+}
+
+export async function getPortalContext(): Promise<{ success: false; error: string } | { success: true; role: AppRole; activeFolder: { id: number; name: string } | null }> {
+  const access = await getCurrentAccess();
+  if (!access) return { success: false as const, error: unauthorized.error };
+  const [activeFolder] = await db.select({ id: capdevFolders.id, name: capdevFolders.name }).from(capdevFolders).where(eq(capdevFolders.isActive, true));
+  return { success: true as const, role: access.role, activeFolder: activeFolder || null };
+}
+
+export async function markCapdevFolderActive(id: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    const actor = await getActorSnapshot(access);
+    const folder = await withTransaction(async tx => {
+      const active = await activateCapdevFolder(tx, id);
+      await tx.insert(auditLogs).values({ ...actor, action: 'updated', entityType: 'capdev_folder', entityId: String(id), entityLabel: active.name, details: { changes: [{ field: 'isActive', label: 'Active folder', from: false, to: true }] } });
+      return active;
+    });
+    return { success: true, folder };
+  } catch (error) {
+    console.error('Failed to activate CapDev folder:', error);
+    return { success: false, error: 'Unable to activate this folder. Please try again.' };
+  }
+}
+
+async function lockCapdevFolder(tx: Transaction, id: number) {
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Choose a valid CapDev folder.');
+  const [folder] = await tx.select().from(capdevFolders).where(eq(capdevFolders.id, id)).for('update');
+  if (!folder) throw new Error('CapDev folder no longer exists.');
+  return folder;
+}
+
+export async function getCapdevFolders() {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return { success: false as const, folders: [], error: unauthorized.error };
+    const scope = capdevAccessScope(access);
+    const folders = await db.select({ id: capdevFolders.id, name: capdevFolders.name, isActive: capdevFolders.isActive, projectCount: count(capdevs.id) })
+      .from(capdevFolders).leftJoin(capdevs, and(eq(capdevs.folderId, capdevFolders.id), scope))
+      .groupBy(capdevFolders.id).orderBy(asc(capdevFolders.name), asc(capdevFolders.id));
+    return { success: true as const, folders };
+  } catch (error) {
+    console.error('Failed to load CapDev folders:', error);
+    return { success: false as const, folders: [], error: 'Unable to load CapDev folders.' };
+  }
+}
+
+export async function saveCapdevFolder(name: string, id?: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 255) return { success: false, error: 'Enter a folder name with 1 to 255 characters.' };
+    const actor = await getActorSnapshot(access);
+    const folder = await withTransaction(async tx => {
+      await lockFolderSelection(tx);
+      const [active] = await tx.select({ id: capdevFolders.id }).from(capdevFolders).where(eq(capdevFolders.isActive, true));
+      const previous = id !== undefined ? await lockCapdevFolder(tx, id) : null;
+      const [folder] = previous
+        ? await tx.update(capdevFolders).set({ name: name.trim() }).where(eq(capdevFolders.id, previous.id)).returning()
+        : await tx.insert(capdevFolders).values({ name: name.trim(), isActive: !active }).returning();
+      await tx.insert(auditLogs).values({ ...actor, action: previous ? 'updated' : 'created', entityType: 'capdev_folder', entityId: String(folder.id), entityLabel: folder.name, details: previous ? { previousName: previous.name } : {} });
+      return folder;
+    });
+    return { success: true, folder };
+  } catch (error) {
+    console.error('Failed to save CapDev folder:', error);
+    return { success: false, error: 'Unable to save the folder. It may have been deleted.' };
+  }
+}
+
+async function cleanupCapdevStorage(tx: Transaction, projects: (typeof capdevs.$inferSelect)[]) {
+  const projectIds = projects.map(project => project.id);
+  if (projectIds.length) {
+    const children = await tx.select().from(requests).where(inArray(requests.capdevId, projectIds)).orderBy(requests.id).for('update');
+    const childIds = children.map(request => request.id);
+    const storageFolders = childIds.length ? await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, childIds)) : [];
+    const fields = await tx.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.type, 'file'));
+    const otherProjects = await tx.select({ additionalInfo: capdevs.additionalInfo }).from(capdevs).where(notInArray(capdevs.id, projectIds));
+    const attachmentIds = (info: unknown) => fields.flatMap(field => getDynamicFieldAttachmentIds((info || {}) as Record<string, unknown>, field));
+    const retained = new Set(otherProjects.flatMap(project => attachmentIds(project.additionalInfo)));
+    const files = [...new Set(projects.flatMap(project => attachmentIds(project.additionalInfo)))].filter(fileId => !retained.has(fileId));
+    const root = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
+    if (files.length && !root) throw new Error('Google Drive storage is not configured.');
+    // Never delete a legacy JSON folder ID; only trusted server mappings qualify.
+    if (storageFolders.length) {
+      const token = await getGoogleDriveAccessToken();
+      for (const stored of storageFolders) {
+        if (stored.rootFolderId !== root) throw new Error('Untrusted storage root.');
+        const metadata = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(stored.folderId) + '?fields=id', { headers: { Authorization: 'Bearer ' + token } });
+        if (metadata.status === 404) continue;
+        if (!metadata.ok) throw new Error('Unable to verify request attachment folder.');
+        await verifyManagedDriveFolder(token, stored.folderId, stored.rootFolderId);
+        const deletion = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(stored.folderId), { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
+        if (!deletion.ok && deletion.status !== 404) throw new Error('Unable to delete request attachment folder.');
+      }
+    }
+    await deleteManagedDriveAttachments(files.map(fileId => ({ fileId, parentFolderId: root! })));
+  }
+}
+
+export async function bulkManageCapdevs(input: { folderId: number; capdevIds: number[]; action: 'archive' | 'delete' }) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    const actor = await getActorSnapshot(access);
+    await withTransaction(tx => manageCapdevRecords(tx, input.folderId, input.capdevIds, input.action, actor, projects => cleanupCapdevStorage(tx, projects)));
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to manage selected CapDev projects:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to update selected projects.' };
+  }
+}
+
+// Folder deletion explicitly includes active and archived descendants.
+export async function deleteCapdevFolder(id: number) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    const actor = await getActorSnapshot(access);
+    await withTransaction(async tx => {
+      await lockFolderSelection(tx);
+      const folder = await lockCapdevFolder(tx, id);
+      if (folder.isActive) throw new Error('Activate another folder before deleting this folder.');
+      const projects = await tx.select().from(capdevs).where(eq(capdevs.folderId, id)).orderBy(capdevs.id).for('update');
+      await cleanupCapdevStorage(tx, projects);
+      await deleteCapdevFolderRecords(tx, id, actor);
+      await cleanupFolderReferenceImage(folder.referenceImage);
+    });
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to delete CapDev folder:', error);
+    return { success: false, error: error instanceof Error && error.message.includes('Activate another folder') ? error.message : 'Unable to delete the folder. Check its attachment storage and try again.' };
+  }
+}
+
 export type CapdevPageFilters = { departments: string[]; initialMin: string; initialMax: string; remainingMin: string; remainingMax: string; dateFrom: string; dateTo: string; sort: string };
 
-export async function getCapdevPage(input: { page: number; search: string; filters: CapdevPageFilters; focusId?: number; archived?: boolean }) {
+export async function getCapdevPage(input: { page: number; search: string; filters: CapdevPageFilters; folderId: number; focusId?: number; archived?: boolean }) {
   const access = await getCurrentAccess();
   if (!access) return { success: false as const, records: [], departments: [], total: 0, page: 1, error: 'You must be signed in.' };
   try {
-    const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
-    const conditions: SQL[] = scope ? [scope] : [];
-    const departmentRows = await db.selectDistinct({ department: capdevs.department }).from(capdevs).where(scope).orderBy(capdevs.department);
+    const scope = capdevAccessScope(access);
+    if (!Number.isSafeInteger(input.folderId) || input.folderId <= 0) throw new Error('Invalid folder.');
+    const [folder] = await db.select().from(capdevFolders).where(eq(capdevFolders.id, input.folderId));
+    if (!folder || (access.role !== 'admin' && !folder.isActive)) throw new Error('You do not have permission to open this folder.');
+    const folderScope = eq(capdevs.folderId, input.folderId);
+    const conditions: SQL[] = scope ? [scope, folderScope] : [folderScope];
+    const departmentRows = await db.selectDistinct({ department: capdevs.department }).from(capdevs).where(and(scope, folderScope)).orderBy(capdevs.department);
     const departments = Array.from(new Set(departmentRows.map((row) => row.department.trim() || 'None')));
     if (!departments.includes('None')) departments.unshift('None');
-    const focus = input.focusId ? await getAccessibleCapdev(access, input.focusId) : null;
+    const focusRecord = input.focusId ? await getAccessibleCapdev(access, input.focusId) : null;
+    const focus = focusRecord?.folderId === input.folderId ? focusRecord : null;
     const archiveScope = focus?.archivedAt || (!focus && input.archived) ? isNotNull(capdevs.archivedAt) : isNull(capdevs.archivedAt);
     conditions.push(archiveScope);
     const ascending = !focus && input.filters.sort === 'oldest';
@@ -1171,13 +1388,13 @@ export async function getCapdevPage(input: { page: number; search: string; filte
     const total = Number(totalRow.total);
     let page = Math.max(1, Math.min(Number.isSafeInteger(input.page) ? input.page : 1, Math.max(1, Math.ceil(total / 6))));
     if (focus) {
-      const [before] = await db.select({ total: count() }).from(capdevs).where(and(scope, archiveScope,
+      const [before] = await db.select({ total: count() }).from(capdevs).where(and(scope, folderScope, archiveScope,
         sql`(${capdevs.createdAt}, ${capdevs.id}) > (SELECT created_at, id FROM capdevs WHERE id = ${focus.id})`));
       page = Math.floor(Number(before.total) / 6) + 1;
     }
     const records = await db.select().from(capdevs).where(where)
       .orderBy(ascending ? asc(capdevs.createdAt) : desc(capdevs.createdAt), ascending ? asc(capdevs.id) : desc(capdevs.id)).limit(6).offset((page - 1) * 6);
-    return { success: true as const, records, departments, total, page, archived: Boolean(focus ? focus.archivedAt : input.archived) };
+    return { success: true as const, records, departments, total, page, folderName: folder.name, archived: Boolean(focus ? focus.archivedAt : input.archived) };
   } catch (error) {
     console.error('Failed to fetch project page:', error);
     return { success: false as const, records: [], departments: [], total: 0, page: 1, error: 'Unable to load projects. Check your filters and try again.' };
@@ -1188,7 +1405,7 @@ export async function getAnalyticsData() {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [], requestEvents: [], auditActivity: [], auditItems: [] };
-    const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
+    const scope = capdevAccessScope(access, true);
     const auditDay = sql<string>`to_char(${auditLogs.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Manila', 'YYYY-MM-DD')`;
     const auditCapdevId = sql<number>`COALESCE(
       CASE WHEN jsonb_typeof(${auditLogs.details}->'capdevId') = 'number' THEN (${auditLogs.details}->>'capdevId')::integer END,
@@ -1274,7 +1491,7 @@ export async function getMonitoringReportData() {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role === 'employee' || access.role === 'employee-department') return { capdevs: [], requests: [], capdevFields: [], requestFields: [] };
-    const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
+    const scope = capdevAccessScope(access, true);
     const [capdevData, requestData, capdevFields, requestFields] = await Promise.all([
       db.select().from(capdevs).where(scope).orderBy(capdevs.aipCode),
       db.select(getTableColumns(requests)).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(scope).orderBy(requests.createdAt),
@@ -1320,7 +1537,7 @@ function validateRequestReportPeriod(month: number, year: number) {
 
 async function buildRequestReportData(access: UserAccess, month: number, year: number): Promise<RequestReportData> {
   validateRequestReportPeriod(month, year);
-  const scope = access.role === 'viewer' ? eq(capdevs.department, access.department) : undefined;
+  const scope = capdevAccessScope(access, true);
   const completeExpression = sql<boolean>`(${requests.status} = 'completed' or exists (
     select 1 from ${requestStatusUpdates}
     where ${requestStatusUpdates.requestId} = ${requests.id}
@@ -1418,7 +1635,7 @@ export async function generateMonitoringSheet(input: { capdevIds: number[]; capd
     if (!access || access.role === 'employee' || access.role === 'employee-department') return unauthorized;
     if (input.capdevIds.length === 0) return { success: false, error: 'Select at least one CapDev project.' };
     const [allCapdevs, allRequests, capdevFields, requestFields] = await Promise.all([
-      db.select().from(capdevs), db.select().from(requests),
+      db.select().from(capdevs).where(capdevAccessScope(access, true)), db.select(getTableColumns(requests)).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(capdevAccessScope(access, true)),
       db.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.isActive, true)).orderBy(capdevFieldDefinitions.sortOrder),
       db.select().from(requestFieldDefinitions).where(eq(requestFieldDefinitions.isActive, true)).orderBy(requestFieldDefinitions.sortOrder),
     ]);
@@ -1551,13 +1768,14 @@ export async function createCapdev(data: CapdevInput) {
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const aipCode = data.aipCode.trim();
     const created = await withTransaction(async tx => {
+      await lockCapdevFolder(tx, data.folderId);
       const [created] = await tx.insert(capdevs).values({ ...data, aipCode, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', updatedById: access.userId, initialBudget: data.budget }).returning();
       await insertNotificationEvent(tx, {
         actorId: access.userId,
         capdevId: created.id,
         title: `New CapDev Project: ${created.aipCode}`,
         message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-        link: `/portal#capdev-record-${created.id}`,
+        link: `/portal/folders/${created.folderId}#capdev-record-${created.id}`,
         type: 'capdev_created',
       });
       return created;
@@ -1571,7 +1789,7 @@ export async function createCapdev(data: CapdevInput) {
   }
 }
 
-export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate: string }) {
+export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate: string; folderId: number }) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
@@ -1588,12 +1806,14 @@ export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate:
     }
 
     const created = await withTransaction(async (tx) => {
+      await lockCapdevFolder(tx, input.folderId);
       const sources = await tx.select().from(capdevs)
         .where(and(inArray(capdevs.id, sourceIds), isNull(capdevs.archivedAt)))
         .orderBy(asc(capdevs.id)).for('update');
       if (sources.length !== sourceIds.length) throw new Error('One or more selected CapDev projects are unavailable or archived.');
 
       const values = sources.map((source) => ({
+        folderId: input.folderId,
         aipCode: source.aipCode,
         description: source.description,
         initialBudget: source.initialBudget,
@@ -1614,7 +1834,7 @@ export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate:
           capdevId: duplicate.id,
           title: `New CapDev Project: ${duplicate.aipCode}`,
           message: `Duplicated for ${duplicate.department} with balance ₱${Number(duplicate.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-          link: `/portal#capdev-record-${duplicate.id}`,
+          link: `/portal/folders/${duplicate.folderId}#capdev-record-${duplicate.id}`,
           type: 'capdev_created',
         });
       }
@@ -1643,6 +1863,11 @@ export async function updateCapdev(id: number, data: CapdevInput) {
   try {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
+    let initialBudget: string | undefined;
+    if (data.initialBudget !== undefined) {
+      try { initialBudget = validateMoney(data.initialBudget); }
+      catch { return { success: false, error: 'Enter an initial budget greater than zero with at most two decimal places.' }; }
+    }
     data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo, access.userId) };
     const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;
     if (!aipCodePattern.test(data.aipCode?.trim() || '')) {
@@ -1652,19 +1877,22 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     if (selectionError) return { success: false, error: selectionError };
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
-    const [previous] = await db.select().from(capdevs).where(eq(capdevs.id, id)).limit(1);
-    if (!previous) return { success: false, error: 'CapDev project not found.' };
-    if (previous.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
-    const updated = await withTransaction(async tx => {
+    const [existing] = await db.select().from(capdevs).where(eq(capdevs.id, id)).limit(1);
+    if (!existing) return { success: false, error: 'CapDev project not found.' };
+    if (existing.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
+    const { updated, previous } = await withTransaction(async tx => {
+      await lockCapdevFolder(tx, data.folderId);
       const [current] = await tx.select().from(capdevs).where(eq(capdevs.id, id)).for('update');
       if (!current || current.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
+      const budgetReset = initialBudget !== undefined && Number(initialBudget) !== Number(current.initialBudget)
+        ? { initialBudget, budget: initialBudget } : {};
       const [saved] = await tx.update(capdevs)
-        .set({ aipCode: data.aipCode, description: data.description, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', additionalInfo: reconcilePendingAttachments(data.additionalInfo, (current.additionalInfo || {}) as Record<string, unknown>), updatedById: access.userId, updatedAt: new Date() })
+        .set({ ...budgetReset, folderId: data.folderId, aipCode: data.aipCode, description: data.description, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', additionalInfo: reconcilePendingAttachments(data.additionalInfo, (current.additionalInfo || {}) as Record<string, unknown>), updatedById: access.userId, updatedAt: new Date() })
         .where(eq(capdevs.id, id)).returning();
-      return saved;
+      return { updated: saved, previous: current };
     });
     if (!updated) return { success: false, error: 'CapDev project not found.' };
-    const changes = auditChanges(previous, updated, { aipCode: 'AIP code', description: 'Description', department: 'Department' });
+    const changes = auditChanges(previous, updated, { aipCode: 'AIP code', description: 'Description', department: 'Department', folderId: 'Folder', initialBudget: 'Initial budget', budget: 'Remaining budget' });
     const fields = await getCapdevFieldDefinitions();
     for (const field of fields) changes.push(...auditChanges({ value: getDynamicFieldValue((previous.additionalInfo || {}) as Record<string, unknown>, field) }, { value: getDynamicFieldValue((updated.additionalInfo || {}) as Record<string, unknown>, field) }, { value: field.name }));
     await writeAuditLog(access, { action: 'updated', entityType: 'capdev', entityId: updated.id, entityLabel: updated.aipCode, details: { department: updated.department, changes } });
@@ -2391,6 +2619,7 @@ export async function createRequest(data: RequestInput) {
     if (missing.length) return { success: false, error: 'Complete the required fields: ' + missing.map((field) => field.name).join(', ') };
     const created = await withTransaction(async (tx) => {
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, validated.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (!parent || parent.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
       const [record] = await tx.insert(requests).values({
       capdevId: validated.capdevId, setting: validated.setting, description: validated.description, eventDate: validated.eventDate,
@@ -2445,6 +2674,7 @@ export async function updateRequest(id: number, data: RequestInput) {
       if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error('Request not found.');
       validated.additionalInfo = reconcilePendingAttachments(validated.additionalInfo, (current.additionalInfo || {}) as Record<string, unknown>);
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
       const [deducted] = await tx.select().from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
       if ((current.budgetDeductedAt || deducted) && validated.requestedBudget !== String(current.requestedBudget) && Number(validated.requestedBudget) !== Number(current.requestedBudget)) throw new Error('Requested budget cannot be changed after deduction.');
@@ -2482,6 +2712,7 @@ export async function deleteRequest(id: number) {
       const [current] = await tx.select().from(requests).where(eq(requests.id, id)).for('update');
       if (!current || (access.role === 'employee' && current.userId !== access.userId)) return unauthorized;
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (!isArchiveReadOnly(current, parent)) return { success: false, error: 'Archive this request before deleting permanently.' };
 
       const [storageFolder] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, id)).limit(1);
@@ -2540,31 +2771,6 @@ export type StatusAttachment = {
 const MAX_STATUS_ATTACHMENTS = 10;
 const MAX_STATUS_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 
-async function getGoogleDriveAccessToken() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-
-  if (!clientId || !clientSecret || !refreshToken || !process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID) {
-    throw new Error('Google Drive storage is not configured.');
-  }
-
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    }),
-  });
-  if (!response.ok) throw new Error('Unable to authorize Google Drive storage.');
-
-  const token = await response.json() as { access_token?: string };
-  if (!token.access_token) throw new Error('Google Drive did not return an access token.');
-  return token.access_token;
-}
 
 export type RequestUploadContext = {
   requestId?: number;
@@ -2646,6 +2852,7 @@ async function ensureRequestGoogleDriveFolder(accessToken: string, access: UserA
       [req] = await tx.select().from(requests).where(eq(requests.id, context.requestId)).for('update');
       if (!req || (access.role === 'employee' && req.userId !== access.userId)) throw new Error(unauthorized.error);
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, req.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(req, parent)) throw new Error(ARCHIVED_READ_ONLY);
       const [folder] = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, req.id));
       if (folder) {
@@ -2729,6 +2936,7 @@ async function getUploadRecord(access: UserAccess, target: UploadTarget, tx?: Tr
   const [request] = tx ? await query.for('update') : await query;
   const parentQuery = database.select().from(capdevs).where(eq(capdevs.id, request?.capdevId || 0));
   const [parent] = tx ? await parentQuery.for('update') : await parentQuery;
+  if (tx && parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
   if (!request || isArchiveReadOnly(request, parent) || (access.role === 'employee' && request.userId !== access.userId)) throw new Error(ARCHIVED_READ_ONLY);
   if (update && tx) [update] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, target.id)).for('update');
   if (target.kind === 'status' && (!update || update.archivedAt)) throw new Error(ARCHIVED_READ_ONLY);
@@ -2917,9 +3125,12 @@ export async function getRequestStatusUpdates(requestId: number) {
 
 async function ensureRequestEvaluationForms(request: typeof requests.$inferSelect, tx?: Transaction): Promise<{ participantFeedbackFormId: string | null; participantFeedbackFormUrl: string | null }> {
   if (!tx) return withTransaction(async (transaction) => {
+    const access = await getCurrentAccess();
+    if (!access) throw new Error(unauthorized.error);
     const [current] = await transaction.select().from(requests).where(eq(requests.id, request.id)).for('update');
     if (!current) throw new Error('Request not found.');
     const [parent] = await transaction.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(transaction, access.role, parent.folderId);
     if (isArchiveReadOnly(current, parent)) return { participantFeedbackFormId: current.participantFeedbackFormId, participantFeedbackFormUrl: current.participantFeedbackFormUrl };
     return ensureRequestEvaluationForms(current, transaction);
   });
@@ -3005,6 +3216,7 @@ export async function updateRequestStatus(requestId: number, status: 'completed'
       const [current] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
       if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error(unauthorized.error);
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
       if (current.isStopped && access.role === 'employee') throw new Error('This request is stopped.');
       const forms = status === 'completed' && current.setting === 'internal' ? await ensureRequestEvaluationForms(current, tx) : null;
@@ -3044,6 +3256,7 @@ export async function reopenRequest(requestId: number) {
       const [current] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
       if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error(unauthorized.error);
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
       if (current.status !== 'completed' && current.status !== 'denied') throw new Error('Only a completed or denied request can be reopened.');
 
@@ -3094,6 +3307,7 @@ export async function stopRequestProgress(data: StopRequestInput) {
     const { stopper } = await withTransaction(async (tx) => {
       const [request] = await tx.select().from(requests).where(eq(requests.id, data.requestId)).for('update');
       const [parent] = request ? await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update') : [];
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(request, parent)) throw new Error(ARCHIVED_READ_ONLY);
       if (!request || request.status === 'completed' || request.status === 'denied') throw new Error('This request is already concluded.');
       if (request.isStopped) throw new Error('This request is already stopped.');
@@ -3137,6 +3351,7 @@ export async function resumeRequestProgress(requestId: number) {
     const request = await withTransaction(async (tx) => {
       const [request] = await tx.select().from(requests).where(eq(requests.id, requestId)).for('update');
       const [parent] = request ? await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update') : [];
+      if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(request, parent)) throw new Error(ARCHIVED_READ_ONLY);
       if (!request?.isStopped || !request.activeStopperId) throw new Error('This request is not stopped.');
       const [activeStopper] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, request.activeStopperId));

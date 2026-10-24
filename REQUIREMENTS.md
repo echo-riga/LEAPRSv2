@@ -16,6 +16,9 @@ Supported entry points are the web portal, the portal AI assistant, and authoriz
 | --- | --- | --- | --- | --- | --- |
 | View CapDev projects | All | All | All | Own department | All |
 | Create/edit/archive/delete CapDev | Yes | No | No | No | No |
+| View/manage/activate CapDev folders and move projects | Yes | No | No | No | No |
+| View folder reference image | Yes | Yes | Yes | Yes | Yes |
+| Add/replace/remove folder reference image | Yes | No | No | No | No |
 | View requests and their history | All | Own requests | All | Own department | All |
 | Create requests | Yes | Yes | Yes | No | No |
 | Edit/manage requests and add progress | All | Own requests | All | No | No |
@@ -28,6 +31,8 @@ Supported entry points are the web portal, the portal AI assistant, and authoriz
 | Own email preferences and AI connection guide | Yes | Yes | Yes | Yes | Yes |
 
 Despite its stored name `employee-department`, Employee (All Department Requests) is a cross-department request management role. Archived records and archived parents restrict otherwise permitted mutations. UI visibility alone must never authorize a server action.
+
+For non-Admin roles, all project/request permissions above apply only inside the active CapDev folder. Admins can prepare and manage inactive folders. Analytics, reports, notification feeds, AI project lookup, request summaries, and department budget totals use the active folder for every role; direct Admin project/request management can access other folders.
 
 ## 3. Accounts and access
 
@@ -44,12 +49,21 @@ Despite its stored name `employee-department`, Employee (All Department Requests
 
 ### CapDev
 
+- Every role lands inside the active CapDev folder after login. Admins manage folders through a floating panel opened by the folder icon beside See Archives. There is no separate folder-management screen or Back action from the CapDev list. Non-Admins cannot list folders or access inactive projects, requests, timelines, evaluations, or attachments through direct links, server actions, or AI tools. Normal Back navigation within requests and timelines remains available.
+- Admins create, rename, and permanently delete folders. Existing projects are initially grouped in Existing CapDev. New projects belong to a selected folder, and Admins can move editable projects using the Folder field. Duplication can copy active projects from any folder into the open folder.
+- Only one folder can be active. The highlighted folder in the Admin panel is the active folder; clicking another row activates it system-wide and changes the displayed projects. The panel provides Add folder, inline Rename with Save/Cancel and Enter/Escape, and Delete. Renaming preserves selection. New folders start inactive unless they are the first folder. Migration activates the earliest existing folder. Existing project archives, ownership, and department restrictions still apply. Both active and archived project lists are scoped to the selected folder, and switching folders preserves the Archives view.
+- Select another folder before permanently deleting the active folder. If no folder exists, Admins add the first folder through the panel on the empty CapDev screen; other roles see a no-active-folder message. Switching folders preserves all records and budgets; subsequent server calls enforce the new selection, and open sessions refresh their folder selection on focus and every 30 seconds.
+- Each folder can have one shared LBP reference file (PDF or image) of the physical CapDev paper list. An image control beside the Active/Archives toggle opens it for comparison with system records. The same image appears in both views of that folder. Admins can add, replace, and remove it; all active roles can view the active folder's shared reference. It is not a separate attachment on each project or a dynamic field.
+- LBP references accept one PDF, JPG, PNG, or WebP file up to 4 MiB, with file signatures verified on the server. Replacement preserves the current image until saving succeeds. Image bytes are stored in managed Google Drive; portal viewing checks folder access on each request and does not require public Drive sharing. Folder deletion cleans up its reference image. This upload waits for completion in its viewer rather than using the business-record background queue.
+- Folder deletion requires a named confirmation and explicitly deletes all active and archived projects, requests, timeline entries, related notifications, and managed attachments inside it. This is an exception to the individual project archive-before-delete rule. Preserve immutable audit history and attachments still referenced by projects in other folders.
 - Fixed fields: AIP Code, description, initial budget, remaining budget, and department.
 - AIP Code follows `0000-000-0-0-00-000-000` and is a user-facing project identifier, but it is not unique because the same project code can be carried into another Date Added year. The numeric CapDev ID remains the relational identifier.
-- Initial budget records the original allocation; remaining budget reflects permanent deductions. Ordinary project edits do not reset these balances.
+- Initial budget is a fixed field editable by Admins on active CapDev records. Saving a changed initial budget resets both initial and remaining budget to the entered positive amount, with at most two decimal places. Saving other fields or the same numeric initial amount preserves both stored balances. This field remains outside dynamic form configuration.
+- A budget reset preserves requests, deduction history, and permanent request deduction markers; it does not allow the same request to be deducted again. Remaining budget reflects deductions since its latest reset. Audit history records both balance changes.
 - Admin-configured fields provide additional project information.
 - Admin can duplicate one or more active CapDev records for a selected Date Added. Duplication preserves the exact AIP Code, copies CapDev fields, resets remaining budget to the copied initial budget, and never copies requests or status updates.
-- CapDev, request, and user filter selections persist separately for each signed-in account in the same browser. Request filters are shared across all CapDev request pages. After a successful CapDev duplication, the Date Added range switches to the target calendar year so older years are excluded.
+- Admins use Manage CapDev projects to select multiple records. The active view offers Duplicate and Archive; Archives offers permanent Delete. Archive and Delete affect only projects in the current folder and require confirmation naming the selected AIP Codes. Permanent deletion requires every selected project to be archived and removes their descendants and managed attachments while preserving audit history and shared attachments still used by other projects. Invalid or stale selections reject the entire database batch. Archiving never refunds deductions.
+- CapDev, request, and user filter selections persist separately for each signed-in account in the same browser. CapDev filters are separate for each folder; request filters are shared across all CapDev request pages. After a successful CapDev duplication, the Date Added range switches to the target calendar year so older years are excluded.
 
 ### Requests
 

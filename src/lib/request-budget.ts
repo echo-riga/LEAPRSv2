@@ -1,3 +1,4 @@
+import { assertActiveFolderAccess } from '@/lib/active-capdev-folder';
 import { ARCHIVED_READ_ONLY, isArchiveReadOnly } from '@/lib/archive-policy';
 import { and, eq, sql } from 'drizzle-orm';
 import { capdevs, requests, requestStatusUpdates } from '@/db/schema';
@@ -11,6 +12,7 @@ export async function writeRequestStatusUpdate(tx: Transaction, role: string, in
   const [current] = await tx.select().from(requests).where(eq(requests.id, input.requestId)).for('update');
   if (!current || ['completed', 'denied'].includes(current.status)) throw new Error('This request is already concluded.');
   const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
+  if (parent) await assertActiveFolderAccess(tx, role, parent.folderId);
   if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
   if (role === 'employee' && current.userId !== input.userId) throw new Error('You do not have permission to perform this action.');
   if (current.isStopped && (role !== 'employee' || !input.isStopperResponse || input.stopperId !== current.activeStopperId)) throw new Error('This request is stopped.');

@@ -2,7 +2,9 @@
   "name": "leaprs-v2",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=22.15.0" },
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -16,7 +18,11 @@
     "db:pull": "drizzle-kit pull",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:capdev-folders-migrate": "node --use-system-ca scripts/migrate-capdev-folders.mjs",
+    "test:capdev-folders": "node --use-system-ca --experimental-strip-types --test scripts/capdev-folders.test.mjs scripts/capdev-folder-permissions.test.mjs",
+    "db:active-capdev-folder-migrate": "node --use-system-ca scripts/migrate-active-capdev-folder.mjs",
+    "db:folder-reference-image-migrate": "node --use-system-ca scripts/migrate-capdev-folder-reference-image.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
