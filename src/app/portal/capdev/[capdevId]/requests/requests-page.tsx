@@ -46,6 +46,7 @@ import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useVisibleRefresh } from '@/lib/use-visible-refresh';
 import { authClient } from '@/lib/auth/client';
 import ArchiveActions from '@/components/ArchiveActions';
+import ManageRequests from '@/components/ManageRequests';
 import ReadOnlyDynamicField from '@/components/ReadOnlyDynamicField';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
@@ -538,7 +539,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               </Typography>
             </Stack>
           </Box>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
             <TextField
               size="small"
               placeholder="Search requestor..."
@@ -551,6 +552,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               Filter
             </Button>
             <Button size="small" sx={{ height: 40, whiteSpace: 'nowrap' }} variant="outlined" onClick={() => { setShowArchived(!showArchived); setNotificationFocus(null); resetPage(); }}>{showArchived ? 'See Active Requests' : 'See Archives'}</Button>
+            {(role === 'admin' || role === 'employee-department' || role === 'employee') && <ManageRequests key={`${capdevId}-${showArchived}-${Boolean(capdev.archivedAt)}`} capdevId={capdevId} archived={showArchived} parentArchived={Boolean(capdev.archivedAt)} onChanged={async () => { setNotificationFocus(null); await loadData(); }} />}
           </Stack>
         </Stack>
 

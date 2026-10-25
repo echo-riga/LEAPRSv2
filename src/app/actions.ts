@@ -1103,6 +1103,67 @@ export async function archiveCapdev(id: number) { return changeResourceArchive('
 export async function restoreCapdev(id: number) { return changeResourceArchive('capdev', id, false); }
 export async function archiveRequest(id: number) { return changeResourceArchive('request', id, true); }
 export async function restoreRequest(id: number) { return changeResourceArchive('request', id, false); }
+
+export async function getManageRequestOptions(capdevId: number, archived: boolean) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !canManageRequests(access) || !Number.isSafeInteger(capdevId) || typeof archived !== 'boolean') return unauthorized;
+    const parent = await getAccessibleCapdev(access, capdevId);
+    if (!parent) return unauthorized;
+    const records = await db.select({ id: requests.id, requestorName: requests.requestorName, description: requests.description, setting: requests.setting, createdAt: requests.createdAt })
+      .from(requests).where(and(eq(requests.capdevId, capdevId), access.role === 'employee' ? eq(requests.userId, access.userId) : undefined,
+        archived ? isNotNull(requests.archivedAt) : isNull(requests.archivedAt))).orderBy(requests.createdAt, requests.id);
+    return { success: true as const, records };
+  } catch (error) {
+    console.error('Failed to load request management options:', error);
+    return { success: false as const, error: 'Unable to load requests. Please try again.' };
+  }
+}
+
+export async function bulkManageRequests(input: { capdevId: number; requestIds: number[]; action: 'archive' | 'delete' }) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || !canManageRequests(access)) return unauthorized;
+    if (!input || !Number.isSafeInteger(input.capdevId) || input.capdevId <= 0 || !['archive', 'delete'].includes(input.action) ||
+      !Array.isArray(input.requestIds) || !input.requestIds.length || input.requestIds.length > 500 ||
+      input.requestIds.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(input.requestIds).size !== input.requestIds.length) {
+      return { success: false as const, error: 'Select between 1 and 500 valid requests.' };
+    }
+    if (!await getAccessibleCapdev(access, input.capdevId)) return unauthorized;
+    const actor = await getActorSnapshot(access);
+    return await withTransaction(async tx => {
+      const selected = await tx.select().from(requests).where(and(eq(requests.capdevId, input.capdevId), inArray(requests.id, input.requestIds))).orderBy(requests.id).for('update');
+      if (selected.length !== input.requestIds.length || selected.some(request => access.role === 'employee' && request.userId !== access.userId)) {
+        throw new Error('Some selected requests are unavailable. Refresh and try again.');
+      }
+      const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, input.capdevId)).for('update');
+      if (!parent) throw new Error('CapDev no longer exists.');
+      await assertActiveFolderAccess(tx, access.role, parent.folderId);
+      if (input.action === 'archive' && (parent.archivedAt || selected.some(request => request.archivedAt))) {
+        throw new Error('Some selected requests are already archived. Refresh and try again.');
+      }
+      if (input.action === 'delete' && selected.some(request => !isArchiveReadOnly(request, parent))) {
+        throw new Error('Archive all selected requests before deleting permanently.');
+      }
+      if (input.action === 'archive') {
+        await tx.update(requests).set({ archivedAt: new Date(), updatedAt: new Date(), updatedById: access.userId }).where(inArray(requests.id, input.requestIds));
+        for (const request of selected) await tx.insert(auditLogs).values({ ...actor, action: 'archived', entityType: 'request', entityId: String(request.id), entityLabel: requestLabel(request.requestorName),
+          details: { requestId: request.id, capdevId: parent.id, capdevAipCode: parent.aipCode, requestorName: request.requestorName, bulk: true } });
+      } else {
+        await cleanupRequestStorage(tx, input.requestIds);
+        for (const request of selected) {
+          const result = await deleteRequestRecords(tx, request.id, actor);
+          if (!result.rows.length) throw new Error('A selected request no longer exists. Refresh and try again.');
+        }
+      }
+      return { success: true as const };
+    });
+  } catch (error) {
+    console.error('Failed to manage selected requests:', error);
+    return { success: false as const, error: error instanceof Error ? error.message : 'Unable to update selected requests.' };
+  }
+}
+
 export async function archiveRequestStatusUpdate(id: number) { return changeResourceArchive('status_update', id, true); }
 export async function restoreRequestStatusUpdate(id: number) { return changeResourceArchive('status_update', id, false); }
 
@@ -2777,6 +2838,22 @@ export async function updateRequest(id: number, data: RequestInput) {
   }
 }
 
+async function cleanupRequestStorage(tx: Transaction, ids: number[]) {
+  const storageFolders = await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, ids));
+  for (const storageFolder of storageFolders) {
+    try {
+      const accessToken = await getGoogleDriveAccessToken(storageFolder.rootFolderId);
+      await verifyManagedDriveFolder(accessToken, storageFolder.folderId, storageFolder.rootFolderId);
+      const deletion = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(storageFolder.folderId.trim())}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!deletion.ok && deletion.status !== 404) throw new Error('Unable to delete request attachment folder.');
+    } catch (error) {
+      console.warn('Could not delete Google Drive folder for request:', error);
+    }
+  }
+}
+
 export async function deleteRequest(id: number) {
   try {
     const access = await getCurrentAccess();
@@ -2791,21 +2868,7 @@ export async function deleteRequest(id: number) {
       if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (!isArchiveReadOnly(current, parent)) return { success: false, error: 'Archive this request before deleting permanently.' };
 
-      const storageFolders = await tx.select().from(requestStorageFolders).where(eq(requestStorageFolders.requestId, id));
-      for (const storageFolder of storageFolders) {
-      const driveFolderId = storageFolder.folderId;
-      try {
-        const accessToken = await getGoogleDriveAccessToken(storageFolder.rootFolderId);
-        await verifyManagedDriveFolder(accessToken, storageFolder.folderId, storageFolder.rootFolderId);
-        const deletion = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFolderId.trim())}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (!deletion.ok && deletion.status !== 404) throw new Error('Unable to delete request attachment folder.');
-      } catch (err) {
-        console.warn('Could not delete Google Drive folder for request:', err);
-      }
-      }
+      await cleanupRequestStorage(tx, [id]);
 
       // Delete records atomically; committed budget deductions remain permanent.
       const result = await deleteRequestRecords(tx, id, actor);
