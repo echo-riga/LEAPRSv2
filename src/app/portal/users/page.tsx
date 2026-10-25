@@ -46,6 +46,7 @@ import {
 import { authClient } from '@/lib/auth/client';
 import { archiveDirectoryUser, deleteArchivedDirectoryUser, createDirectoryUser, decideRoleApproval, getCurrentUserAccess, getDepartmentOptions, getPendingRoleApprovals, getUsersDirectory, restoreDirectoryUser, updateDirectoryUser, createUser, type PendingRoleApproval } from '@/app/actions';
 import ActionErrorDialog from '@/components/ActionErrorDialog';
+import ManageUsers from '@/components/ManageUsers';
 import DeleteConfirmationDialog from '@/components/DeleteConfirmationDialog';
 import DateField from '@/components/DateField';
 import { ROLE_OPTIONS, roleLabel } from '@/lib/role-options';
@@ -505,7 +506,7 @@ export default function UsersManagementPage() {
             Users Management
           </Typography>
 
-          <Stack direction="row" spacing={2} sx={{ width: { xs: '100%', sm: 'auto' }, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Stack direction="row" spacing={2} useFlexGap sx={{ width: { xs: '100%', sm: 'auto' }, alignItems: 'center', flexWrap: 'wrap' }}>
             {/* Search Input */}
             <TextField
               placeholder="Search user..."
@@ -537,6 +538,7 @@ export default function UsersManagementPage() {
             <Button size="small" sx={{ height: 40, whiteSpace: 'nowrap' }} variant="outlined" startIcon={showArchived ? <PersonIcon /> : <ArchiveIcon />} onClick={() => { setShowArchived((current) => !current); setCurrentPage(1); }}>
               {showArchived ? 'See Active Users' : 'See Archives'}
             </Button>
+            <ManageUsers key={String(showArchived)} archived={showArchived} onChanged={() => loadUsers(false)} />
           </Stack>
         </Stack>
 

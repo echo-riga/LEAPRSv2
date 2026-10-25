@@ -928,6 +928,69 @@ export async function createDirectoryUser(input: { name: string; email: string; 
   }
 }
 
+export async function getManageUserOptions(archived: boolean) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin' || typeof archived !== 'boolean') return unauthorized;
+    const result = await db.execute(sql`
+      SELECT u.id, identity.name, identity.email, u.role, u.department
+      FROM ${users} u INNER JOIN neon_auth.user identity ON identity.id::text = u.id
+      WHERE u.id <> ${access.userId} AND ${archived ? sql`u.archived_at IS NOT NULL` : sql`u.archived_at IS NULL`}
+        AND NOT EXISTS (SELECT 1 FROM ${roleApprovalRequests} approval WHERE approval.user_id = u.id AND approval.status = 'pending')
+      ORDER BY identity.name, identity.email, u.id
+    `);
+    return { success: true as const, records: result.rows as { id: string; name: string | null; email: string; role: string; department: string }[] };
+  } catch (error) {
+    console.error('Failed to load user management options:', error);
+    return { success: false as const, error: 'Unable to load users. Please try again.' };
+  }
+}
+
+export async function bulkManageDirectoryUsers(input: { userIds: string[]; action: 'archive' | 'delete' }) {
+  try {
+    const access = await getCurrentAccess();
+    if (!access || access.role !== 'admin') return unauthorized;
+    if (!input || !['archive', 'delete'].includes(input.action) || !Array.isArray(input.userIds) || !input.userIds.length || input.userIds.length > 500 ||
+      input.userIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 255) || new Set(input.userIds).size !== input.userIds.length) {
+      return { success: false as const, error: 'Select between 1 and 500 valid users.' };
+    }
+    if (input.userIds.includes(access.userId)) return { success: false as const, error: 'You cannot archive or delete your own account.' };
+    const actor = await getActorSnapshot(access);
+    return await withTransaction(async tx => {
+      const targets = await tx.select().from(users).where(inArray(users.id, input.userIds)).orderBy(users.id).for('update');
+      if (targets.length !== input.userIds.length) throw new Error('Some selected users are unavailable. Refresh and try again.');
+      const pending = await tx.select({ id: roleApprovalRequests.id }).from(roleApprovalRequests).where(and(inArray(roleApprovalRequests.userId, input.userIds), eq(roleApprovalRequests.status, 'pending'))).for('update');
+      if (pending.length) throw new Error('Review pending accounts before managing them.');
+      if (targets.some(user => input.action === 'delete' ? !user.archivedAt : Boolean(user.archivedAt))) {
+        throw new Error(input.action === 'delete' ? 'Archive all selected users before deleting permanently.' : 'Some selected users are already archived. Refresh and try again.');
+      }
+      const identities = await tx.execute(sql`SELECT id, name, email FROM neon_auth.user WHERE id IN (${sql.join(input.userIds.map(id => sql`${id}`), sql`, `)}) ORDER BY id FOR UPDATE`);
+      const identityRows = identities.rows as { id: string; name: string | null; email: string }[];
+      if (identityRows.length !== input.userIds.length) throw new Error('Some selected accounts no longer exist. Refresh and try again.');
+      if (input.action === 'archive') {
+        await tx.update(users).set({ archivedAt: new Date() }).where(inArray(users.id, input.userIds));
+      } else {
+        for (const userId of [...input.userIds].sort()) {
+          await tx.execute(sql`DELETE FROM neon_auth.session WHERE "userId" = ${userId}`);
+          await tx.execute(sql`DELETE FROM neon_auth.account WHERE "userId" = ${userId}`);
+          await tx.execute(sql`DELETE FROM neon_auth.user WHERE id = ${userId}`);
+        }
+        await tx.delete(mcpOAuthGrants).where(inArray(mcpOAuthGrants.userId, input.userIds));
+      }
+      for (const target of targets) {
+        const identity = identityRows.find(user => user.id === target.id)!;
+        await tx.insert(auditLogs).values({ ...actor, action: input.action === 'archive' ? 'archived' : 'deleted', entityType: 'user', entityId: target.id,
+          entityLabel: identity.name || identity.email, details: { email: identity.email, role: target.role, department: target.department, bulk: true, ...(input.action === 'delete' ? { permanentlyDeleted: true } : {}) } });
+      }
+      // Retain archived application identities and their request/history references.
+      return { success: true as const };
+    });
+  } catch (error) {
+    console.error('Failed to manage selected users:', error);
+    return { success: false as const, error: error instanceof Error ? error.message : 'Unable to update selected users.' };
+  }
+}
+
 export async function archiveDirectoryUser(userId: string) {
   const access = await getCurrentAccess();
   if (!access || access.role !== 'admin' || access.userId === userId) return unauthorized;
