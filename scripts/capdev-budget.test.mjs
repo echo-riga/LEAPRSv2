@@ -35,13 +35,13 @@ function fixture({ role = 'admin', locked = {}, existing = {} } = {}) {
 
 test('changing initial budget resets remaining budget and audits both locked balances', async () => {
   const f = fixture({ locked: { budget: '6000.00' } });
-  const result = await f.update(1, { ...input, initialBudget: '12000.50' });
+  const result = await f.update(1, { ...input, initialBudget: '12000' });
   assert.equal(result.success, true);
-  assert.equal(result.capdev.initialBudget, '12000.50');
-  assert.equal(result.capdev.budget, '12000.50');
+  assert.equal(result.capdev.initialBudget, '12000');
+  assert.equal(result.capdev.budget, '12000');
   assert.deepEqual(f.audit().details.changes.filter(change => /Budget|budget/.test(change.field)), [
-    { field: 'initialBudget', label: 'Initial Balance', from: '10000.00', to: '12000.50' },
-    { field: 'budget', label: 'Remaining Balance', from: '6000.00', to: '12000.50' },
+    { field: 'initialBudget', label: 'Initial Balance', from: '10000.00', to: '12000' },
+    { field: 'budget', label: 'Remaining Balance', from: '6000.00', to: '12000' },
   ]);
 });
 
@@ -65,7 +65,7 @@ test('same amount and a repeated reset submission preserve deductions made after
 });
 
 test('invalid budgets are rejected before writes', async () => {
-  for (const initialBudget of ['0', '-1', '1.234', 'NaN', 'Infinity', '1e4', '', '10000000000']) {
+  for (const initialBudget of ['0', '-1', '1.234', '1.50', 'NaN', 'Infinity', '1e4', '', '10000000000']) {
     const f = fixture();
     assert.equal((await f.update(1, { ...input, initialBudget })).success, false);
     assert.equal(f.transactions(), 0);

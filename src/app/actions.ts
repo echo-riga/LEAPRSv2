@@ -1750,6 +1750,10 @@ export async function generateMonitoringSheet(input: { capdevIds: number[]; capd
         cell.value = field?.key === 'setting' && rawValue === 'internal'
           ? 'In-House'
           : monitoringCellValue(rawValue);
+        if (field?.key && ['initialBudget', 'budget', 'requestedBudget'].includes(field.key) && rawValue !== null && rawValue !== undefined && rawValue !== '') {
+          cell.value = Number(rawValue);
+          cell.numFmt = '#,##0';
+        }
       }
       for (let column = 2 + capacityColumns; column < cursor; column += 1) {
         const cell = sheet.getCell(row, column);
@@ -1787,7 +1791,7 @@ export async function createCapdev(data: CapdevInput) {
         actorId: access.userId,
         capdevId: created.id,
         title: `New CapDev: ${created.aipCode}`,
-        message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+        message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
         link: `/portal/folders/${created.folderId}#capdev-record-${created.id}`,
         type: 'capdev_created',
       });
@@ -1846,7 +1850,7 @@ export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate:
           actorId: access.userId,
           capdevId: duplicate.id,
           title: `New CapDev: ${duplicate.aipCode}`,
-          message: `Duplicated for ${duplicate.department} with balance ₱${Number(duplicate.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+          message: `Duplicated for ${duplicate.department} with balance ₱${Number(duplicate.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
           link: `/portal/folders/${duplicate.folderId}#capdev-record-${duplicate.id}`,
           type: 'capdev_created',
         });
@@ -1879,7 +1883,7 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     let initialBudget: string | undefined;
     if (data.initialBudget !== undefined) {
       try { initialBudget = validateMoney(data.initialBudget); }
-      catch { return { success: false, error: 'Enter an initial balance greater than zero with at most two decimal places.' }; }
+      catch { return { success: false, error: 'Enter an initial balance as a whole number greater than zero.' }; }
     }
     data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo, access.userId) };
     const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;
@@ -2707,7 +2711,7 @@ export async function createRequest(data: RequestInput) {
         capdevId: saved.capdevId,
         requestId: saved.id,
         title: `New Requisition: ${saved.setting === 'internal' ? 'In-House' : saved.setting === 'external' ? 'External' : 'CapDev Request'}`,
-        message: `${saved.requestorName || 'Requestor'} submitted a request for ₱${Number(saved.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+        message: `${saved.requestorName || 'Requestor'} submitted a request for ₱${Number(saved.requestedBudget).toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
         link: `/portal/capdev/${saved.capdevId}/requests#request-record-${saved.id}`,
         type: 'new_request',
       });

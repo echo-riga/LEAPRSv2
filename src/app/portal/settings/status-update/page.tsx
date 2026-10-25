@@ -1,4 +1,5 @@
 'use client';
+import NumberField from '@/components/NumberField';
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -385,7 +386,7 @@ export default function StatusUpdateConfigPage() {
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
               {dynamicFieldLabel(field)} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
-            <TextField
+            <NumberField
               type="number"
               fullWidth
               size="small"

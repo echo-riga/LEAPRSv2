@@ -1,4 +1,5 @@
 'use client';
+import { formatWholeNumber } from '@/lib/amount-format';
 
 import React from 'react';
 import {
@@ -130,7 +131,7 @@ export default function EvaluationSummaryDialog({ open, loading, error, summary,
                             <Box sx={{ height: 8, flexGrow: 1, bgcolor: 'rgba(46, 125, 50, 0.1)', borderRadius: 4, overflow: 'hidden' }}>
                               <Box sx={{ height: '100%', width: `${(count / largestCount) * 100}%`, minWidth: count > 0 ? 4 : 0, bgcolor: 'primary.main', borderRadius: 4 }} />
                             </Box>
-                            <Typography variant="caption" color="text.secondary" sx={{ width: 18, textAlign: 'right' }}>{count}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ width: 18, textAlign: 'right' }}>{formatWholeNumber(count)}</Typography>
                           </Stack>
                         ))}
                       </Stack>

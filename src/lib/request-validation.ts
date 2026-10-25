@@ -18,8 +18,8 @@ export function validateRequestInput(value: unknown) {
 }
 
 export function validateMoney(value: unknown): string {
-  if ((typeof value !== 'string' && typeof value !== 'number') || !/^\d{1,10}(\.\d{1,2})?$/.test(String(value)) || Number(value) <= 0) {
-    throw new Error('Enter a positive amount with at most two decimal places.');
+  if ((typeof value !== 'string' && typeof value !== 'number') || !/^\d{1,10}(\.0{1,2})?$/.test(String(value)) || Number(value) <= 0) {
+    throw new Error('Enter a whole amount greater than zero.');
   }
   return String(value);
 }

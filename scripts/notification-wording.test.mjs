@@ -12,10 +12,10 @@ test('new request copy identifies the requestor and keeps the amount concise', (
   assert.deepEqual(formatRequestNotification({
     type: 'new_request',
     title: 'New Requisition: In-House',
-    message: 'Genrey Jarina submitted a request for ₱111.00',
+    message: 'Genrey Jarina submitted a request for ₱111',
   }, request), {
     title: 'New In-House request: Genrey Jarina',
-    message: 'Requested ₱111.00.',
+    message: 'Requested ₱111.',
   });
 });
 

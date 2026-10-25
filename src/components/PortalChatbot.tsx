@@ -1,4 +1,6 @@
 'use client';
+import NumberField from '@/components/NumberField';
+import AmountField from '@/components/AmountField';
 
 import React, { useState, useRef, useEffect } from 'react';
 import {
@@ -352,7 +354,7 @@ function RequestDraftModal({
                 onBlur={(e) => void handleAipCodeBlur(e.target.value)}
                 disabled={submitting}
                 error={Boolean(aipError)}
-                helperText={aipError || (draft.capdev ? `${draft.capdev.department || 'CapDev'} (Remaining: ₱${Number(draft.capdev.remainingBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` : undefined)}
+                helperText={aipError || (draft.capdev ? `${draft.capdev.department || 'CapDev'} (Remaining: ₱${Number(draft.capdev.remainingBudget).toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })})` : undefined)}
                 slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
@@ -375,10 +377,9 @@ function RequestDraftModal({
 
             {/* Amount */}
             <Grid size={12}>
-              <TextField
+              <AmountField
                 required
                 fullWidth
-                type="number"
                 label="Requested Amount (₱)"
                 value={draft.requestedBudget}
                 onChange={(e) => {
@@ -463,7 +464,8 @@ function RequestDraftModal({
                       onChange={(val) => handleSetDynamicValue(field, val)}
                     />
                   ) : (
-                    <TextField
+                    <NumberField
+                      type={field.type === 'number' ? 'number' : 'text'}
                       fullWidth
                       required={field.isRequired}
                       label={field.name}

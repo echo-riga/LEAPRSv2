@@ -27,7 +27,7 @@ function valueText(value: unknown, field = ''): string {
   if (value === null || value === undefined || value === '') return 'Not set';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (/budget|amount/i.test(field) && Number.isFinite(Number(value))) {
-    return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(Number(value));
+    return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 }).format(Number(value));
   }
   if (Array.isArray(value)) return value.map((item) => valueText(item)).join(', ') || 'None';
   if (typeof value === 'object') {

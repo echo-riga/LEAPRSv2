@@ -1,4 +1,5 @@
 'use client';
+import { formatWholeNumber } from '@/lib/amount-format';
 
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -163,7 +164,7 @@ export default function SettingsPage() {
       description: 'Configure custom dynamic fields, form layout, and additional form information for CapDev.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
-          <Chip label={`${counts.capdevFieldsCount} Dynamic Fields`} size="small" variant="outlined" color="success" />
+          <Chip label={`${formatWholeNumber(counts.capdevFieldsCount)} Dynamic Fields`} size="small" variant="outlined" color="success" />
         </Stack>
       ),
       actionText: 'Configure Fields',
@@ -175,8 +176,8 @@ export default function SettingsPage() {
       description: 'Configure custom dynamic fields, form layout, and layout options for request forms.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
-          <Chip label={`${counts.internalRequestFieldsCount} In-House Fields`} size="small" variant="outlined" color="primary" />
-          <Chip label={`${counts.externalRequestFieldsCount} External Fields`} size="small" variant="outlined" color="primary" />
+          <Chip label={`${formatWholeNumber(counts.internalRequestFieldsCount)} In-House Fields`} size="small" variant="outlined" color="primary" />
+          <Chip label={`${formatWholeNumber(counts.externalRequestFieldsCount)} External Fields`} size="small" variant="outlined" color="primary" />
         </Stack>
       ),
       footer: (
@@ -200,7 +201,7 @@ export default function SettingsPage() {
       description: 'Configure custom dynamic fields, form layout, and progress update options.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
-          <Chip label={`${counts.statusUpdateFieldsCount} Dynamic Fields`} size="small" variant="outlined" color="primary" />
+          <Chip label={`${formatWholeNumber(counts.statusUpdateFieldsCount)} Dynamic Fields`} size="small" variant="outlined" color="primary" />
         </Stack>
       ),
       footer: (

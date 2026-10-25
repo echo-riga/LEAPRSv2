@@ -1,4 +1,5 @@
 'use client';
+import { formatWholeNumber } from '@/lib/amount-format';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -529,7 +530,7 @@ export default function UsersManagementPage() {
 
             <Button variant="outlined" color="primary" startIcon={<PendingApprovalIcon />} onClick={() => setPendingApprovalsOpen(true)} sx={{ height: 40, whiteSpace: 'nowrap' }}>
               Pending Department Employees
-              <Chip label={pendingApprovals.length} size="small" color={pendingApprovals.length > 0 ? 'warning' : 'default'} sx={{ ml: 1, height: 22, fontWeight: 700 }} />
+              <Chip label={formatWholeNumber(pendingApprovals.length)} size="small" color={pendingApprovals.length > 0 ? 'warning' : 'default'} sx={{ ml: 1, height: 22, fontWeight: 700 }} />
             </Button>
 
             <Button size="small" sx={{ height: 40 }} variant="outlined" startIcon={<FilterIcon />} onClick={() => { setDraftRoleFilter([...roleFilter]); setDraftDepartmentFilter([...departmentFilter]); setDraftDateFrom(dateFrom); setDraftDateTo(dateTo); setDraftSortOrder(sortOrder); setFiltersOpen(true); }}>Filter</Button>

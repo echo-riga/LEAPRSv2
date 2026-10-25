@@ -1,4 +1,6 @@
 'use client';
+import NumberField from '@/components/NumberField';
+import AmountField from '@/components/AmountField';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -160,7 +162,7 @@ const formatDateTime = (value: Date | string) =>
   }).format(new Date(value));
 
 const formatCurrency = (value: string | number) =>
-  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(
+  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 }).format(
     Number(value) || 0
   );
 
@@ -905,7 +907,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             label={dynamicFieldLabel(field)}
             required={field.isRequired}
             options={field.options}
-            value={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
             placeholder={field.placeholder || undefined}
 
             onChange={(value) => setDynamicValue(field, value)}
@@ -918,7 +920,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             inputValue={String(fieldValue ?? (isStandardStatusUpdate ? form.statusUpdate : isStandardRemarks ? form.remarks : ''))}
             onChange={(_, value, reason) => {
               if (reason === 'selectOption' && typeof value === 'string') {
-                const current = String(fieldValue || '').trim();
+                const current = String(fieldValue ?? '').trim();
                 const concatenated = current ? `${current} ${value.trim()}` : value.trim();
                 setDynamicValue(field, concatenated);
               } else if (reason === 'clear') {
@@ -972,7 +974,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           <DateField
             label={dynamicFieldLabel(field)}
             required={field.isRequired}
-            value={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
             onChange={(value) => setDynamicValue(field, value)}
           />
         ) : field.type === 'file' ? (
@@ -987,12 +989,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             onRemovePending={(file) => removeSelectedFile(storageKey, file)}
           />
         ) : (
-          <TextField
+          <NumberField
             required={field.isRequired}
             fullWidth
             label={dynamicFieldLabel(field)}
             type={field.type === 'number' ? 'number' : 'text'}
-            value={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
             placeholder={field.placeholder || ''}
             onChange={(event) => setDynamicValue(field, event.target.value)}
             error={Boolean(fieldErrors[storageKey])}
@@ -2038,10 +2040,10 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                 {error}
               </Alert>
             )}
-            <TextField
+            <AmountField
               id="status-field-deductedAmount"
               label="Deducted Amount"
-              type="number"
+
               fullWidth
               value={editableDeductedAmount}
               onChange={(e) => {
@@ -2056,7 +2058,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
               helperText={
                 fieldErrors.deductedAmount ||
                 (Number(editableDeductedAmount) <= 0
-                  ? 'Enter an amount greater than ₱0.00.'
+                  ? 'Enter an amount greater than ₱0.'
                   : capdev && Number(editableDeductedAmount) > Number(capdev.budget)
                     ? `Exceeds the remaining balance (${formatCurrency(capdev.budget)}).`
                     : '')

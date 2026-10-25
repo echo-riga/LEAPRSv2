@@ -91,8 +91,8 @@ function formatDate(value: string) {
 function formatMoney(value: string) {
   const amount = Number(value);
   return Number.isFinite(amount)
-    ? `PHP ${new Intl.NumberFormat("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)}`
-    : "PHP 0.00";
+    ? `PHP ${new Intl.NumberFormat("en-PH", { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount)}`
+    : "PHP 0";
 }
 
 function rect(

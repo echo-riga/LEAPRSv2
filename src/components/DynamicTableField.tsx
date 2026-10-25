@@ -1,4 +1,5 @@
 'use client';
+import { formatWholeNumber } from '@/lib/amount-format';
 
 import React from 'react';
 import {
@@ -263,7 +264,7 @@ export default function DynamicTableField({
             Row
           </Button>
           <Typography variant="caption" color="text.secondary" sx={{ ml: 1, fontWeight: 500 }}>
-            {tableData.length} × {colCount}
+            {formatWholeNumber(tableData.length)} × {formatWholeNumber(colCount)}
           </Typography>
         </Stack>
       )}

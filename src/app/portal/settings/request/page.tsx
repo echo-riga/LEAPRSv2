@@ -1,4 +1,5 @@
 'use client';
+import NumberField from '@/components/NumberField';
 
 import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -386,7 +387,7 @@ function RequestConfigContent() {
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
               {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
-            <TextField
+            <NumberField
               type="number"
               fullWidth
               size="small"
@@ -792,10 +793,10 @@ function RequestConfigContent() {
                               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
                                 Requested Amount <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
                               </Typography>
-                              <TextField
+                              <NumberField
                                 fullWidth
                                 size="small"
-                                placeholder="e.g. 150000.00"
+                                placeholder="e.g. 150,000"
                                 type="number"
                                 value={fixedPreviewData.requestedBudget}
                                 onChange={(e) => handleFixedPreviewChange('requestedBudget', e.target.value)}

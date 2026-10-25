@@ -1,4 +1,6 @@
 'use client';
+import NumberField from '@/components/NumberField';
+import AmountField from '@/components/AmountField';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -36,7 +38,7 @@ type CapdevFilters = { departments: string[]; initialMin: string; initialMax: st
 
 const EMPTY_FORM: CapdevForm = { folderId: 0, aipCode: '', description: '', initialBudget: '', budget: '', department: '', additionalInfo: {} };
 const EMPTY_FILTERS: CapdevFilters = { departments: [], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' };
-const formatCurrency = (value: string) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
+const formatCurrency = (value: string) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 }).format(Number(value) || 0);
 const formatDate = (value: Date | string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
 const getAttachments = (value: unknown): StatusAttachment[] => Array.isArray(value) ? value.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file) : [];
 const formatAipCode = (value: string) => {
@@ -294,7 +296,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
     }
     try { validateMoney(form.initialBudget); }
     catch {
-      setFieldErrors({ budget: 'Enter an initial balance greater than zero with at most two decimal places.' });
+      setFieldErrors({ budget: 'Enter an initial balance as a whole number greater than zero.' });
       focusFormError('capdev-field-budget');
       return;
     }
@@ -427,7 +429,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
             label={field.name}
             required={field.isRequired}
             options={field.options}
-            value={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
             placeholder={field.placeholder || undefined}
 
             onChange={(value) => setDynamicValue(field, value)}
@@ -436,11 +438,11 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
           <Autocomplete
             freeSolo
             options={field.options}
-            value={String(fieldValue || '')}
-            inputValue={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
+            inputValue={String(fieldValue ?? '')}
             onChange={(_, value, reason) => {
               if (reason === 'selectOption' && typeof value === 'string') {
-                const current = String(fieldValue || '').trim();
+                const current = String(fieldValue ?? '').trim();
                 const concatenated = current ? `${current} ${value.trim()}` : value.trim();
                 setDynamicValue(field, concatenated);
               } else if (reason === 'clear') {
@@ -472,7 +474,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
             minRows={1}
             label={field.name}
             placeholder={field.placeholder || ''}
-            value={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
             onChange={(event) => setDynamicValue(field, event.target.value)}
           />
         ) : field.type === 'table' ? (
@@ -488,7 +490,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
           <DateField
             label={field.name}
             required={isRequired}
-            value={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
             onChange={(value) => setDynamicValue(field, value)}
           />
         ) : field.type === 'file' ? (
@@ -504,12 +506,12 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
             onRemovePending={(file) => removeSelectedFile(storageKey, file)}
           />
         ) : (
-          <TextField
+          <NumberField
             required={isRequired}
             fullWidth
             label={field.name}
             type={field.type === 'number' ? 'number' : 'text'}
-            value={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
             placeholder={field.placeholder || ''}
             onChange={(event) => setDynamicValue(field, event.target.value)}
           />
@@ -575,7 +577,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
             {isAdmin && <Grid size={12}><TextField select fullWidth label="Folder" disabled={editorReadOnly} value={form.folderId || folderId} onChange={(event) => setValue({ folderId: Number(event.target.value) })}>{folderOptions.map(folder => <MenuItem key={folder.id} value={folder.id}>{folder.name}</MenuItem>)}</TextField></Grid>}
             <Grid size={{ xs: 12, sm: 6 }} id="capdev-field-aipCode"><TextField disabled={editorReadOnly} required fullWidth label="AIP Code" placeholder="0000-000-0-0-00-000-000" value={form.aipCode} error={Boolean(fieldErrors.aipCode)} helperText={fieldErrors.aipCode} onChange={(event) => setValue({ aipCode: formatAipCode(event.target.value) })} onBlur={() => { if (form.aipCode && !/^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/.test(form.aipCode.trim())) setFieldErrors((current) => ({ ...current, aipCode: 'Use the format 0000-000-0-0-00-000-000.' })); }} /></Grid>
             <Grid size={{ xs: 12, sm: 6 }}><DepartmentCombobox disabled={editorReadOnly} options={departmentOptions} value={form.department} onChange={(department) => setValue({ department })} otherSelected={departmentIsOther} onOtherSelectedChange={setDepartmentIsOther} /></Grid>
-            <Grid size={editing ? { xs: 12, sm: 6 } : 12} id="capdev-field-budget">{editorReadOnly ? <><Typography variant="body2" color="text.secondary">Initial Balance</Typography><Typography sx={{ fontWeight: 700 }}>{formatCurrency(form.initialBudget)}</Typography></> : <TextField required fullWidth label="Initial Balance" type="number" value={form.initialBudget} error={Boolean(fieldErrors.budget)} helperText={fieldErrors.budget || (editing && Number(form.initialBudget) !== Number(editing.initialBudget) ? 'Saving resets the remaining balance to this amount.' : undefined)} slotProps={{ htmlInput: { min: '0.01', step: '0.01' } }} onChange={(event) => { const initialBudget = event.target.value; setValue({ initialBudget, budget: editing && Number(initialBudget) === Number(editing.initialBudget) ? editing.budget : initialBudget }); }} />}</Grid>
+            <Grid size={editing ? { xs: 12, sm: 6 } : 12} id="capdev-field-budget">{editorReadOnly ? <><Typography variant="body2" color="text.secondary">Initial Balance</Typography><Typography sx={{ fontWeight: 700 }}>{formatCurrency(form.initialBudget)}</Typography></> : <AmountField required fullWidth label="Initial Balance" value={form.initialBudget} error={Boolean(fieldErrors.budget)} helperText={fieldErrors.budget || (editing && Number(form.initialBudget) !== Number(editing.initialBudget) ? 'Saving resets the remaining balance to this amount.' : undefined)}  onChange={(event) => { const initialBudget = event.target.value; setValue({ initialBudget, budget: editing && Number(initialBudget) === Number(editing.initialBudget) ? editing.budget : initialBudget }); }} />}</Grid>
             {editing && <Grid size={{ xs: 12, sm: 6 }}><Typography variant="body2" color="text.secondary">Remaining Balance</Typography><Typography sx={{ fontWeight: 700, color: Number(form.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(form.budget)}</Typography></Grid>}
             {allDefinitions.map(renderDynamicField)}
           </Grid>
@@ -587,13 +589,12 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
         <DialogTitle id="budget-reset-title" sx={{ fontWeight: 800 }}>Reset remaining balance?</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2}>
-            <Typography id="budget-reset-description">Changing the initial balance for CapDev {editing?.aipCode} will reset its remaining balance to the new initial amount.</Typography>
+            <Typography id="budget-reset-description">CapDev {editing?.aipCode}</Typography>
             <Stack spacing={1}>
               <Typography>Current remaining balance: <strong>{formatCurrency(editing?.budget || '0')}</strong></Typography>
-              <Typography>New initial balance: <strong>{formatCurrency(form.initialBudget)}</strong></Typography>
-              <Typography>New remaining balance: <strong>{formatCurrency(form.initialBudget)}</strong></Typography>
+              <Typography>New initial &amp; remaining balance: <strong>{formatCurrency(form.initialBudget)}</strong></Typography>
             </Stack>
-            <Alert severity="warning">Saving replaces the remaining balance shown above. Existing requests and deduction history will be kept.</Alert>
+            <Alert severity="warning">Requests and deduction history are kept.</Alert>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
@@ -601,7 +602,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
           <Button variant="contained" color="warning" disabled={saving} onClick={() => void saveProject(true)}>Reset balance and save</Button>
         </DialogActions>
       </Dialog>
-      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}>{(['today', 'month', 'year'] as const).map((preset) => <Button key={preset} size="small" variant={getActiveDateFilterPreset(draftFilters.dateFrom, draftFilters.dateTo) === preset ? 'contained' : 'text'} onClick={() => setDraftFilters({ ...draftFilters, ...getDateFilterPresetRange(preset) })}>{preset === 'today' ? 'Today' : preset === 'month' ? 'This month' : 'This year'}</Button>)}</Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { const next = { ...draftFilters, departments: [...draftFilters.departments] }; setFilters(next); saveFiltersForAccount(next); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><AmountField fullWidth label="Initial balance from" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><AmountField fullWidth label="Initial balance to" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><AmountField fullWidth label="Remaining balance from" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><AmountField fullWidth label="Remaining balance to" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}>{(['today', 'month', 'year'] as const).map((preset) => <Button key={preset} size="small" variant={getActiveDateFilterPreset(draftFilters.dateFrom, draftFilters.dateTo) === preset ? 'contained' : 'text'} onClick={() => setDraftFilters({ ...draftFilters, ...getDateFilterPresetRange(preset) })}>{preset === 'today' ? 'Today' : preset === 'month' ? 'This month' : 'This year'}</Button>)}</Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { const next = { ...draftFilters, departments: [...draftFilters.departments] }; setFilters(next); saveFiltersForAccount(next); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
 
       <Dialog open={bulkOpen && !bulkConfirm} onClose={() => { if (!bulkSaving) setBulkOpen(false); }} fullWidth maxWidth="sm">
         <DialogTitle sx={{ fontWeight: 800 }}>Manage CapDev</DialogTitle>

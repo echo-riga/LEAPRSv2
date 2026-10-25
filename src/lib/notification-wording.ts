@@ -28,7 +28,7 @@ function money(value: string | number | null | undefined) {
   if (value === null || value === undefined || value === '') return '';
   const amount = Number(value);
   return Number.isFinite(amount)
-    ? `₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    ? `₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
     : '';
 }
 

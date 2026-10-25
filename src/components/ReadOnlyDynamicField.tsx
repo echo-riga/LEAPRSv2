@@ -4,6 +4,7 @@ import { Box, Link, Stack, Typography } from '@mui/material';
 import { dynamicFieldLabel } from '@/lib/dynamic-fields';
 import DynamicTableField from '@/components/DynamicTableField';
 import { isPendingAttachment } from '@/lib/background-attachments';
+import { formatWholeNumber } from '@/lib/amount-format';
 
 type Props = { field: { name: string; type: string; options?: string[] | null }; value: unknown };
 export default function ReadOnlyDynamicField({ field, value }: Props) {
@@ -11,7 +12,7 @@ export default function ReadOnlyDynamicField({ field, value }: Props) {
   const dateValue = field.type === 'date' && typeof value === 'string' && value ? new Date(value) : null;
   const displayValue = dateValue && !Number.isNaN(dateValue.getTime())
     ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila' }).format(dateValue)
-    : value;
+    : field.type === 'number' && value != null ? formatWholeNumber(String(value)) : value;
   return <Box>
     <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>{dynamicFieldLabel(field)}</Typography>
     {field.type === 'file' ? <Stack spacing={0.5}>{Array.isArray(value) && value.length ? value.map((file, index) => {

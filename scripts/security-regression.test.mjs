@@ -11,11 +11,12 @@ test('request payload cannot set workflow, identity, or timestamps', () => {
   assert.deepEqual(result, request);
 });
 test('invalid amounts and excessive precision are rejected', () => {
-  for (const amount of ['-5000', '0', 'NaN', 'Infinity', '1e3', '12.345', '10000000000', '', null, {}, Infinity]) {
+  for (const amount of ['-5000', '0', 'NaN', 'Infinity', '1e3', '12.345', '0.01', '9999999999.99', '20,000', '10000000000', '', null, {}, Infinity]) {
     assert.throws(() => validateMoney(amount));
   }
-  assert.equal(validateMoney('0.01'), '0.01');
-  assert.equal(validateMoney('9999999999.99'), '9999999999.99');
+  assert.equal(validateMoney('1'), '1');
+  assert.equal(validateMoney('20000.00'), '20000.00');
+  assert.equal(validateMoney('9999999999'), '9999999999');
 });
 test('invalid request setting, project ID, and dynamic data are rejected', () => {
   for (const override of [{ setting: 'completed' }, { capdevId: 0 }, { capdevId: '10' }, { capdevId: 1.5 }, { additionalInfo: [] }, { description: null }]) {

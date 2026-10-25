@@ -1,4 +1,5 @@
 'use client';
+import NumberField from '@/components/NumberField';
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -400,7 +401,7 @@ export default function CapdevConfigPage() {
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
               {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
-            <TextField
+            <NumberField
               type="number"
               fullWidth
               size="small"
@@ -779,10 +780,10 @@ export default function CapdevConfigPage() {
                             <Stack spacing={0.5}>
                               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>Balance <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
                               </Typography>
-                              <TextField
+                              <NumberField type="number"
                                 fullWidth
                                 size="small"
-                                placeholder="e.g. 150000.00"
+                                placeholder="e.g. 150,000"
                                 value={fixedPreviewData.budget}
                                 onChange={(e) => handleFixedPreviewChange('budget', e.target.value)}
                                 sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#ffffff' } }}

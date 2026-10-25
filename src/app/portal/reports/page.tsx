@@ -367,12 +367,14 @@ function RequestReportTable({ report }: { report: RequestReportData }) {
                           {new Intl.NumberFormat("en-PH", {
                             style: "currency",
                             currency: "PHP",
+                            maximumFractionDigits: 0,
                           }).format(Number(row.allottedBudget))}
                         </TableCell>
                         <TableCell>
                           {new Intl.NumberFormat("en-PH", {
                             style: "currency",
                             currency: "PHP",
+                            maximumFractionDigits: 0,
                           }).format(Number(row.utilizedBudget))}
                         </TableCell>
                         <TableCell>

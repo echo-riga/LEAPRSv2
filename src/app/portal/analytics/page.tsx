@@ -1,4 +1,5 @@
 'use client';
+import { formatWholeNumber } from '@/lib/amount-format';
 
 import { readPortal } from '@/lib/portal-read-client';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -123,7 +124,7 @@ function StatCard({ label, value, icon, onClick }: { label: string; value: React
           <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="body2" color="text.secondary">{label}</Typography>
-              <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, overflowWrap: 'anywhere' }}>{value}</Typography>
+              <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, overflowWrap: 'anywhere' }}>{typeof value === 'number' ? formatWholeNumber(value) : value}</Typography>
             </Box>
             <Box sx={{ display: 'grid', placeItems: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 2, bgcolor: 'rgba(46, 125, 50, 0.10)', color: 'primary.main' }}>{icon}</Box>
           </Stack>
@@ -439,7 +440,7 @@ export default function AnalyticsPage() {
                     <Box>
                       <Typography variant="body2">In-House</Typography>
                       <Typography sx={{ fontWeight: 800 }}>
-                        {internalCount} · {internalPercent}%
+                        {formatWholeNumber(internalCount)} · {internalPercent}%
                       </Typography>
                     </Box>
                   </Stack>
@@ -448,7 +449,7 @@ export default function AnalyticsPage() {
                     <Box>
                       <Typography variant="body2">External</Typography>
                       <Typography sx={{ fontWeight: 800 }}>
-                        {externalCount} · {trainingTotal ? 100 - internalPercent : 0}%
+                        {formatWholeNumber(externalCount)} · {trainingTotal ? 100 - internalPercent : 0}%
                       </Typography>
                     </Box>
                   </Stack>
@@ -463,7 +464,7 @@ export default function AnalyticsPage() {
                   {auditSeries.map((item) => (
                     <ButtonBase key={item.key} disabled={item.value === 0} onClick={() => openAuditBucket(item.key, item.label)} sx={{ height: '100%', minWidth: 38, flex: 1, alignItems: 'stretch', borderRadius: 1 }}>
                     <Stack spacing={0.75} sx={{ height: '100%', width: '100%', alignItems: 'center', justifyContent: 'flex-end' }}>
-                      <Typography variant="caption" sx={{ fontWeight: 700 }}>{item.value}</Typography>
+                      <Typography variant="caption" sx={{ fontWeight: 700 }}>{formatWholeNumber(item.value)}</Typography>
                       <Box sx={{ width: '100%', maxWidth: 34, height: 160, bgcolor: '#e4ece4', borderRadius: '4px 4px 0 0', display: 'flex', alignItems: 'flex-end' }}>
                         <Box sx={{ width: '100%', height: `${(item.value / maxAuditActivity) * 100}%`, minHeight: item.value ? 3 : 0, bgcolor: 'primary.main', borderRadius: '4px 4px 0 0' }} />
                       </Box>
@@ -480,7 +481,7 @@ export default function AnalyticsPage() {
 
         <Box>
           <Typography variant="h5" sx={{ fontWeight: 800 }}>Status and balances as of {snapshotLabel}</Typography>
-          {incompleteHistoryCount > 0 && <Alert severity="warning" sx={{ mt: 2, mb: 2 }}>{incompleteHistoryCount} concluded request{incompleteHistoryCount === 1 ? '' : 's'} cannot be placed accurately as of this historical date because the completion date is unavailable.</Alert>}
+          {incompleteHistoryCount > 0 && <Alert severity="warning" sx={{ mt: 2, mb: 2 }}>{formatWholeNumber(incompleteHistoryCount)} concluded request{incompleteHistoryCount === 1 ? '' : 's'} cannot be placed accurately as of this historical date because the completion date is unavailable.</Alert>}
           <Grid container spacing={2.5} sx={{ mt: 2, mb: 2.5 }}>
             <Grid size={{ xs: 12, sm: 6 }}><StatCard label={`Requests in progress as of ${snapshotLabel}`} value={inProgressCount} icon={<ProgressIcon />} onClick={() => openDetails('Requests in progress', requestRows(inProgressRequests))} /></Grid>
             <Grid size={{ xs: 12, sm: 6 }}><StatCard label={`Requests stopped as of ${snapshotLabel}`} value={stoppedCount} icon={<StoppedIcon />} onClick={() => openDetails('Requests stopped', requestRows(stoppedRequests))} /></Grid>
@@ -602,7 +603,7 @@ export default function AnalyticsPage() {
                     CapDev
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    {availableDraftCapdevs.length} CapDev available
+                    {formatWholeNumber(availableDraftCapdevs.length)} CapDev available
                   </Typography>
                 </Box>
                 {availableDraftCapdevs.length > 0 && (

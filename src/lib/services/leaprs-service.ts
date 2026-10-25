@@ -250,7 +250,7 @@ export async function createRequestDraftService(access: UserAccess, draft: Reque
       budgetValidation.remainingBudget = remaining;
       if (budgetValidation.requestedBudget > remaining) {
         budgetValidation.isValid = false;
-        budgetValidation.error = `Requested amount ₱${budgetValidation.requestedBudget.toLocaleString('en-PH', { minimumFractionDigits: 2 })} exceeds remaining CapDev balance ₱${remaining.toLocaleString('en-PH', { minimumFractionDigits: 2 })}.`;
+        budgetValidation.error = `Requested amount ₱${budgetValidation.requestedBudget.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} exceeds remaining CapDev balance ₱${remaining.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}.`;
       }
     } else {
       missingRequiredFields.push('AIP Code');
@@ -347,7 +347,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   if (requestedBudgetNum > remainingBudgetNum) {
     return {
       success: false as const,
-      error: `Requested amount ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 2 })} exceeds remaining CapDev balance ₱${remainingBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 2 })}.`,
+      error: `Requested amount ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} exceeds remaining CapDev balance ₱${remainingBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}.`,
     };
   }
 
@@ -431,7 +431,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
       capdevId: saved.capdevId,
       requestId: saved.id,
       title: `New Requisition: ${saved.setting === 'internal' ? 'In-House' : saved.setting === 'external' ? 'External' : 'CapDev Request'}`,
-      message: `${saved.requestorName || 'Requestor'} submitted a request for ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+      message: `${saved.requestorName || 'Requestor'} submitted a request for ₱${requestedBudgetNum.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
       link: `/portal/capdev/${saved.capdevId}/requests#request-record-${saved.id}`,
       type: 'new_request',
     });

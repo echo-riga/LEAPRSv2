@@ -1,4 +1,6 @@
 'use client';
+import NumberField from '@/components/NumberField';
+import AmountField from '@/components/AmountField';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -103,7 +105,7 @@ type CapdevDetail = {
 const EMPTY_FORM: RequestForm = { setting: 'internal', description: '', eventDate: '', requestedBudget: '', additionalInfo: {} };
 const EMPTY_FILTERS: RequestFilters = { setting: 'all', min: '', max: '', dateFrom: '', dateTo: '', sort: 'newest' };
 const formatDate = (value: Date | string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
-const formatCurrency = (value: string | number) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(value) || 0);
+const formatCurrency = (value: string | number) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 }).format(Number(value) || 0);
 const getAttachments = (value: unknown): StatusAttachment[] => Array.isArray(value) ? value.filter((file): file is StatusAttachment => typeof file === 'object' && file !== null && 'id' in file && 'name' in file && 'url' in file) : [];
 const isSavedRequestFilters = (value: unknown): value is RequestFilters => {
   if (!value || typeof value !== 'object') return false;
@@ -420,7 +422,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
             label={field.name}
             required={field.isRequired}
             options={field.options}
-            value={String(fieldValue || '')}
+            value={String(fieldValue ?? '')}
             placeholder={field.placeholder || undefined}
             disabled={!canEdit}
             onChange={(value) => setDynamicValue(field, value)}
@@ -429,11 +431,11 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
         <Autocomplete
           freeSolo
           options={field.options}
-          value={String(fieldValue || '')}
-          inputValue={String(fieldValue || '')}
+          value={String(fieldValue ?? '')}
+          inputValue={String(fieldValue ?? '')}
           onChange={(_, value, reason) => {
             if (reason === 'selectOption' && typeof value === 'string') {
-              const current = String(fieldValue || '').trim();
+              const current = String(fieldValue ?? '').trim();
               const concatenated = current ? `${current} ${value.trim()}` : value.trim();
               setDynamicValue(field, concatenated);
             } else if (reason === 'clear') {
@@ -465,7 +467,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           minRows={1}
           label={field.name}
           placeholder={field.placeholder || ''}
-          value={String(fieldValue || '')}
+          value={String(fieldValue ?? '')}
           onChange={(event) => setDynamicValue(field, event.target.value)}
         />
       ) : field.type === 'table' ? (
@@ -481,7 +483,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
         <DateField
           label={field.name}
           required={field.isRequired}
-          value={String(fieldValue || '')}
+          value={String(fieldValue ?? '')}
           onChange={(value) => setDynamicValue(field, value)}
         />
       ) : field.type === 'file' ? (
@@ -497,12 +499,12 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
           onRemovePending={(file) => removeSelectedFile(storageKey, file)}
         />
       ) : (
-        <TextField
+        <NumberField
           required={field.isRequired}
           fullWidth
           label={field.name}
           type={field.type === 'number' ? 'number' : 'text'}
-          value={String(fieldValue || '')}
+          value={String(fieldValue ?? '')}
           placeholder={field.placeholder || ''}
           onChange={(event) => setDynamicValue(field, event.target.value)}
         />
@@ -795,10 +797,10 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }} id="request-field-budget">
-                <TextField required
+                <AmountField required
                   fullWidth
                   label="Requested Amount"
-                  type="number"
+
                   value={form.requestedBudget}
                   onChange={(event) => setValue({ requestedBudget: event.target.value })}
                   onBlur={() => {
@@ -815,7 +817,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField fullWidth
                   label="Remaining Balance"
-                  value={capdev ? formatCurrency(capdev.budget) : '₱0.00'}
+                  value={capdev ? formatCurrency(capdev.budget) : '₱0'}
                   disabled
                   slotProps={{ inputLabel: { shrink: true } }}
                   sx={disabledFieldSx}
@@ -894,10 +896,10 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               </TextField>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField fullWidth type="number" label="Requested amount from" value={draftFilters.min} onChange={(e) => setDraftFilters({ ...draftFilters, min: e.target.value })} />
+              <AmountField fullWidth label="Requested amount from" value={draftFilters.min} onChange={(e) => setDraftFilters({ ...draftFilters, min: e.target.value })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField fullWidth type="number" label="Requested amount to" value={draftFilters.max} onChange={(e) => setDraftFilters({ ...draftFilters, max: e.target.value })} />
+              <AmountField fullWidth label="Requested amount to" value={draftFilters.max} onChange={(e) => setDraftFilters({ ...draftFilters, max: e.target.value })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <DateField

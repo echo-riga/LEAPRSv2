@@ -1,9 +1,10 @@
 'use client';
+import NumberField from '@/components/NumberField';
 
 import React, { useState } from 'react';
 import {
   Button, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, Stack, TextField, Typography, Skeleton,
+  IconButton, Stack, Typography, Skeleton,
 } from '@mui/material';
 import { Add, Remove, ChevronRight, NotificationsActiveOutlined } from '@mui/icons-material';
 
@@ -78,7 +79,7 @@ export default function StatusNotificationSettings() {
             <IconButton aria-label="Decrease notification days" onClick={() => changeDays(-1)} disabled={saving || !loaded || (valid && value === 1)} color="primary" sx={{ width: 48, height: 56 }}>
               <Remove />
             </IconButton>
-            <TextField
+            <NumberField
               label="Days Without a Progress Update"
               type="number"
               disabled={saving || !loaded}

@@ -1,4 +1,5 @@
 'use client';
+import { formatWholeNumber } from '@/lib/amount-format';
 
 import { readPortal } from '@/lib/portal-read-client';
 import { useVisibleRefresh } from '@/lib/use-visible-refresh';
@@ -193,11 +194,11 @@ export default function NotificationsMenu({ userId }: { userId: string }) {
 
   return (
     <>
-      <Tooltip title={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : 'Notifications'}>
+      <Tooltip title={unreadCount > 0 ? `Notifications (${formatWholeNumber(unreadCount)} unread)` : 'Notifications'}>
         <IconButton
           color="primary"
           onClick={handleOpen}
-          aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : 'Notifications'}
+          aria-label={unreadCount > 0 ? `Notifications (${formatWholeNumber(unreadCount)} unread)` : 'Notifications'}
           sx={{ position: 'relative' }}
         >
           <Badge
@@ -271,7 +272,7 @@ export default function NotificationsMenu({ userId }: { userId: string }) {
             </Typography>
             {unreadCount > 0 && (
               <Chip
-                label={`${unreadCount} new`}
+                label={`${formatWholeNumber(unreadCount)} new`}
                 size="small"
                 color="primary"
                 sx={{ height: 20, fontSize: '0.7rem', fontWeight: 700 }}
