@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, DialogActions, DialogContent, Stack, Typography } from '@mui/material';
 
-export default function GoogleStorageSettings() {
+export default function GoogleStorageSettings({ onClose }: { onClose: () => void }) {
   const [owner, setOwner] = useState<{ email: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [changing, setChanging] = useState(false);
@@ -32,17 +32,23 @@ export default function GoogleStorageSettings() {
     });
   }, [load]);
 
-  if (loading) return <CircularProgress size={24} aria-label="Loading Google storage" />;
-  return <Stack spacing={2} sx={{ mt: 2 }}>
-    {notice && <Alert severity="info" onClose={() => setNotice('')}>{notice}</Alert>}
-    {error && <Alert severity="error">{error}<Button size="small" onClick={() => void load()}>Retry</Button></Alert>}
-    <Box>
-      <Typography variant="body2" color="text.secondary">Current storage owner</Typography>
-      <Typography sx={{ mt: 0.5, fontWeight: 600, overflowWrap: 'anywhere' }}>{owner ? owner.email || 'Owner unavailable' : 'No account connected'}</Typography>
-    </Box>
-    <Box component="form" method="post" action="/api/google-storage/connect" onSubmit={() => setChanging(true)}>
-      <Button type="submit" variant="contained" disabled={changing || !configured}>{changing ? 'Connecting...' : 'Change account'}</Button>
-    </Box>
-    {!configured && <Alert severity="warning">Google connection is not configured.</Alert>}
-  </Stack>;
+  return <>
+    <DialogContent dividers sx={{ py: 4, textAlign: 'center' }}>
+      {loading ? <CircularProgress size={24} aria-label="Loading Google storage" /> : <Stack spacing={2}>
+        {notice && <Alert severity="info" onClose={() => setNotice('')}>{notice}</Alert>}
+        {error && <Alert severity="error">{error}<Button size="small" onClick={() => void load()}>Retry</Button></Alert>}
+        <Box>
+          <Typography variant="body2" color="text.secondary">Current storage owner</Typography>
+          <Typography sx={{ mt: 0.5, fontWeight: 600, overflowWrap: 'anywhere' }}>{owner ? owner.email || 'Owner unavailable' : 'No account connected'}</Typography>
+        </Box>
+        {!configured && <Alert severity="warning">Google connection is not configured.</Alert>}
+      </Stack>}
+    </DialogContent>
+    <DialogActions sx={{ p: 2, gap: 1 }}>
+      <Button color="inherit" disabled={changing} onClick={onClose}>Close</Button>
+      <Box component="form" method="post" action="/api/google-storage/connect" onSubmit={() => setChanging(true)}>
+        <Button type="submit" variant="contained" disabled={loading || changing || !configured}>{changing ? 'Connecting...' : 'Change account'}</Button>
+      </Box>
+    </DialogActions>
+  </>;
 }

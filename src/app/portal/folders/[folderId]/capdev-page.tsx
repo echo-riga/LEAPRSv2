@@ -208,7 +208,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
         filtersInitialized.current = true;
       }
     } catch {
-      if (sequence === loadSequence.current) setLoadError('Unable to load projects. Please try again.');
+      if (sequence === loadSequence.current) setLoadError('Unable to load CapDev. Please try again.');
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
@@ -294,7 +294,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
     }
     try { validateMoney(form.initialBudget); }
     catch {
-      setFieldErrors({ budget: 'Enter an initial budget greater than zero with at most two decimal places.' });
+      setFieldErrors({ budget: 'Enter an initial balance greater than zero with at most two decimal places.' });
       focusFormError('capdev-field-budget');
       return;
     }
@@ -323,7 +323,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
         setPage(1);
         await loadData();
       } else {
-        const message = result.error || 'Unable to save this CapDev project.';
+        const message = result.error || 'Unable to save this CapDev.';
         const lower = message.toLowerCase();
         if (lower.includes('aip code') || lower.includes('duplicate') || lower.includes('already exists')) {
           setFieldErrors({ aipCode: message });
@@ -334,8 +334,8 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
         } else showFormError(message);
       }
     } catch (error) {
-      console.error('Failed to save CapDev project:', error);
-      showFormError('Unable to save this CapDev project. Please try again.');
+      console.error('Failed to save CapDev:', error);
+      showFormError('Unable to save this CapDev. Please try again.');
     } finally {
       saveProjectInFlight.current = false;
       setSaving(false);
@@ -362,7 +362,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
         additionalInfo: record.additionalInfo as Record<string, unknown>,
       })));
     } catch {
-      setBulkError('Unable to load CapDev projects.');
+      setBulkError('Unable to load CapDev.');
     } finally {
       setBulkLoading(false);
     }
@@ -370,7 +370,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
 
   const availableBulkProjects = bulkOptions.filter(project => bulkAction === 'duplicate' ? !project.archivedAt : project.folderId === folderId && (bulkAction === 'delete' || (bulkAction === 'move' && showArchived) ? Boolean(project.archivedAt) : !project.archivedAt));
   const destinationFolderName = folderOptions.find(folder => folder.id === bulkDestinationFolderId)?.name || 'the destination folder';
-  const selectedProjectLabel = selectedBulkIds.length === 1 ? 'project' : 'projects';
+  const selectedProjectLabel = 'CapDev';
   const bulkLabel = bulkAction === 'duplicate' ? 'Duplicate' : bulkAction === 'archive' ? 'Archive' : bulkAction === 'move' ? 'Move' : 'Delete permanently';
   const BulkActionIcon = bulkAction === 'duplicate' ? DuplicateIcon : bulkAction === 'archive' ? ArchiveIcon : bulkAction === 'move' ? MoveIcon : DeleteIcon;
   const submitBulk = async () => {
@@ -381,13 +381,13 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
     try {
       if (bulkAction !== 'duplicate') {
         const result = await bulkManageCapdevs({ capdevIds: selectedBulkIds, folderId, action: bulkAction, destinationFolderId: bulkDestinationFolderId });
-        if (!result.success) { setBulkError(result.error || 'Unable to update the selected projects.'); setBulkConfirm(false); return; }
+        if (!result.success) { setBulkError(result.error || 'Unable to update the selected CapDev.'); setBulkConfirm(false); return; }
         if (bulkAction === 'move') setBulkSuccess('Moved ' + selectedBulkIds.length + ' ' + selectedProjectLabel + ' to ' + destinationFolderName + '.');
         setBulkConfirm(false); setBulkOpen(false); setPage(1); await loadData(); return;
       }
       const result = await duplicateCapdevs({ capdevIds: selectedBulkIds, targetDate: bulkTargetDate, folderId: bulkDestinationFolderId });
       if (!result.success) {
-        setBulkError(result.error || 'Unable to duplicate the selected CapDev projects.');
+        setBulkError(result.error || 'Unable to duplicate the selected CapDev.');
         return;
       }
       setBulkSuccess('Duplicated ' + selectedBulkIds.length + ' ' + selectedProjectLabel + ' into ' + destinationFolderName + '.');
@@ -404,7 +404,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
       setPage(1);
       setBulkOpen(false);
     } catch {
-      setBulkError('Unable to update the selected CapDev projects.'); setBulkConfirm(false);
+      setBulkError('Unable to update the selected CapDev.'); setBulkConfirm(false);
     } finally {
       bulkInFlight.current = false;
       setBulkSaving(false);
@@ -526,19 +526,19 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px)' }}>
       <Container maxWidth={false} sx={{ p: 0, width: '100%', flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-          <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>{folderName || 'CapDev Projects'}</Typography>
+          <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px' }}>{folderName || 'CapDev'}</Typography>
           <Stack direction="row" spacing={1} useFlexGap sx={{ width: { xs: '100%', sm: 'auto' }, alignItems: 'center', flexWrap: 'wrap' }}>
-            <TextField size="small" placeholder="Search projects..." value={search} onChange={(event) => { setSearch(event.target.value); resetPage(); }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> } }} sx={{ bgcolor: '#ffffff', borderRadius: 2, minWidth: { sm: 260 }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} />
+            <TextField size="small" placeholder="Search CapDev..." value={search} onChange={(event) => { setSearch(event.target.value); resetPage(); }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> } }} sx={{ bgcolor: '#ffffff', borderRadius: 2, minWidth: { sm: 260 }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} />
             <Button size="small" sx={{ height: 40 }} variant="outlined" startIcon={<FilterIcon />} onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}>Filter</Button>
-            <Button size="small" sx={{ height: 40, whiteSpace: 'nowrap' }} variant="outlined" onClick={() => { setShowArchived(!showArchived); setNotificationFocus(null); resetPage(); }}>{showArchived ? 'See Active Projects' : 'See Archives'}</Button>
+            <Button size="small" sx={{ height: 40, whiteSpace: 'nowrap' }} variant="outlined" onClick={() => { setShowArchived(!showArchived); setNotificationFocus(null); resetPage(); }}>{showArchived ? 'See Active CapDev' : 'See Archives'}</Button>
             {Boolean(folderId) && <CapdevReferenceImage key={folderId} folderId={folderId} isAdmin={isAdmin} />}
             {isAdmin && <CapdevFoldersPanel onChanged={(folders) => { setFolderOptions(folders); const current = folders.find(folder => folder.id === folderId); if (current) setFolderName(current.name); }} onSelected={(folder) => { if (folder.id !== folderId) router.replace('/portal/folders/' + folder.id + (showArchived ? '?archived=1' : '')); else { setFolderName(folder.name); void loadData(); } }} />}
-            {isAdmin && Boolean(folderId) && <Tooltip title="Manage CapDev projects"><IconButton color="primary" onClick={() => void openBulk()} aria-label="Manage CapDev projects" sx={{ width: 40, height: 40, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}><BulkIcon /></IconButton></Tooltip>}
+            {isAdmin && Boolean(folderId) && <Tooltip title="Manage CapDev"><IconButton color="primary" onClick={() => void openBulk()} aria-label="Manage CapDev" sx={{ width: 40, height: 40, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}><BulkIcon /></IconButton></Tooltip>}
         </Stack>
       </Stack>
 
         {loadError && <Alert severity="error" sx={{ mb: 2 }}>{loadError}<Button onClick={() => void loadData()}>Retry</Button></Alert>}
-        {visible.length === 0 ? <Card variant="outlined" sx={{ borderRadius: 2, minHeight: 300, display: 'grid', placeItems: 'center' }}><Stack spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}><CapdevIcon sx={{ fontSize: 42 }} /><Typography>No CapDev projects found</Typography></Stack></Card> :
+        {visible.length === 0 ? <Card variant="outlined" sx={{ borderRadius: 2, minHeight: 300, display: 'grid', placeItems: 'center' }}><Stack spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}><CapdevIcon sx={{ fontSize: 42 }} /><Typography>No CapDev found</Typography></Stack></Card> :
           <Grid container spacing={3} sx={{ flexGrow: 1, alignContent: 'flex-start' }}>{visible.map((project) => <Grid id={`capdev-record-${project.id}`} key={project.id} size={{ xs: 12, sm: 6, md: 4 }} sx={{ position: 'relative', pt: 3, scrollMarginTop: 96 }}>
             <Box sx={{ position: 'absolute', top: 0, left: 0, zIndex: 0, height: 48, p: '1px', bgcolor: 'divider', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)' }}><Box sx={{ height: '100%', px: 2, pt: .5, bgcolor: '#fafcfa', clipPath: 'polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)', display: 'flex', alignItems: 'flex-start' }}><Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', lineHeight: 1.3 }}>{project.archivedAt ? 'Archived' : 'Added'} {formatDate(project.archivedAt || project.createdAt)}</Typography></Box></Box>
             <Card variant="outlined" sx={{ position: 'relative', zIndex: 1, borderRadius: 2, bgcolor: project.archivedAt ? 'grey.100' : '#fafcfa', height: '100%', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', animation: notificationFocus?.targetId === `capdev-record-${project.id}` ? 'capdevNotificationFocus 2500ms ease-in-out' : 'none', '@keyframes capdevNotificationFocus': { '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' }, '30%': { transform: 'scale(0.975)', boxShadow: '0 0 0 3px rgba(46, 125, 50, 0.22)' }, '65%': { transform: 'scale(1.025)', boxShadow: '0 8px 24px rgba(46, 125, 50, 0.2)' }, '100%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(46, 125, 50, 0)' } }, '&:hover': { boxShadow: '0 4px 12px rgba(0,0,0,0.04)', borderColor: 'primary.main' } }}>
@@ -567,7 +567,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
       {isAdmin && Boolean(folderId) && !showArchived && <Fab variant="extended" color="primary" onClick={openCreate} sx={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1100, px: 2.5 }}><AddIcon sx={{ mr: 1 }} />Add CapDev</Fab>}
 
       <Dialog open={editorOpen} onClose={() => !saving && setEditorOpen(false)} fullWidth maxWidth="md">
-        <DialogTitle sx={{ fontWeight: 800 }}>{editing?.archivedAt ? 'CapDev Details' : editing ? 'Edit CapDev Project' : 'Add CapDev Project'}</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 800 }}>{editing?.archivedAt ? 'CapDev Details' : editing ? 'Edit CapDev' : 'Add CapDev'}</DialogTitle>
         <DialogContent dividers>
           {error && <Alert id="capdev-form-error" tabIndex={-1} severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>Capacity Development</Typography>
@@ -601,10 +601,10 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
           <Button variant="contained" color="warning" disabled={saving} onClick={() => void saveProject(true)}>Reset balance and save</Button>
         </DialogActions>
       </Dialog>
-      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev Projects</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}>{(['today', 'month', 'year'] as const).map((preset) => <Button key={preset} size="small" variant={getActiveDateFilterPreset(draftFilters.dateFrom, draftFilters.dateTo) === preset ? 'contained' : 'text'} onClick={() => setDraftFilters({ ...draftFilters, ...getDateFilterPresetRange(preset) })}>{preset === 'today' ? 'Today' : preset === 'month' ? 'This month' : 'This year'}</Button>)}</Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { const next = { ...draftFilters, departments: [...draftFilters.departments] }; setFilters(next); saveFiltersForAccount(next); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
+      <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} fullWidth maxWidth="sm"><DialogTitle sx={{ fontWeight: 800 }}>Filter CapDev</DialogTitle><DialogContent dividers><Grid container spacing={2} sx={{ pt: .5 }}><Grid size={12}><Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>Departments</Typography>{departments.map((item) => <FormControlLabel key={item} control={<Checkbox checked={draftFilters.departments.includes(item)} onChange={() => setDraftFilters((current) => ({ ...current, departments: current.departments.includes(item) ? current.departments.filter((department) => department !== item) : [...current.departments, item] }))} />} label={item} sx={{ display: 'flex', width: 'fit-content' }} />)}</Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance from" type="number" value={draftFilters.initialMin} onChange={(e) => setDraftFilters({ ...draftFilters, initialMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Initial balance to" type="number" value={draftFilters.initialMax} onChange={(e) => setDraftFilters({ ...draftFilters, initialMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance from" type="number" value={draftFilters.remainingMin} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMin: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><TextField fullWidth label="Remaining balance to" type="number" value={draftFilters.remainingMax} onChange={(e) => setDraftFilters({ ...draftFilters, remainingMax: e.target.value })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added from" value={draftFilters.dateFrom} onChange={(val) => setDraftFilters({ ...draftFilters, dateFrom: val })} /></Grid><Grid size={{ xs: 12, sm: 6 }}><DateField label="Date added to" value={draftFilters.dateTo} onChange={(val) => setDraftFilters({ ...draftFilters, dateTo: val })} /></Grid><Grid size={12}><Stack direction="row" spacing={1}>{(['today', 'month', 'year'] as const).map((preset) => <Button key={preset} size="small" variant={getActiveDateFilterPreset(draftFilters.dateFrom, draftFilters.dateTo) === preset ? 'contained' : 'text'} onClick={() => setDraftFilters({ ...draftFilters, ...getDateFilterPresetRange(preset) })}>{preset === 'today' ? 'Today' : preset === 'month' ? 'This month' : 'This year'}</Button>)}</Stack></Grid><Grid size={12}><TextField select fullWidth label="Sort" value={draftFilters.sort} onChange={(e) => setDraftFilters({ ...draftFilters, sort: e.target.value })}><MenuItem value="newest">Newest to oldest</MenuItem><MenuItem value="oldest">Oldest to newest</MenuItem></TextField></Grid></Grid></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setDraftFilters({ departments: [...departments], initialMin: '', initialMax: '', remainingMin: '', remainingMax: '', dateFrom: '', dateTo: '', sort: 'newest' })}>Reset</Button><Button variant="contained" onClick={() => { const next = { ...draftFilters, departments: [...draftFilters.departments] }; setFilters(next); saveFiltersForAccount(next); resetPage(); setFiltersOpen(false); }}>Apply Filters</Button></DialogActions></Dialog>
 
       <Dialog open={bulkOpen && !bulkConfirm} onClose={() => { if (!bulkSaving) setBulkOpen(false); }} fullWidth maxWidth="sm">
-        <DialogTitle sx={{ fontWeight: 800 }}>Manage CapDev projects</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 800 }}>Manage CapDev</DialogTitle>
         <DialogContent dividers><Stack spacing={2.5}>
           <TextField select fullWidth label="Action" value={bulkAction} disabled={bulkSaving || bulkLoading} onChange={event => { const action = event.target.value as typeof bulkAction; setBulkAction(action); if (action === 'move' && bulkDestinationFolderId === folderId) setBulkDestinationFolderId(0); else if (action === 'duplicate' && !bulkDestinationFolderId) setBulkDestinationFolderId(folderId); setSelectedBulkIds([]); setBulkError(''); }}>
             {!showArchived && <MenuItem value="duplicate">Duplicate</MenuItem>}
@@ -612,26 +612,26 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
             {showArchived && <MenuItem value="delete">Delete permanently</MenuItem>}
             <MenuItem value="move">Move</MenuItem>
           </TextField>
-          <Typography variant="body2" color="text.secondary">{bulkAction === 'duplicate' ? "Copy CapDev records into the destination folder. Requests and progress are excluded; remaining balances reset to initial balances. The active folder stays selected." : bulkAction === 'move' ? 'Move projects from this folder, keeping their requests, progress, attachments, balances, dates added, and archive state. The active folder stays selected.' : bulkAction === 'archive' ? 'Archive selected projects in this folder. Their requests and history become read-only.' : 'Permanently delete selected archived projects in this folder and their requests, progress, notifications, and managed attachments. This cannot be undone.'}</Typography>
+          <Typography variant="body2" color="text.secondary">{bulkAction === 'duplicate' ? "Copy CapDev records into the destination folder. Requests and progress are excluded; remaining balances reset to initial balances. The active folder stays selected." : bulkAction === 'move' ? 'Move CapDev from this folder, keeping their requests, progress, attachments, balances, dates added, and archive state. The active folder stays selected.' : bulkAction === 'archive' ? 'Archive selected CapDev in this folder. Their requests and history become read-only.' : 'Permanently delete selected archived CapDev in this folder and their requests, progress, notifications, and managed attachments. This cannot be undone.'}</Typography>
           {bulkError && <Alert severity="error">{bulkError}</Alert>}
-          {(bulkAction === 'duplicate' || bulkAction === 'move') && <TextField select required fullWidth label="Destination folder" value={bulkDestinationFolderId} disabled={bulkLoading || bulkSaving} helperText={bulkAction === 'move' && folderOptions.length < 2 ? 'Add another folder to move projects into it.' : undefined} onChange={event => setBulkDestinationFolderId(Number(event.target.value))}><MenuItem value={0} disabled>Choose a folder</MenuItem>{folderOptions.filter(folder => bulkAction !== 'move' || folder.id !== folderId).map(folder => <MenuItem key={folder.id} value={folder.id}>{folder.name}</MenuItem>)}</TextField>}
+          {(bulkAction === 'duplicate' || bulkAction === 'move') && <TextField select required fullWidth label="Destination folder" value={bulkDestinationFolderId} disabled={bulkLoading || bulkSaving} helperText={bulkAction === 'move' && folderOptions.length < 2 ? 'Add another folder to move CapDev into it.' : undefined} onChange={event => setBulkDestinationFolderId(Number(event.target.value))}><MenuItem value={0} disabled>Choose a folder</MenuItem>{folderOptions.filter(folder => bulkAction !== 'move' || folder.id !== folderId).map(folder => <MenuItem key={folder.id} value={folder.id}>{folder.name}</MenuItem>)}</TextField>}
           {bulkAction === 'duplicate' && <DateField label="Date added for duplicates" value={bulkTargetDate} onChange={setBulkTargetDate} required />}
           <Box>
             <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>CapDev projects</Typography>
-              <Stack direction="row" spacing={1}><Button size="small" disabled={bulkLoading || bulkSaving} onClick={() => setSelectedBulkIds(availableBulkProjects.map(project => project.id))}>Select all</Button><Button size="small" disabled={bulkSaving} onClick={() => setSelectedBulkIds([])} color="inherit">Clear</Button></Stack>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>CapDev</Typography>
+              <Stack direction="row" spacing={1}><Button size="small" disabled={bulkLoading || bulkSaving} onClick={() => setSelectedBulkIds(availableBulkProjects.map(project => project.id))}>Select All</Button><Button size="small" disabled={bulkSaving} onClick={() => setSelectedBulkIds([])} color="inherit">Clear</Button></Stack>
             </Stack>
             <Box sx={{ maxHeight: 300, overflowY: 'auto', pr: 1 }}>
-              {bulkLoading ? <Typography color="text.secondary" sx={{ py: 2 }}>Loading projects...</Typography> : availableBulkProjects.map(project => <FormControlLabel key={project.id} control={<Checkbox disabled={bulkSaving} checked={selectedBulkIds.includes(project.id)} onChange={() => setSelectedBulkIds(current => current.includes(project.id) ? current.filter(id => id !== project.id) : [...current, project.id])} />} label={<Stack><Typography variant="body2" sx={{ fontWeight: 700 }}>{project.aipCode}</Typography><Typography variant="caption" color="text.secondary">{project.department || 'None'} / {folderOptions.find(folder => folder.id === project.folderId)?.name || folderName} / Added {formatDate(project.createdAt)}</Typography></Stack>} sx={{ display: 'flex', width: '100%', m: 0, py: 0.5 }} />)}
-              {!bulkLoading && !availableBulkProjects.length && <Typography color="text.secondary" sx={{ py: 2 }}>No eligible CapDev projects.</Typography>}
+              {bulkLoading ? <Typography color="text.secondary" sx={{ py: 2 }}>Loading CapDev...</Typography> : availableBulkProjects.map(project => <FormControlLabel key={project.id} control={<Checkbox disabled={bulkSaving} checked={selectedBulkIds.includes(project.id)} onChange={() => setSelectedBulkIds(current => current.includes(project.id) ? current.filter(id => id !== project.id) : [...current, project.id])} />} label={<Stack><Typography variant="body2" sx={{ fontWeight: 700 }}>{project.aipCode}</Typography><Typography variant="caption" color="text.secondary">{project.department || 'None'} / {folderOptions.find(folder => folder.id === project.folderId)?.name || folderName} / Added {formatDate(project.createdAt)}</Typography></Stack>} sx={{ display: 'flex', width: '100%', m: 0, py: 0.5 }} />)}
+              {!bulkLoading && !availableBulkProjects.length && <Typography color="text.secondary" sx={{ py: 2 }}>No eligible CapDev.</Typography>}
             </Box>
           </Box>
         </Stack></DialogContent>
         <DialogActions sx={{ p: 2.5 }}><Button color="inherit" disabled={bulkSaving} onClick={() => setBulkOpen(false)}>Cancel</Button><Button variant="contained" color={bulkAction === 'delete' ? 'error' : bulkAction === 'archive' ? 'warning' : 'primary'} startIcon={<BulkActionIcon />} disabled={bulkSaving || bulkLoading || !selectedBulkIds.length || selectedBulkIds.length > 500 || (bulkAction === 'duplicate' && !bulkTargetDate) || ((bulkAction === 'duplicate' || bulkAction === 'move') && !bulkDestinationFolderId) || (bulkAction === 'move' && bulkDestinationFolderId === folderId)} onClick={() => { if (bulkAction === 'duplicate') void submitBulk(); else setBulkConfirm(true); }}>{bulkSaving ? 'Saving...' : bulkLabel + ' (' + selectedBulkIds.length + ')'}</Button></DialogActions>
       </Dialog>
       <Dialog open={bulkConfirm} onClose={() => { if (!bulkSaving) setBulkConfirm(false); }} fullWidth maxWidth="sm">
-        <DialogTitle sx={{ fontWeight: 800 }}>{bulkLabel} selected projects?</DialogTitle>
-        <DialogContent dividers><Typography sx={{ mb: 2 }}>{bulkAction === 'delete' ? 'Delete these archived projects and all their requests, progress, notifications, and managed attachments permanently? This cannot be undone.' : bulkAction === 'move' ? 'Move these projects to ' + (folderOptions.find(folder => folder.id === bulkDestinationFolderId)?.name || '') + '? All related records and balances will be preserved. The active folder will stay selected.' : 'Archive these projects and make their requests and history read-only?'}</Typography>{availableBulkProjects.filter(project => selectedBulkIds.includes(project.id)).map(project => <Typography key={project.id} variant="body2">{project.aipCode}</Typography>)}</DialogContent>
+        <DialogTitle sx={{ fontWeight: 800 }}>{bulkLabel} selected CapDev?</DialogTitle>
+        <DialogContent dividers><Typography sx={{ mb: 2 }}>{bulkAction === 'delete' ? 'Delete these archived CapDev and all their requests, progress, notifications, and managed attachments permanently? This cannot be undone.' : bulkAction === 'move' ? 'Move these CapDev to ' + (folderOptions.find(folder => folder.id === bulkDestinationFolderId)?.name || '') + '? All related records and balances will be preserved. The active folder will stay selected.' : 'Archive these CapDev and make their requests and history read-only?'}</Typography>{availableBulkProjects.filter(project => selectedBulkIds.includes(project.id)).map(project => <Typography key={project.id} variant="body2">{project.aipCode}</Typography>)}</DialogContent>
         <DialogActions sx={{ p: 2.5 }}><Button autoFocus disabled={bulkSaving} onClick={() => setBulkConfirm(false)}>Cancel</Button><Button variant="contained" color={bulkAction === 'delete' ? 'error' : bulkAction === 'archive' ? 'warning' : 'primary'} startIcon={<BulkActionIcon />} disabled={bulkSaving} onClick={() => void submitBulk()}>{bulkSaving ? 'Saving...' : bulkLabel}</Button></DialogActions>
       </Dialog>
 

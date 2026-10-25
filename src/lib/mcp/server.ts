@@ -26,13 +26,13 @@ export interface McpToolDefinition {
 export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
   {
     name: 'find_capdev_by_aip_code',
-    description: 'Finds and validates an active CapDev project by its exact AIP Code, enforcing user department access and returning remaining budget.',
+    description: 'Finds and validates an active CapDev by its exact AIP Code, enforcing user department access and returning remaining balance.',
     inputSchema: {
       type: 'object',
       properties: {
         aip_code: {
           type: 'string',
-          description: 'The AIP Code of the CapDev project (e.g. 2026-001-1-1-01-001-001).',
+          description: 'The AIP Code of the CapDev (e.g. 2026-001-1-1-01-001-001).',
         },
       },
       required: ['aip_code'],
@@ -100,7 +100,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'list_available_capdev_projects',
-    description: 'Lists active CapDev projects available for the user’s department with their AIP Codes and remaining budgets.',
+    description: 'Lists active CapDev available for the user’s department with their AIP Codes and remaining balances.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -132,7 +132,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
         },
         requested_budget: {
           type: 'string',
-          description: 'The requested budget amount in PHP (e.g. "50000").',
+          description: 'The requested amount in PHP (e.g. "50000").',
         },
         description: {
           type: 'string',
@@ -191,7 +191,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
       properties: {
         aip_code: {
           type: 'string',
-          description: 'The exact AIP Code of the target CapDev project.',
+          description: 'The exact AIP Code of the target CapDev.',
         },
         setting: {
           type: 'string',
@@ -199,7 +199,7 @@ export const LEAPRS_MCP_TOOLS: McpToolDefinition[] = [
         },
         requested_budget: {
           type: 'string',
-          description: 'The requested budget amount in PHP.',
+          description: 'The requested amount in PHP.',
         },
         description: {
           type: 'string',
@@ -288,7 +288,7 @@ export async function executeMcpTool(
         const limit = args.limit ? Number(args.limit) : undefined;
         const dept = typeof args.department === 'string' ? args.department : undefined;
         const result = await listAvailableCapdevProjectsService(access, { limit, department: dept });
-        return result.success ? { success: true, data: result } : { success: false, error: 'Failed to list CapDev projects.' };
+        return result.success ? { success: true, data: result } : { success: false, error: 'Failed to list CapDev.' };
       }
 
       case 'create_request_draft': {

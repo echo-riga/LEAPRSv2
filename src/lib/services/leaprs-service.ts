@@ -134,11 +134,11 @@ export async function findCapdevByAipCodeService(access: UserAccess, aipCode: st
     .limit(1);
 
   if (!capdev) {
-    return { success: false as const, error: `CapDev project with AIP Code “${cleanedCode}” was not found.` };
+    return { success: false as const, error: `CapDev with AIP Code “${cleanedCode}” was not found.` };
   }
 
   if (!canAccessCapdev(access, capdev)) {
-    return { success: false as const, error: 'You do not have permission to access this CapDev project.' };
+    return { success: false as const, error: 'You do not have permission to access this CapDev.' };
   }
 
   return {
@@ -180,14 +180,14 @@ export async function getRequestFormSchemaService(_access?: UserAccess, setting?
     },
     {
       name: 'requestedBudget',
-      label: 'Amount',
+      label: 'Requested Amount',
       type: 'number',
       isRequired: true,
-      description: 'Total requested budget amount in PHP.',
+      description: 'Total requested amount in PHP.',
     },
     {
       name: 'description',
-      label: 'Title',
+      label: 'Request Title',
       type: 'text',
       isRequired: false,
       description: 'Activity or seminar title.',
@@ -341,7 +341,7 @@ export async function submitRequestService(access: UserAccess, input: RequestSub
   const remainingBudgetNum = Number(capdev.remainingBudget);
 
   if (isNaN(requestedBudgetNum) || requestedBudgetNum <= 0) {
-    return { success: false as const, error: 'Enter a valid requested budget amount.' };
+    return { success: false as const, error: 'Enter a valid requested amount.' };
   }
 
   if (requestedBudgetNum > remainingBudgetNum) {

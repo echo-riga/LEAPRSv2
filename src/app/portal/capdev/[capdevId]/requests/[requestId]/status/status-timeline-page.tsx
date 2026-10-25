@@ -67,7 +67,7 @@ import {
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
 import DynamicTableField from '@/components/DynamicTableField';
-import { dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
+import { dynamicFieldLabel, dynamicFieldStorageKey, getDynamicFieldValue } from '@/lib/dynamic-fields';
 import { getHalfFieldLayout } from '@/components/FieldReorder';
 import { isPendingAttachment, stageAttachments } from '@/lib/background-attachments';
 import { useAttachmentRefresh, useBackgroundUploads } from '@/components/BackgroundUploads';
@@ -803,12 +803,12 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
     });
 
     if (result.success) {
-      if (result.statusUpdateId) uploads.enqueue({ kind: 'status', id: result.statusUpdateId, requestId }, request?.requestorName || 'Status update', jobs);
+      if (result.statusUpdateId) uploads.enqueue({ kind: 'status', id: result.statusUpdateId, requestId }, request?.requestorName || 'Progress update', jobs);
       setDialogOpen(false);
       setDeductModalOpen(false);
       await loadData();
     } else {
-      const message = result.error || 'Unable to save this status update.';
+      const message = result.error || 'Unable to save this progress update.';
       const normalized = message.toLowerCase();
       if (normalized.includes('deduct') || normalized.includes('amount') || normalized.includes('balance')) {
         showFieldError('deductedAmount', message, 'status-field-deductedAmount');
@@ -831,7 +831,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         }
       }
     }
-    } catch (error) { showStatusFormError(error instanceof Error ? error.message : 'Unable to save status update.'); }
+    } catch (error) { showStatusFormError(error instanceof Error ? error.message : 'Unable to save progress update.'); }
     finally { setSaving(false); }
   };
 
@@ -902,7 +902,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
       >
         {field.type === 'combobox' ? (
           <SelectionCombobox
-            label={field.name}
+            label={dynamicFieldLabel(field)}
             required={field.isRequired}
             options={field.options}
             value={String(fieldValue || '')}
@@ -939,7 +939,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                 fullWidth
                 multiline={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea'}
                 minRows={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea' ? 2 : 1}
-                label={field.name}
+                label={dynamicFieldLabel(field)}
                 placeholder={field.placeholder || 'Select or type...'}
                 error={Boolean(fieldErrors[storageKey])}
                 helperText={fieldErrors[storageKey]}
@@ -952,7 +952,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             fullWidth
             multiline={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea'}
             minRows={isStandardStatusUpdate || isStandardRemarks || field.type === 'textarea' ? 2 : 1}
-            label={field.name}
+            label={dynamicFieldLabel(field)}
             placeholder={field.placeholder || ''}
             value={String(fieldValue ?? (isStandardStatusUpdate ? form.statusUpdate : isStandardRemarks ? form.remarks : ''))}
             onChange={(event) => setDynamicValue(field, event.target.value)}
@@ -961,7 +961,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           />
         ) : field.type === 'table' ? (
           <DynamicTableField
-            label={field.name}
+            label={dynamicFieldLabel(field)}
             required={field.isRequired}
             value={fieldValue}
             template={field.options?.[0]}
@@ -970,14 +970,14 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           />
         ) : field.type === 'date' ? (
           <DateField
-            label={field.name}
+            label={dynamicFieldLabel(field)}
             required={field.isRequired}
             value={String(fieldValue || '')}
             onChange={(value) => setDynamicValue(field, value)}
           />
         ) : field.type === 'file' ? (
           <FileFieldChecklist
-            label={field.name}
+            label={dynamicFieldLabel(field)}
             required={field.isRequired}
             existingFiles={getAttachments(fieldValue)}
             pendingFiles={pendingFiles[storageKey] || []}
@@ -990,7 +990,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
           <TextField
             required={field.isRequired}
             fullWidth
-            label={field.name}
+            label={dynamicFieldLabel(field)}
             type={field.type === 'number' ? 'number' : 'text'}
             value={String(fieldValue || '')}
             placeholder={field.placeholder || ''}
@@ -1274,7 +1274,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                           const matchingDef = definitions.find(
                             (d) => dynamicFieldStorageKey(d) === k || d.name === k
                           );
-                          const label = matchingDef?.name || k;
+                          const label = dynamicFieldLabel(matchingDef || { name: k });
                           if (matchingDef?.type === 'date') {
                             return <ReadOnlyDynamicField key={k} field={matchingDef} value={v} />;
                           }
@@ -1395,7 +1395,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                           fullWidth
                           multiline
                           minRows={2}
-                          label="Status Update"
+                          label="Progress Update"
                           value={stopperResponse.text}
                           onChange={(event) =>
                             setStopperResponse((current) => ({ ...current, text: event.target.value }))
@@ -1748,7 +1748,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             }}
           >
             {request.isStopped ? <ResumeIcon sx={{ mr: 1 }} /> : <AddIcon sx={{ mr: 1 }} />}
-            {request.isStopped ? 'Resume Progress' : 'Add Status'}
+            {request.isStopped ? 'Resume Progress' : 'Add Progress Update'}
           </Fab>
         )}
 
@@ -1790,7 +1790,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
         </Stack></DialogContent><DialogActions sx={{ p: 2.5 }}><Button onClick={() => setViewingUpdate(null)}>Close</Button></DialogActions>
       </Dialog>
       <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle sx={{ fontWeight: 800 }}>Add Status Update</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 800 }}>Add Progress Update</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5} sx={{ pt: 0.5 }}>
             {error && (
@@ -1855,7 +1855,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
                       fullWidth
                       multiline
                       minRows={2}
-                      label="Status Update"
+                      label="Progress Update"
                       value={form.statusUpdate}
                       onChange={(event) => {
                         setForm((current) => ({ ...current, statusUpdate: event.target.value }));
@@ -2005,7 +2005,7 @@ export default function StatusTimelinePage({ capdevId, requestId }: { capdevId: 
             }
             sx={{ fontWeight: 700, borderRadius: 2 }}
           >
-            {saving ? 'Saving...' : form.addStopper ? 'Stop Progress' : 'Save Status'}
+            {saving ? 'Saving...' : form.addStopper ? 'Stop Progress' : 'Save Progress Update'}
           </Button>
         </DialogActions>
       </Dialog>

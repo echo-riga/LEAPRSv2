@@ -71,7 +71,7 @@ export default function StatusNotificationSettings() {
           <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start', mb: 3 }}>
             <NotificationsActiveOutlined color="primary" sx={{ mt: 0.25, flexShrink: 0 }} />
             <Typography variant="body2" color="text.secondary">
-              Set when to remind admins and people involved in a request if there are no new status updates.
+              Set when to remind admins and people involved in a request if there are no new progress updates.
             </Typography>
           </Stack>
           {loading ? <Skeleton variant="rounded" height={56} /> : <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
@@ -79,7 +79,7 @@ export default function StatusNotificationSettings() {
               <Remove />
             </IconButton>
             <TextField
-              label="Days Without a Status Update"
+              label="Days Without a Progress Update"
               type="number"
               disabled={saving || !loaded}
               value={draftDays}

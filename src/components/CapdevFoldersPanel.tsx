@@ -100,7 +100,7 @@ export default function CapdevFoldersPanel({ onSelected, onChanged }: Props) {
       </Box>
       {busy && <><Divider /><Typography variant="caption" sx={{ display: 'block', px: 2, py: 1 }}>Saving...</Typography></>}
     </Popover>
-    <DeleteConfirmationDialog open={Boolean(deleting)} title="Delete folder permanently?" recordLabel={'Permanently delete "' + (deleting?.name || '') + '" and all its active and archived CapDev projects, requests, progress, notifications, and managed attachments? This cannot be undone.'} onClose={() => setDeleting(null)} onConfirm={async () => {
+    <DeleteConfirmationDialog open={Boolean(deleting)} title="Delete folder permanently?" recordLabel={'Permanently delete "' + (deleting?.name || '') + '" and all its active and archived CapDev, requests, progress, notifications, and managed attachments? This cannot be undone.'} onClose={() => setDeleting(null)} onConfirm={async () => {
       if (!deleting) return;
       const result = await deleteCapdevFolder(deleting.id);
       if (!result.success) throw new Error(result.error || 'Unable to delete folder.');

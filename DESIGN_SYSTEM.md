@@ -46,11 +46,12 @@ The legacy guide describes Paper as `#fafcfa`; the theme currently uses white Pa
 - Inherit the application font. Portal headings use the established `h4` with heavy weight; card titles and dialog titles use strong weight at their existing sizes.
 - Button labels use sentence/title case without automatic uppercase. Theme buttons use weight 600, `1rem`, `12px 24px` padding, and 8px corners; compact header/text/icon actions follow their local overrides.
 - Use readable role/status labels from shared mappings. Keep database codes internal.
+- Use CapDev for both singular and plural records (including count badges); use CapDev folders for containers. Use Progress Update, Request Title, Requested Amount, Initial Balance, Remaining Balance, and Viewer (All Departments) consistently across forms, filters, reports, and audit details. Action labels use Select All and Apply Filters. Preserve saved field names and internal keys when updating display wording.
 - Requestor name identifies a request in user-facing lists and notifications. AIP Code identifies CapDev. Internal IDs still belong in technical routes and exact API inputs.
 
 ## 4. Page shell and cards
 
-- Admin System Settings includes Change Drive Storage opening a simple dialog showing only the current storage owner email and a Change account button. Omit connection lists, Active badges, folder links, and explanatory paragraphs. Reopen the dialog after Google authorization to show its result. Load storage settings only when opened; retain the existing card grid without a separate storage card. Explain automatic folder creation/reuse and preservation of older files. Never show credentials or ask for folder IDs.
+- Admin System Settings includes Change Drive Storage opening a simple dialog showing only the current storage owner email, centered beneath a centered title. Place Close and Change account together at the right of the dialog footer, with Change account as the primary action. Omit connection lists, Active badges, folder links, and explanatory paragraphs. Reopen the dialog after Google authorization to show its result. Load storage settings only when opened; retain the existing card grid without a separate storage card. Explain automatic folder creation/reuse and preservation of older files. Never show credentials or ask for folder IDs.
 
 - `/portal` sends every role inside the active CapDev folder. The project list has no folder-root Back action for any role. Preserve normal Back navigation in requests and timelines.
 - An Admin-only stacked-folder icon (`FolderCopyOutlined`) beside See Archives opens a floating panel styled like LEAPRS Help, with a green header, Add folder (+), Close, and a scrollable list. Highlight the active row in green with a check; selecting a row activates that folder system-wide. Each row has Rename and Delete icons. Rename replaces the name with a focused input and Save/Cancel icons; Enter saves and Escape cancels. Add uses an inline input in the panel. Disable deletion of the selected folder and retain the shared permanent-deletion confirmation. There is no separate activation action or folder-management page; legacy `/portal/folders` links redirect to the project list.
@@ -183,3 +184,5 @@ Source: [BackgroundUploads.tsx](src/components/BackgroundUploads.tsx).
 - Are screenshots genuine, legible, ordered, and displayed without layout jumps?
 
 These are design review criteria, not a claim that every existing screen has already passed an accessibility or visual audit.
+
+- Analytics normalizes blank or whitespace-only departments to None before creating badges, filter options, and department selections, so the None group stays visible and filters its projects correctly.

@@ -185,7 +185,7 @@ const CAPDEV_FIXED_FIELDS = [
   "Remaining Balance",
 ] as const;
 const REQUEST_FIXED_FIELDS = [
-  "Title",
+  "Request Title",
   "Event Date",
   "Setting",
   "Requested Amount",
@@ -256,7 +256,7 @@ function RequestReportTable({ report }: { report: RequestReportData }) {
     { label: "Rejected", rows: report.rejected, headerColor: "error.main" },
   ];
   const headers = [
-    "Activity title",
+    "Request Title",
     "Date of event",
     "Allotted budget",
     "Utilized budget",
@@ -672,7 +672,7 @@ export default function ReportsPage() {
                       }}
                     >
                       <Typography sx={{ fontWeight: 800 }}>
-                        CapDev projects
+                        CapDev
                       </Typography>
                       <Stack direction="row" spacing={1}>
                         <Button
@@ -684,7 +684,7 @@ export default function ReportsPage() {
                             )
                           }
                         >
-                          Select all
+                          Select All
                         </Button>
                         <Button
                           size="small"
@@ -743,7 +743,7 @@ export default function ReportsPage() {
                     </Grid>
                     {visibleCapdevs.length === 0 && (
                       <Typography color="text.secondary" sx={{ py: 2 }}>
-                        No CapDev projects match the date filter.
+                        No CapDev match the date filter.
                       </Typography>
                     )}
                   </Box>
@@ -1259,7 +1259,7 @@ export default function ReportsPage() {
                   {reportRows.length === 0 && (
                     <Box sx={{ p: 3, textAlign: "center" }}>
                       <Typography color="text.secondary">
-                        No requests found for the selected CapDev projects.
+                        No requests found for the selected CapDev.
                       </Typography>
                     </Box>
                   )}

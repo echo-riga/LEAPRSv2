@@ -8,6 +8,7 @@ import { readPortal } from '@/lib/portal-read-client';
 import { useVisibleRefresh } from '@/lib/use-visible-refresh';
 import { useCallback, useRef } from 'react';
 import { authClient } from '@/lib/auth/client';
+import { roleLabel as formatRoleLabel } from '@/lib/role-options';
 import { type AppRole } from '@/app/actions';
 import { ResourceGridSkeleton } from '@/components/Skeletons';
 import NotificationsMenu from '@/components/NotificationsMenu';
@@ -121,13 +122,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
         : capdevParent?.capdevId === capdevRouteId ? `/portal/folders/${capdevParent.folderId}` : '/portal';
   const settingsHref = `/portal/settings?from=${encodeURIComponent(pathname)}`;
   const isDashboard = pathname === '/portal' || pathname === '/portal/folders' || (/^\/portal\/folders\/\d+$/.test(pathname));
-  const roleLabel = !role
-    ? '...'
-    : role === 'viewer-full'
-    ? 'Viewer (All)'
-    : role === 'employee-department'
-    ? 'Employee (All Department Requests)'
-    : `${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+  const roleLabel = role ? formatRoleLabel(role) : '...';
 
   return (
     <BackgroundUploads key={session.data.user.id} userId={session.data.user.id}>

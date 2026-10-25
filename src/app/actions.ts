@@ -127,7 +127,7 @@ Current User Context: User ID "${access.userId}", Department "${access.departmen
 Tone & Structure Rules (STRICT):
 - Keep every answer ultra-simple, clear, and direct (zero fluff, no greetings or pleasantries).
 - Recognize all UI controls, header icons, pages, and features.
-- Consistent Bolding: Always bold ALL UI names, buttons, sections, icons, request IDs, and pages (**Fullscreen**, **Settings**, **CapDev**, **Users & Access**, **Manage Users**, **View Audit Logs**, **Reports**, **Export Reports**, **Analytics**, **CapDev Configuration**, **Request Configuration**, **Add Request**, **Add Status**, Request **#30**). Do not bold ordinary words.
+- Consistent Bolding: Always bold ALL UI names, buttons, sections, icons, request IDs, and pages (**Fullscreen**, **Settings**, **CapDev**, **Users & Access**, **Manage Users**, **View Audit Logs**, **Reports**, **Export Reports**, **Analytics**, **CapDev Configuration**, **Request Configuration**, **Add Request**, **Add Progress Update**, Request **#30**). Do not bold ordinary words.
 - When asked "What can you do?" or for general help, list your 4 core capabilities:
   1. **Activity Design Extraction**: Upload/paste activity designs to generate structured request drafts.
   2. **Live Request Status**: Check real-time progress, milestones, and blockers for specific requests (e.g. Request **#30**).
@@ -139,9 +139,9 @@ Tone & Structure Rules (STRICT):
 - When the user asks about department budget or CapDev balance, call the corresponding database tool.
 - If asked about the system flow or workflow, provide this exact 4-step format:
 Here is the LEAPRS workflow in 4 simple steps:
-1. **CapDev Projects**: Create a parent project with an **AIP Code** and a budget.
-2. **Requisition Requests**: Submit employee requests under that project using **Add Request** or by pasting an activity design in chat.
-3. **Timeline Tracking**: Track progress using **Add Status**, handle blockers, and finish by marking requests as **Complete** or **Deny**.
+1. **CapDev**: Create a parent CapDev with an **AIP Code** and a budget.
+2. **Requisition Requests**: Submit employee requests under that CapDev using **Add Request** or by pasting an activity design in chat.
+3. **Timeline Tracking**: Track progress using **Add Progress Update**, handle blockers, and finish by marking requests as **Complete** or **Deny**.
 4. **Evaluations & Reports**: Open the single seminar evaluation form for a completed request and monitor budget health in **Analytics**.
 - Only if a user asks a question completely unrelated to LEAPRS (such as weather or cooking), reply: "I can only help with LEAPRS."
 
@@ -1139,7 +1139,7 @@ export async function getAllCapdevs() {
     if (!access) return [];
     return await db.select().from(capdevs).where(capdevAccessScope(access)).orderBy(capdevs.aipCode);
   } catch (error) {
-    console.error('Failed to fetch CapDev projects:', error);
+    console.error('Failed to fetch CapDev:', error);
     return [];
   }
 }
@@ -1318,8 +1318,8 @@ export async function bulkManageCapdevs(input: { folderId: number; capdevIds: nu
     await withTransaction(tx => manageCapdevRecords(tx, input.folderId, input.capdevIds, input.action, actor, projects => cleanupCapdevStorage(tx, projects), input.destinationFolderId));
     return { success: true };
   } catch (error) {
-    console.error('Failed to manage selected CapDev projects:', error);
-    return { success: false, error: error instanceof Error ? error.message : 'Unable to update selected projects.' };
+    console.error('Failed to manage selected CapDev:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to update selected CapDev.' };
   }
 }
 
@@ -1398,8 +1398,8 @@ export async function getCapdevPage(input: { page: number; search: string; filte
       .orderBy(ascending ? asc(capdevs.createdAt) : desc(capdevs.createdAt), ascending ? asc(capdevs.id) : desc(capdevs.id)).limit(6).offset((page - 1) * 6);
     return { success: true as const, records, departments, total, page, folderName: folder.name, archived: Boolean(focus ? focus.archivedAt : input.archived) };
   } catch (error) {
-    console.error('Failed to fetch project page:', error);
-    return { success: false as const, records: [], departments: [], total: 0, page: 1, error: 'Unable to load projects. Check your filters and try again.' };
+    console.error('Failed to fetch CapDev page:', error);
+    return { success: false as const, records: [], departments: [], total: 0, page: 1, error: 'Unable to load CapDev. Check your filters and try again.' };
   }
 }
 
@@ -1645,7 +1645,7 @@ export async function generateMonitoringSheet(input: { capdevIds: number[]; capd
   try {
     const access = await getCurrentAccess();
     if (!access || access.role === 'employee' || access.role === 'employee-department') return unauthorized;
-    if (input.capdevIds.length === 0) return { success: false, error: 'Select at least one CapDev project.' };
+    if (input.capdevIds.length === 0) return { success: false, error: 'Select at least one CapDev.' };
     const [allCapdevs, allRequests, capdevFields, requestFields] = await Promise.all([
       db.select().from(capdevs).where(capdevAccessScope(access, true)), db.select(getTableColumns(requests)).from(requests).innerJoin(capdevs, eq(requests.capdevId, capdevs.id)).where(capdevAccessScope(access, true)),
       db.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.isActive, true)).orderBy(capdevFieldDefinitions.sortOrder),
@@ -1786,7 +1786,7 @@ export async function createCapdev(data: CapdevInput) {
       await insertNotificationEvent(tx, {
         actorId: access.userId,
         capdevId: created.id,
-        title: `New CapDev Project: ${created.aipCode}`,
+        title: `New CapDev: ${created.aipCode}`,
         message: `Created for ${created.department} with balance ₱${Number(created.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
         link: `/portal/folders/${created.folderId}#capdev-record-${created.id}`,
         type: 'capdev_created',
@@ -1797,7 +1797,7 @@ export async function createCapdev(data: CapdevInput) {
     scheduleNotificationEmails();
     return { success: true, capdev: created };
   } catch (error) {
-    console.error('Failed to create CapDev project:', error);
+    console.error('Failed to create CapDev:', error);
     return { success: false, error: 'Database insert failed' };
   }
 }
@@ -1808,10 +1808,10 @@ export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate:
     if (!access || access.role !== 'admin') return unauthorized;
     if (!Array.isArray(input.capdevIds) || input.capdevIds.length === 0 || input.capdevIds.length > 500 ||
       input.capdevIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
-      return { success: false, error: 'Select at least one valid CapDev project.' };
+      return { success: false, error: 'Select at least one valid CapDev.' };
     }
     const sourceIds = Array.from(new Set(input.capdevIds));
-    if (sourceIds.length !== input.capdevIds.length) return { success: false, error: 'Duplicate project selections are not allowed.' };
+    if (sourceIds.length !== input.capdevIds.length) return { success: false, error: 'Duplicate CapDev selections are not allowed.' };
     const createdAt = manilaDateBoundary(input.targetDate);
     const targetYear = Number(input.targetDate.slice(0, 4));
     if (!Number.isInteger(targetYear) || targetYear < 2000 || targetYear > 2100) {
@@ -1823,7 +1823,7 @@ export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate:
       const sources = await tx.select().from(capdevs)
         .where(and(inArray(capdevs.id, sourceIds), isNull(capdevs.archivedAt)))
         .orderBy(asc(capdevs.id)).for('update');
-      if (sources.length !== sourceIds.length) throw new Error('One or more selected CapDev projects are unavailable or archived.');
+      if (sources.length !== sourceIds.length) throw new Error('One or more selected CapDev are unavailable or archived.');
 
       const values = sources.map((source) => ({
         folderId: input.folderId,
@@ -1845,7 +1845,7 @@ export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate:
         await insertNotificationEvent(tx, {
           actorId: access.userId,
           capdevId: duplicate.id,
-          title: `New CapDev Project: ${duplicate.aipCode}`,
+          title: `New CapDev: ${duplicate.aipCode}`,
           message: `Duplicated for ${duplicate.department} with balance ₱${Number(duplicate.initialBudget).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
           link: `/portal/folders/${duplicate.folderId}#capdev-record-${duplicate.id}`,
           type: 'capdev_created',
@@ -1863,12 +1863,12 @@ export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate:
     scheduleNotificationEmails();
     return { success: true, created: created.map((record) => ({ id: record.id, aipCode: record.aipCode })) };
   } catch (error) {
-    console.error('Failed to duplicate CapDev projects:', error);
+    console.error('Failed to duplicate CapDev:', error);
     const message = error instanceof Error ? error.message : '';
     if (message.includes('unavailable') || message.includes('archived')) {
       return { success: false, error: message };
     }
-    return { success: false, error: 'Unable to duplicate the selected CapDev projects.' };
+    return { success: false, error: 'Unable to duplicate the selected CapDev.' };
   }
 }
 
@@ -1879,7 +1879,7 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     let initialBudget: string | undefined;
     if (data.initialBudget !== undefined) {
       try { initialBudget = validateMoney(data.initialBudget); }
-      catch { return { success: false, error: 'Enter an initial budget greater than zero with at most two decimal places.' }; }
+      catch { return { success: false, error: 'Enter an initial balance greater than zero with at most two decimal places.' }; }
     }
     data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo, access.userId) };
     const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;
@@ -1891,7 +1891,7 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     const missingFields = await getMissingRequiredCapdevFields(data.additionalInfo);
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const [existing] = await db.select().from(capdevs).where(eq(capdevs.id, id)).limit(1);
-    if (!existing) return { success: false, error: 'CapDev project not found.' };
+    if (!existing) return { success: false, error: 'CapDev not found.' };
     if (existing.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
     const { updated, previous } = await withTransaction(async tx => {
       await lockCapdevFolder(tx, data.folderId);
@@ -1904,14 +1904,14 @@ export async function updateCapdev(id: number, data: CapdevInput) {
         .where(eq(capdevs.id, id)).returning();
       return { updated: saved, previous: current };
     });
-    if (!updated) return { success: false, error: 'CapDev project not found.' };
-    const changes = auditChanges(previous, updated, { aipCode: 'AIP code', description: 'Description', department: 'Department', folderId: 'Folder', initialBudget: 'Initial budget', budget: 'Remaining budget' });
+    if (!updated) return { success: false, error: 'CapDev not found.' };
+    const changes = auditChanges(previous, updated, { aipCode: 'AIP code', description: 'Description', department: 'Department', folderId: 'Folder', initialBudget: 'Initial Balance', budget: 'Remaining Balance' });
     const fields = await getCapdevFieldDefinitions();
     for (const field of fields) changes.push(...auditChanges({ value: getDynamicFieldValue((previous.additionalInfo || {}) as Record<string, unknown>, field) }, { value: getDynamicFieldValue((updated.additionalInfo || {}) as Record<string, unknown>, field) }, { value: field.name }));
     await writeAuditLog(access, { action: 'updated', entityType: 'capdev', entityId: updated.id, entityLabel: updated.aipCode, details: { department: updated.department, changes } });
     return { success: true, capdev: updated };
   } catch (error) {
-    console.error('Failed to update CapDev project:', error);
+    console.error('Failed to update CapDev:', error);
     return { success: false, error: 'Database update failed' };
   }
 }
@@ -1921,7 +1921,7 @@ export async function getCapdevById(id: number) {
     const access = await getCurrentAccess();
     return access ? await getAccessibleCapdev(access, id) : null;
   } catch (error) {
-    console.error('Failed to fetch CapDev project:', error);
+    console.error('Failed to fetch CapDev:', error);
     return null;
   }
 }
@@ -1947,11 +1947,11 @@ export async function deleteCapdev(id: number) {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
     const target = await getAccessibleCapdev(access, id);
-    if (!target?.archivedAt) return { success: false, error: 'Archive this CapDev project before deleting permanently.' };
+    if (!target?.archivedAt) return { success: false, error: 'Archive this CapDev before deleting permanently.' };
     const actor = await getActorSnapshot(access);
     return await withTransaction(async (tx) => {
       const [current] = await tx.select().from(capdevs).where(eq(capdevs.id, id)).for('update');
-      if (!current?.archivedAt) return { success: false, error: 'Archive this CapDev project before deleting permanently.' };
+      if (!current?.archivedAt) return { success: false, error: 'Archive this CapDev before deleting permanently.' };
       // Delete child records first, then the project, in one database statement.
       // The dependencies between the CTEs ensure PostgreSQL respects the foreign keys.
       const result = await tx.execute(sql`
@@ -1981,11 +1981,11 @@ export async function deleteCapdev(id: number) {
       )
       SELECT id FROM inserted_audit
       `);
-      if (result.rows.length === 0) return { success: false, error: 'CapDev project not found.' };
+      if (result.rows.length === 0) return { success: false, error: 'CapDev not found.' };
       return { success: true };
     });
   } catch (error) {
-    console.error('Failed to delete CapDev project:', error);
+    console.error('Failed to delete CapDev:', error);
     return { success: false, error: 'Database delete failed' };
   }
 }
@@ -2352,7 +2352,7 @@ export async function getStatusUpdateFieldDefinitions() {
           width: 'full',
           columnPosition: 'left',
           sortOrder: 1,
-          placeholder: 'Enter status update details',
+          placeholder: 'Enter progress update details',
           updatedById: access.userId,
         },
         {
@@ -2383,7 +2383,7 @@ export async function getStatusUpdateFieldDefinitions() {
 
     return fields;
   } catch (error) {
-    console.error('Failed to get Status Update fields:', error);
+    console.error('Failed to get Progress Update fields:', error);
     return [];
   }
 }
@@ -2450,7 +2450,7 @@ export async function saveStatusUpdateFieldDefinition(data: {
       return { success: true, id: inserted.id };
     }
   } catch (error) {
-    console.error('Failed to save Status Update field:', error);
+    console.error('Failed to save Progress Update field:', error);
     return { success: false, error: 'Database save failed' };
   }
 }
@@ -2493,7 +2493,7 @@ export async function deleteStatusUpdateFieldDefinition(id: number, updatedById:
     await writeAuditLog(access, { action: 'deleted', entityType: 'status_update_field', entityId: id, entityLabel: result.field.name, details: { deletedAttachments: result.attachmentCount } });
     return { success: true };
   } catch (error) {
-    console.error('Failed to delete Status Update field:', error);
+    console.error('Failed to delete Progress Update field:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Unable to delete the field.' };
   }
 }
@@ -2516,10 +2516,10 @@ export async function updateStatusUpdateFieldsOrder(
       FROM (VALUES ${sql.join(orderRows, sql`, `)}) AS ordered(id, sort_order, column_position)
       WHERE field.id = ordered.id
     `);
-    await writeAuditLog(access, { action: 'updated', entityType: 'status_update_field', entityLabel: 'Status Update field layout', details: { fieldLayout } });
+    await writeAuditLog(access, { action: 'updated', entityType: 'status_update_field', entityLabel: 'Progress Update field layout', details: { fieldLayout } });
     return { success: true };
   } catch (error) {
-    console.error('Failed to reorder Status Update fields:', error);
+    console.error('Failed to reorder Progress Update fields:', error);
     return { success: false, error: 'Database update failed' };
   }
 }
@@ -2557,7 +2557,7 @@ export async function saveRequestInactivitySettings(days: number) {
     await db.insert(systemSettings).values({ key: INACTIVITY_SETTING_KEY, numberValue: days, updatedById: access.userId })
       .onConflictDoUpdate({ target: systemSettings.key, set: { numberValue: days, updatedById: access.userId, updatedAt: new Date() } });
     await writeAuditLog(access, { action: 'updated', entityType: 'system_setting', entityId: INACTIVITY_SETTING_KEY,
-      entityLabel: 'Status Update Notifications', details: { days, previousDays: previous } });
+      entityLabel: 'Progress Update Notifications', details: { days, previousDays: previous } });
     return { success: true };
   } catch { return { success: false, error: 'Unable to save notification settings.' }; }
 }
@@ -2608,7 +2608,7 @@ export async function getRequestPage(input: RequestPageInput) {
   const access = await getCurrentAccess();
   if (!access) throw new Error('You must be signed in.');
   const parent = await getAccessibleCapdev(access, input.capdevId);
-  if (!parent) throw new Error('You do not have permission to open this project.');
+  if (!parent) throw new Error('You do not have permission to open this CapDev.');
   if (typeof input.search !== 'string' || input.search.length > 300 || !input.filters) throw new Error('Invalid filters.');
   const base = and(eq(requests.capdevId, parent.id), access.role === 'employee' ? eq(requests.userId, access.userId) : undefined);
   const focus = input.focusId ? (await db.select().from(requests).where(and(base, eq(requests.id, input.focusId))).limit(1))[0] : null;
@@ -2735,8 +2735,8 @@ export async function updateRequest(id: number, data: RequestInput) {
     if (selectionError) return { success: false, error: selectionError };
     const [capdev] = await db.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, existing.capdevId)).limit(1);
     const [deduction] = await db.select({ id: requestStatusUpdates.id }).from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
-    if ((existing.budgetDeductedAt || deduction) && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested budget cannot be changed after it has been deducted.' };
-    if (!existing.budgetDeductedAt && !deduction && (!capdev || Number(data.requestedBudget) > Number(capdev.budget))) return { success: false, error: 'Requested budget exceeds the remaining CapDev budget.' };
+    if ((existing.budgetDeductedAt || deduction) && Number(data.requestedBudget) !== Number(existing.requestedBudget)) return { success: false, error: 'Requested amount cannot be changed after it has been deducted.' };
+    if (!existing.budgetDeductedAt && !deduction && (!capdev || Number(data.requestedBudget) > Number(capdev.budget))) return { success: false, error: 'Requested amount exceeds the remaining CapDev balance.' };
     const schema = await getRequestFormSchemaService(access, validated.setting);
     const missing = schema.dynamicFields.filter((field) => field.isRequired && !hasRequiredValue(getDynamicFieldValue(validated.additionalInfo, field), field.type));
     if (missing.length) return { success: false, error: 'Complete the required fields: ' + missing.map((field) => field.name).join(', ') };
@@ -2749,12 +2749,12 @@ export async function updateRequest(id: number, data: RequestInput) {
       if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
       const [deducted] = await tx.select().from(requestStatusUpdates).where(and(eq(requestStatusUpdates.requestId, id), eq(requestStatusUpdates.subtractsRequestedAmount, true))).limit(1);
-      if ((current.budgetDeductedAt || deducted) && validated.requestedBudget !== String(current.requestedBudget) && Number(validated.requestedBudget) !== Number(current.requestedBudget)) throw new Error('Requested budget cannot be changed after deduction.');
+      if ((current.budgetDeductedAt || deducted) && validated.requestedBudget !== String(current.requestedBudget) && Number(validated.requestedBudget) !== Number(current.requestedBudget)) throw new Error('Requested amount cannot be changed after deduction.');
       if (!current.budgetDeductedAt && !deducted) {
         const [balance] = await tx.select({ budget: capdevs.budget }).from(capdevs).where(eq(capdevs.id, current.capdevId));
-        if (!balance || Number(validated.requestedBudget) > Number(balance.budget)) throw new Error('Requested budget exceeds the remaining CapDev budget.');
+        if (!balance || Number(validated.requestedBudget) > Number(balance.budget)) throw new Error('Requested amount exceeds the remaining CapDev balance.');
       }
-      changes = auditChanges(current, validated, { setting: 'Request type', description: 'Title', eventDate: 'Event Date', requestedBudget: 'Requested budget' });
+      changes = auditChanges(current, validated, { setting: 'Request type', description: 'Request Title', eventDate: 'Event Date', requestedBudget: 'Requested Amount' });
       for (const field of schema.dynamicFields) {
         changes.push(...auditChanges({ value: getDynamicFieldValue((current.additionalInfo || {}) as Record<string, unknown>, field) }, { value: getDynamicFieldValue(validated.additionalInfo, field) }, { value: field.name }));
       }
@@ -2994,7 +2994,7 @@ async function getUploadRecord(access: UserAccess, target: UploadTarget, tx?: Tr
   if (target.kind === 'status') {
     // Lock order matches request deletion: request, parent, then timeline entry.
     const [found] = await database.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, target.id));
-    if (!found) throw new Error('Status update not found.');
+    if (!found) throw new Error('Progress update not found.');
     requestId = found.requestId;
     update = found;
   }
@@ -3196,7 +3196,7 @@ export async function uploadFilesToGoogleDrive(formData: FormData, context?: Req
     const uploadedFiles = await Promise.all(files.map((file) => uploadFileToGoogleDrive(file, accessToken, parentFolderId)));
     return { success: true, files: uploadedFiles };
   } catch (error) {
-    console.error('Failed to upload status update files:', error);
+    console.error('Failed to upload progress update files:', error);
     return { success: false, error: error instanceof Error ? error.message : 'File upload failed.', files: [] as StatusAttachment[] };
   }
 }
@@ -3207,7 +3207,7 @@ export async function getRequestStatusUpdates(requestId: number) {
     if (!access || !await getAccessibleRequest(access, requestId)) return [];
     return await db.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.requestId, requestId)).orderBy(requestStatusUpdates.createdAt);
   } catch (error) {
-    console.error('Failed to fetch request status updates:', error);
+    console.error('Failed to fetch request progress updates:', error);
     return [];
   }
 }
@@ -3224,7 +3224,7 @@ async function ensureRequestEvaluationForms(request: typeof requests.$inferSelec
     return ensureRequestEvaluationForms(current, transaction);
   });
   const [capdev] = await db.select({ aipCode: capdevs.aipCode }).from(capdevs).where(eq(capdevs.id, request.capdevId)).limit(1);
-  if (!capdev) throw new Error('The request CapDev project was not found.');
+  if (!capdev) throw new Error('The request CapDev was not found.');
 
   let participantFeedbackFormId = request.participantFeedbackFormId;
   let participantFeedbackFormUrl = request.participantFeedbackFormUrl;
@@ -3474,7 +3474,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
     if (!access || !canManageRequests(access) || !await getWritableRequest(access, data.requestId)) return unauthorized;
     data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo || {}, access.userId) };
     for (const flag of [data.markAsComplete, data.subtractsRequestedAmount, data.isStopperResponse]) {
-      if (flag !== undefined && typeof flag !== 'boolean') return { success: false, error: 'Invalid status update options.' };
+      if (flag !== undefined && typeof flag !== 'boolean') return { success: false, error: 'Invalid progress update options.' };
     }
     const { data: session } = await auth.getSession();
 
@@ -3494,7 +3494,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
     }
 
     if (!isStopperResponse && (!data.statusMark || !['pending', 'completed', 'denied', 'accepted'].includes(data.statusMark))) {
-      return { success: false, error: 'A valid status mark (Pending, Completed, or Denied) is required for every status update.' };
+      return { success: false, error: 'A valid status mark (Pending, Completed, or Denied) is required for every progress update.' };
     }
 
     if (!isStopperResponse) {
@@ -3502,7 +3502,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
       if (selectionError) return { success: false, error: selectionError };
     }
 
-    if (!data.statusUpdate?.trim() || data.statusUpdate.length > 20000) return { success: false, error: 'Enter a status update of up to 20,000 characters.' };
+    if (!data.statusUpdate?.trim() || data.statusUpdate.length > 20000) return { success: false, error: 'Enter a progress update of up to 20,000 characters.' };
     if (isStopperResponse && (data.subtractsRequestedAmount || data.markAsComplete)) return { success: false, error: 'A stopper response cannot deduct budget or complete a request.' };
     const deductedAmount = data.deductedAmount === undefined || data.deductedAmount === '' ? undefined : validateMoney(data.deductedAmount);
     const createdUpdate = await withTransaction(async (tx) => {
@@ -3522,7 +3522,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
         requestId: data.requestId,
         title: data.statusMark
           ? `${existingReq[0].requestorName || 'Requestor'} · Update: [${data.statusMark.toUpperCase()}]`
-          : `${existingReq[0].requestorName || 'Requestor'} · Status Update`,
+          : `${existingReq[0].requestorName || 'Requestor'} · Progress Update`,
         message: `${session?.user?.name || session?.user?.email || 'Staff'}: ${data.statusUpdate.slice(0, 90)}`,
         link: `/portal/capdev/${existingReq[0].capdevId}/requests/${data.requestId}/status#request-status-update-${isStopperResponse ? data.stopperId : createdUpdate.id}`,
         type: 'status_update',
@@ -3534,7 +3534,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
       action: 'created',
       entityType: 'status_update',
       entityId: createdUpdate.id,
-      entityLabel: `Status update for Request #${data.requestId}`,
+      entityLabel: `Progress update for Request #${data.requestId}`,
       details: {
         requestId: data.requestId,
         requestorName: existingReq[0].requestorName,
@@ -3553,7 +3553,7 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
 
     return { success: true, statusUpdateId: createdUpdate.id };
   } catch (error) {
-    console.error('Failed to create request status update:', error);
+    console.error('Failed to create request progress update:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Database insert failed' };
   }
 }
@@ -3867,7 +3867,7 @@ export async function handleChatbotAipCodeInput(
   if (!capdevResult.success) {
     return {
       success: false as const,
-      error: capdevResult.error || `CapDev project with AIP Code “${aipCode}” was not found.`,
+      error: capdevResult.error || `CapDev with AIP Code “${aipCode}” was not found.`,
     };
   }
 
@@ -3882,7 +3882,7 @@ export async function handleChatbotAipCodeInput(
   if (draftResult.draft.missingRequiredFields.length > 0) {
     reply = `Connected to CapDev **${capdevResult.capdev.aipCode}** (${capdevResult.capdev.department || 'All Departments'}). Please provide the missing required information: ${draftResult.draft.missingRequiredFields.join(', ')}.`;
   } else if (!draftResult.draft.budgetValidation.isValid) {
-    reply = `Connected to CapDev **${capdevResult.capdev.aipCode}**. ${draftResult.draft.budgetValidation.error || 'Requested budget exceeds remaining CapDev balance.'}`;
+    reply = `Connected to CapDev **${capdevResult.capdev.aipCode}**. ${draftResult.draft.budgetValidation.error || 'Requested amount exceeds remaining CapDev balance.'}`;
   } else {
     reply = `Connected to CapDev **${capdevResult.capdev.aipCode}**. Review the request draft below and confirm when ready.`;
   }

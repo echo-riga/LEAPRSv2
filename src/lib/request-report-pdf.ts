@@ -216,7 +216,7 @@ export function renderRequestReportPdf(report: RequestReportPdfData) {
     commands.push(text(section, MARGIN + 12, cursor + 8, 10, "#ffffff", true));
     cursor += 28;
     const headers = [
-      "Activity title",
+      "Request Title",
       "Date of event",
       "Allotted budget",
       "Utilized budget",

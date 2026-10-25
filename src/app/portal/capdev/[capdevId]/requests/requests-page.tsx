@@ -513,7 +513,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
   if (session.isPending || loading) return <ResourceGridSkeleton titleWidth={220} />;
   if (!session.data) return null;
   if (loadError) return <Alert severity="error">{loadError}<Button onClick={() => void loadData()}>Retry</Button></Alert>;
-  if (!capdev) return <Box sx={{ py: 8, textAlign: 'center' }}><Typography variant="h6" color="text.secondary">CapDev project not found.</Typography></Box>;
+  if (!capdev) return <Box sx={{ py: 8, textAlign: 'center' }}><Typography variant="h6" color="text.secondary">CapDev not found.</Typography></Box>;
   const canManageRequest = role === 'admin' || role === 'employee' || role === 'employee-department';
   const currentUserId = session.data.user.id;
   const canEditRequest = (request: RequestRecord) => role === 'admin' || role === 'employee-department' || (role === 'employee' && request.userId === currentUserId);
@@ -711,7 +711,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
                   <TextField fullWidth label="Initial Balance" value={formatCurrency(capdev.initialBudget)} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
-                  <TextField fullWidth label="Balance" value={formatCurrency(capdev.budget)} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
+                  <TextField fullWidth label="Remaining Balance" value={formatCurrency(capdev.budget)} disabled slotProps={{ inputLabel: { shrink: true } }} sx={disabledFieldSx} />
                 </Grid>
 
                 {/* Dynamic CapDev Fields */}
@@ -776,7 +776,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               <Grid size={12}>
                 <TextField
                   fullWidth
-                  label="Title"
+                  label="Request Title"
                   placeholder="Activity or seminar title"
                   value={form.description}
                   onChange={(event) => setValue({ description: event.target.value })}
@@ -797,7 +797,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               <Grid size={{ xs: 12, sm: 6 }} id="request-field-budget">
                 <TextField required
                   fullWidth
-                  label="Amount"
+                  label="Requested Amount"
                   type="number"
                   value={form.requestedBudget}
                   onChange={(event) => setValue({ requestedBudget: event.target.value })}
@@ -814,7 +814,7 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField fullWidth
-                  label="Balance"
+                  label="Remaining Balance"
                   value={capdev ? formatCurrency(capdev.budget) : '₱0.00'}
                   disabled
                   slotProps={{ inputLabel: { shrink: true } }}

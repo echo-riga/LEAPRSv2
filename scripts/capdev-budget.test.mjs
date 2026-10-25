@@ -40,8 +40,8 @@ test('changing initial budget resets remaining budget and audits both locked bal
   assert.equal(result.capdev.initialBudget, '12000.50');
   assert.equal(result.capdev.budget, '12000.50');
   assert.deepEqual(f.audit().details.changes.filter(change => /Budget|budget/.test(change.field)), [
-    { field: 'initialBudget', label: 'Initial budget', from: '10000.00', to: '12000.50' },
-    { field: 'budget', label: 'Remaining budget', from: '6000.00', to: '12000.50' },
+    { field: 'initialBudget', label: 'Initial Balance', from: '10000.00', to: '12000.50' },
+    { field: 'budget', label: 'Remaining Balance', from: '6000.00', to: '12000.50' },
   ]);
 });
 

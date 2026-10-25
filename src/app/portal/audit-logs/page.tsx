@@ -21,7 +21,7 @@ const actionLabels: Record<string, string> = {
   created: 'Created', updated: 'Updated', deleted: 'Deleted', archived: 'Archived', restored: 'Restored', status_changed: 'Status changed', stopped: 'Paused', resumed: 'Resumed',
 };
 const entityLabels: Record<string, string> = {
-  capdev_folder: 'CapDev folder', capdev: 'CapDev project', request: 'Request', status_update: 'Progress update', user: 'User account', capdev_field: 'CapDev form field', request_field: 'Request form field', status_update_field: 'Progress update form field', system_setting: 'System setting',
+  capdev_folder: 'CapDev folder', capdev: 'CapDev', request: 'Request', status_update: 'Progress Update', user: 'User account', capdev_field: 'CapDev form field', request_field: 'Request form field', status_update_field: 'Progress update form field', system_setting: 'System setting',
 };
 
 function formatDate(value: Date | string) {

@@ -258,13 +258,16 @@ function RequestDraftModal({
   const [aipError, setAipError] = useState('');
   const [formError, setFormError] = useState('');
 
-  useEffect(() => {
+  const [previousDraft, setPreviousDraft] = useState(draft);
+  // Reset local editor state before rendering a changed draft, without an effect.
+  if (draft !== previousDraft) {
+    setPreviousDraft(draft);
     if (draft) {
       setAipCodeInput(draft.aipCode || '');
       setAipError('');
       setFormError('');
     }
-  }, [draft]);
+  }
 
   if (!draft) return null;
   const activeDefinitions = definitions.filter((field) => field.setting === draft.setting);
@@ -290,7 +293,7 @@ function RequestDraftModal({
         capdev: result.draft.capdev,
       });
     } else {
-      setAipError(result.error || 'CapDev project not found.');
+      setAipError(result.error || 'CapDev not found.');
     }
   };
 
@@ -376,7 +379,7 @@ function RequestDraftModal({
                 required
                 fullWidth
                 type="number"
-                label="Amount (₱)"
+                label="Requested Amount (₱)"
                 value={draft.requestedBudget}
                 onChange={(e) => {
                   const val = e.target.value;
@@ -415,7 +418,7 @@ function RequestDraftModal({
             <Grid size={12}>
               <TextField
                 fullWidth
-                label="Title"
+                label="Request Title"
                 placeholder="Activity or seminar title"
                 value={draft.description}
                 onChange={(e) => onUpdateDraft({ ...draft, description: e.target.value })}
@@ -557,14 +560,12 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
   const session = authClient.useSession();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [message, setMessage] = useState('');
-  const [currentRole, setCurrentRole] = useState<string | null>(userRole || null);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'welcome',
-      sender: 'assistant',
-      text: getRoleWelcomeMessage(userRole),
-    },
-  ]);
+  const [loadedRole, setLoadedRole] = useState<string | null>(null);
+  const currentRole = userRole !== undefined ? userRole : loadedRole;
+  const [conversation, setMessages] = useState<ChatMessage[]>([]);
+  const messages: ChatMessage[] = conversation.length ? conversation : [
+    { id: 'welcome', sender: 'assistant', text: getRoleWelcomeMessage(currentRole) },
+  ];
   const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
   const [sending, setSending] = useState(false);
   const [extracting, setExtracting] = useState(false);
@@ -578,26 +579,13 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
   const open = Boolean(anchorEl);
 
   useEffect(() => {
-    if (userRole !== undefined) {
-      setCurrentRole(userRole);
-    } else {
-      void getCurrentUserAccess().then((access) => {
-        if (access.success) {
-          setCurrentRole(access.role);
-        }
-      });
-    }
-  }, [userRole]);
-
-  useEffect(() => {
-    const welcomeText = getRoleWelcomeMessage(currentRole);
-    setMessages((prev) => {
-      if (prev.length === 1 && prev[0].id === 'welcome') {
-        return [{ id: 'welcome', sender: 'assistant', text: welcomeText }];
-      }
-      return prev;
+    if (userRole !== undefined) return;
+    let cancelled = false;
+    void getCurrentUserAccess().then((access) => {
+      if (!cancelled && access.success) setLoadedRole(access.role);
     });
-  }, [currentRole]);
+    return () => { cancelled = true; };
+  }, [userRole]);
 
   useEffect(() => {
     void Promise.all([
@@ -700,7 +688,8 @@ export default function PortalChatbot({ userRole }: PortalChatbotProps) {
       imagePreview: imagePreviews[0],
       imagePreviews: imagePreviews.length > 0 ? imagePreviews : undefined,
     };
-    setMessages((current) => [...current, userMsg]);
+    // Keep the current welcome text once the conversation starts.
+    setMessages((current) => [...(current.length ? current : messages), userMsg]);
 
     // If images/files were attached
     if (currentStaged.length > 0) {

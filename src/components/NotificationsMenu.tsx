@@ -288,7 +288,7 @@ export default function NotificationsMenu({ userId }: { userId: string }) {
               onClick={handleMarkAllRead}
               sx={{ p: 0.5, fontSize: '0.75rem', fontWeight: 700 }}
             >
-              Mark all read
+              Mark All Read
             </Button>
           )}
         </Stack>

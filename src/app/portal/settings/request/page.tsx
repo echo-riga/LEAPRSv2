@@ -762,7 +762,7 @@ function RequestConfigContent() {
                           <Grid size={12}>
                             <Stack spacing={0.5}>
                               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                                Title
+                                Request Title
                               </Typography>
                               <TextField
                                 fullWidth
@@ -790,7 +790,7 @@ function RequestConfigContent() {
                           <Grid size={{ xs: 12, sm: 6 }}>
                             <Stack spacing={0.5}>
                               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                                Amount <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
+                                Requested Amount <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>
                               </Typography>
                               <TextField
                                 fullWidth
@@ -806,7 +806,7 @@ function RequestConfigContent() {
                           <Grid size={{ xs: 12, sm: 6 }}>
                             <Stack spacing={0.5}>
                               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>
-                                Balance
+                                Remaining Balance
                               </Typography>
                               <TextField
                                 fullWidth

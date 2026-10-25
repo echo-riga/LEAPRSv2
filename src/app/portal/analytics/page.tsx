@@ -159,8 +159,9 @@ export default function AnalyticsPage() {
     void readPortal('analytics', { dateFrom: filters.dateFrom, dateTo: filters.dateTo, snapshotDate: filters.snapshotDate }).then((result) => {
       if (!active) return;
       setLoadError('');
-      setData(result);
-      const allDepts = Array.from(new Set(result.capdevs.map((c) => c.department))).sort();
+      const normalized = { ...result, capdevs: result.capdevs.map(project => ({ ...project, department: project.department?.trim() || 'None' })) };
+      setData(normalized);
+      const allDepts = Array.from(new Set(normalized.capdevs.map((c) => c.department))).sort();
       const allCapdevIds = result.capdevs.map((c) => c.id);
       const initial: AnalyticsFilters = {
         departments: allDepts,
@@ -350,7 +351,7 @@ export default function AnalyticsPage() {
         href,
       };
     });
-    openDetails(`Project actions · ${label}`, rows);
+    openDetails(`CapDev actions · ${label}`, rows);
   };
 
   return (
@@ -372,9 +373,9 @@ export default function AnalyticsPage() {
             {filters.departments.length === 0 && <Chip label="No departments" size="small" color="warning" variant="outlined" />}
             {visibleProjects.map((project) => <Chip key={`project-${project.id}`} label={project.aipCode} size="small" variant="outlined" />)}
             {selectedCapdevs.length > visibleProjects.length && (
-              <Chip label={`+${selectedCapdevs.length - visibleProjects.length} projects`} size="small" variant="outlined" />
+              <Chip label={`+${selectedCapdevs.length - visibleProjects.length} CapDev`} size="small" variant="outlined" />
             )}
-            {filters.departments.length > 0 && selectedCapdevs.length === 0 && <Chip label="No CapDev projects" size="small" color="warning" variant="outlined" />}
+            {filters.departments.length > 0 && selectedCapdevs.length === 0 && <Chip label="No CapDev" size="small" color="warning" variant="outlined" />}
           </Stack>
           <Button
             size="small"
@@ -399,7 +400,7 @@ export default function AnalyticsPage() {
         <Box sx={{ mb: 4 }}>
           <Typography variant="h5" sx={{ fontWeight: 800 }}>Activity during {activityLabel}</Typography>
           <Grid container spacing={2.5} sx={{ mt: 2, mb: 2.5 }}>
-            <Grid size={{ xs: 12, sm: 4 }}><StatCard label="CapDev projects added during this period" value={activityCapdevs.length} icon={<ProjectIcon />} onClick={() => openDetails('CapDev projects added', projectRows(activityCapdevs))} /></Grid>
+            <Grid size={{ xs: 12, sm: 4 }}><StatCard label="CapDev added during this period" value={activityCapdevs.length} icon={<ProjectIcon />} onClick={() => openDetails('CapDev added', projectRows(activityCapdevs))} /></Grid>
             <Grid size={{ xs: 12, sm: 4 }}><StatCard label="Requests submitted during this period" value={activityRequests.length} icon={<RequestIcon />} onClick={() => openDetails('Requests submitted', requestRows(activityRequests.map((request) => ({ request }))))} /></Grid>
             <Grid size={{ xs: 12, sm: 4 }}><StatCard label="Requests completed during this period" value={completedCount} icon={<CompleteIcon />} onClick={() => openDetails('Requests completed', requestRows(completedRequests))} /></Grid>
           </Grid>
@@ -456,7 +457,7 @@ export default function AnalyticsPage() {
             </ChartCard>
           </Grid>
           <Grid size={{ xs: 12, md: 7 }}>
-            <ChartCard title="Project actions during this period">
+            <ChartCard title="CapDev actions during this period">
               <Box sx={{ overflowX: 'auto', pb: 1 }}>
                 <Stack direction="row" spacing={1} sx={{ height: 220, alignItems: 'flex-end', minWidth: Math.max(420, auditSeries.length * 48) }}>
                   {auditSeries.map((item) => (
@@ -487,7 +488,7 @@ export default function AnalyticsPage() {
 
           <Grid container spacing={2.5}>
             <Grid size={{ xs: 12, lg: 5 }}>
-              <ChartCard title={`Balance utilization as of ${snapshotLabel}`} onClick={() => openDetails('CapDev project balances', projectRows(snapshotProjects))}>
+              <ChartCard title={`Balance utilization as of ${snapshotLabel}`} onClick={() => openDetails('CapDev balances', projectRows(snapshotProjects))}>
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} sx={{ alignItems: 'center' }}>
                   <Box sx={{ position: 'relative', display: 'grid', placeItems: 'center', width: 190, height: 190, flexShrink: 0 }}>
                     <Box sx={{ position: 'absolute', inset: 0, borderRadius: '50%', background: `conic-gradient(#2e7d32 ${utilization * 3.6}deg, #dfe8df 0)` }} />
@@ -508,7 +509,7 @@ export default function AnalyticsPage() {
               <ChartCard title={`Balance allocation by department as of ${snapshotLabel}`}>
                 <Stack direction="row" spacing={{ xs: 1, sm: 2 }} sx={{ minHeight: 250, alignItems: 'flex-end', overflowX: 'auto', pt: 1 }}>
                   {allocations.map((allocation) => (
-                    <ButtonBase key={allocation.name} onClick={() => openDetails(`${allocation.name} CapDev projects`, projectRows(snapshotProjects.filter((project) => project.department === allocation.name)))} sx={{ minWidth: 88, height: 240, flex: 1, alignItems: 'stretch', borderRadius: 1 }}>
+                    <ButtonBase key={allocation.name} onClick={() => openDetails(`${allocation.name} CapDev`, projectRows(snapshotProjects.filter((project) => project.department === allocation.name)))} sx={{ minWidth: 88, height: 240, flex: 1, alignItems: 'stretch', borderRadius: 1 }}>
                     <Stack spacing={1} sx={{ alignItems: 'center', justifyContent: 'flex-end', width: '100%', height: '100%' }}>
                       <Typography variant="caption" sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{currency.format(allocation.value)}</Typography>
                       <Box sx={{ height: 170, width: '100%', maxWidth: 58, display: 'flex', alignItems: 'flex-end', bgcolor: '#e4ece4', borderRadius: '6px 6px 0 0' }}>
@@ -562,7 +563,7 @@ export default function AnalyticsPage() {
                 </Typography>
                 <Stack direction="row" spacing={1}>
                   <Button size="small" onClick={() => handleToggleAllDepartments(true)} sx={{ p: 0, minWidth: 0 }}>
-                    Select all
+                    Select All
                   </Button>
                   <Button size="small" onClick={() => handleToggleAllDepartments(false)} sx={{ p: 0, minWidth: 0, color: 'text.secondary' }}>
                     Clear
@@ -598,16 +599,16 @@ export default function AnalyticsPage() {
               <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
                 <Box>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    CapDev Projects
+                    CapDev
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    {availableDraftCapdevs.length} project{availableDraftCapdevs.length === 1 ? '' : 's'} available
+                    {availableDraftCapdevs.length} CapDev available
                   </Typography>
                 </Box>
                 {availableDraftCapdevs.length > 0 && (
                   <Stack direction="row" spacing={1}>
                     <Button size="small" onClick={() => handleToggleAllAvailableCapdevs(true)} sx={{ p: 0, minWidth: 0 }}>
-                      Select all
+                      Select All
                     </Button>
                     <Button size="small" onClick={() => handleToggleAllAvailableCapdevs(false)} sx={{ p: 0, minWidth: 0, color: 'text.secondary' }}>
                       Clear
@@ -648,8 +649,8 @@ export default function AnalyticsPage() {
                 {availableDraftCapdevs.length === 0 && (
                   <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
                     {draftFilters.departments.length === 0
-                      ? 'Select at least one department to view and filter CapDev projects.'
-                      : 'No CapDev projects found for the selected departments.'}
+                      ? 'Select at least one department to view and filter CapDev.'
+                      : 'No CapDev found for the selected departments.'}
                   </Typography>
                 )}
               </Box>
@@ -659,7 +660,7 @@ export default function AnalyticsPage() {
 
             <Box>
               <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Activity dates</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Show projects added, requests submitted or completed, deductions, and recorded actions that happened between these dates.</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Show CapDev added, requests submitted or completed, deductions, and recorded actions that happened between these dates.</Typography>
             <Grid container spacing={2}>
               <Grid size={{ xs: 12, sm: 6 }}>
                 <DateField

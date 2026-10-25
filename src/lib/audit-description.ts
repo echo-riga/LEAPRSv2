@@ -45,7 +45,7 @@ export function describeAudit(entry: AuditEntry) {
   const storedRequestName = /'s request$/i.test(entry.entityLabel) ? entry.entityLabel.slice(0, -10) : undefined;
   const target = isRequest ? requestLabel(d.requestorName || storedRequestName)
     : entry.entityType === 'capdev_folder' ? `CapDev folder "${entry.entityLabel}"`
-    : entry.entityType === 'capdev' ? `CapDev project ${entry.entityLabel}`
+    : entry.entityType === 'capdev' ? `CapDev ${entry.entityLabel}`
     : entry.entityType === 'user' ? userLabel === 'a user account' ? 'a user account' : `user account for ${userLabel}`
     : entry.entityType.endsWith('_field') && !/layout|department options/i.test(entry.entityLabel) ? `form field “${entry.entityLabel}”` : entry.entityLabel;
   const actions: Record<string, string> = { created: 'Created', updated: 'Updated', deleted: 'Deleted', archived: 'Archived', restored: 'Restored', stopped: 'Paused', resumed: 'Resumed' };
@@ -64,7 +64,7 @@ export function describeAudit(entry: AuditEntry) {
     lines.length = 0;
   }
   const changedFields = new Set(changes.map((c) => c.field));
-  const metadata: Record<string, string> = { capdevAipCode: 'CapDev AIP code', requestDescription: 'Activity', eventDate: 'Event Date', department: 'Department', role: 'Role', requestedRole: 'Requested role', email: 'Email', setting: 'Request type', requestedBudget: 'Requested budget', initialBudget: 'Initial budget', statusMark: 'Progress status', reason: 'Reason for pause', statusUpdate: 'Update', remarks: 'Remarks', deductedAmount: 'Amount deducted', restoredBudget: 'Budget restored', type: 'Field type', isRequired: 'Required', included: 'Available departments', excluded: 'Hidden departments' };
+  const metadata: Record<string, string> = { capdevAipCode: 'CapDev AIP code', requestDescription: 'Request Title', eventDate: 'Event Date', department: 'Department', role: 'Role', requestedRole: 'Requested role', email: 'Email', setting: 'Request type', requestedBudget: 'Requested Amount', initialBudget: 'Initial Balance', statusMark: 'Progress status', reason: 'Reason for pause', statusUpdate: 'Progress Update', remarks: 'Remarks', deductedAmount: 'Amount deducted', restoredBudget: 'Budget restored', type: 'Field type', isRequired: 'Required', included: 'Available departments', excluded: 'Hidden departments' };
   for (const [key, label] of Object.entries(metadata)) {
     if (!changedFields.has(key) && d[key] !== undefined && d[key] !== null && d[key] !== '' && !(key === 'restoredBudget' && Number(d[key]) === 0)) lines.push(`${label}: ${valueText(d[key], key)}`);
   }

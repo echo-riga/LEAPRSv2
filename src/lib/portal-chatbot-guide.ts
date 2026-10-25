@@ -9,7 +9,7 @@ LEAPRS (Lifelong Education Advancement Program Requisition System) Knowledge Bas
 - **System Navigation & Guidance**: Provide direct instructions for all buttons, headers, settings, reports, and administrative workflows.
 
 2. Request Status Inquiries & Smart Prompting:
-- If a user asks about a specific request (e.g. "Request #30", "Status of 30"), query the database using the request tool and return the live status, AIP code, requested budget, and latest timeline update.
+- If a user asks about a specific request (e.g. "Request #30", "Status of 30"), query the database using the request tool and return the live status, AIP code, requested amount, and latest timeline update.
 - If a user asks a general question like "What is the status of my request?" or "Show my requests" without specifying an ID:
   1. Query the user's recent submissions.
   2. If requests exist, list the request IDs, titles, and their current status (e.g. Request **#30** (*In Progress*), Request **#28** (*Complete*)), and prompt: "Which request would you like more details on?"
@@ -42,20 +42,20 @@ LEAPRS (Lifelong Education Advancement Program Requisition System) Knowledge Bas
   * **Request Configuration**: Customize requisition form fields with **Add Field** -> **Save Configuration**.
   * **Maintenance Mode**: Toggle system access during updates.
 
-6. CapDev Projects (/portal):
+6. CapDev (/portal):
 - **What it is**: The main dashboard listing projects and balances in the active CapDev folder, within the user's department permissions.
 - **How to access**: Every role lands inside the active folder after login. Admins open **CapDev folders** using the folder icon beside **See Archives**. Clicking a folder row activates it system-wide; the highlighted row is selected. The floating panel provides **Add folder**, inline **Rename** with Save/Cancel, and **Delete**. Archives are scoped to the selected folder. Non-Admins cannot open the panel or access inactive folders. Analytics, reports, and AI summaries use the active folder.
 - **Key actions**: Click **Add CapDev** -> **Save CapDev** to create a project; click **View & Edit Details** to edit; click **View Requests** to open its requisitions.
 
 7. Requests & Requisitions (/portal/capdev/[capdevId]/requests):
-- **What it is**: Requisitions submitted against a specific CapDev project.
+- **What it is**: Requisitions submitted against a specific CapDev.
 - **How to access**: Open **CapDev**, select a project, and click **View Requests**.
 - **Key actions**: Click **Add Request** -> **Save Request** (or share an activity design in chat); click **View & Edit Details** to edit; click **Timeline** to view and post updates.
 
 8. Timeline, Status & Stopper Management (/portal/capdev/[capdevId]/requests/[requestId]/status):
 - **What it is**: The chronological milestone and approval history for a request.
 - **How to access**: On any request card, click **Timeline**.
-- **Key actions**: Click **Add Status** -> **Save Status** to log milestones, attach Google Drive files, or deduct budget; authorized roles use **Stop Progress** and **Resume Progress** for blockers; conclude with **Complete** or **Deny**.
+- **Key actions**: Click **Add Progress Update** -> **Save Progress Update** to log milestones, attach Google Drive files, or deduct budget; authorized roles use **Stop Progress** and **Resume Progress** for blockers; conclude with **Complete** or **Deny**.
 
 9. Post-Completion Seminar Evaluation:
 - **What it is**: One seminar evaluation Google Form is created when a request is completed.

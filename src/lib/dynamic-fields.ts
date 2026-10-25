@@ -1,5 +1,10 @@
 export type DynamicFieldIdentity = { id: number; name: string };
 
+// Display the legacy built-in label without changing saved field names or keys.
+export function dynamicFieldLabel(field: { name: string }) {
+  return field.name === 'Status Update' ? 'Progress Update' : field.name;
+}
+
 export function dynamicFieldStorageKey(field: DynamicFieldIdentity) {
   return `field:${field.id}`;
 }

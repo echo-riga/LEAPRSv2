@@ -74,6 +74,10 @@ flowchart LR
 | Evaluation / reporting | [google-forms.ts](src/lib/google-forms.ts), [analytics-metrics.ts](src/lib/analytics-metrics.ts), report actions in `actions.ts` |
 | Presentation | [ThemeRegistry.tsx](src/theme/ThemeRegistry.tsx), [Skeletons.tsx](src/components/Skeletons.tsx) |
 
+### Chatbot client state
+
+The chatbot uses the portal role directly when supplied and loads access only as a fallback, ignoring results after cleanup. Its welcome message is derived until the first user message, then retained in conversation history. Draft changes reset local editor state during a guarded render rather than a synchronization effect.
+
 ### Portal read performance
 
 `POST /api/portal/read` dispatches allowlisted CapDev, request-page, timeline, portal-context, notification, analytics, and monitoring-report reads with private/no-store responses. It rejects cross-origin calls, oversized input, unknown operations, and invalid IDs. Underlying actions retain live authorization checks. `read-context.ts` shares the access-check promise only within this HTTP request through AsyncLocalStorage; roles/sessions are never cached across requests. Bundles run independent database work concurrently and avoid the client Server Action dispatch queue. Mutations retain Server Actions.

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Button, Dialog, DialogActions, DialogContent, DialogTitle } from '@mui/material';
+import { Button, Dialog, DialogTitle } from '@mui/material';
 import { ChevronRight } from '@mui/icons-material';
 import GoogleStorageSettings from '@/components/GoogleStorageSettings';
 
@@ -20,9 +20,8 @@ export default function DriveStorageAction() {
       Change Drive Storage
     </Button>
     <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm" aria-labelledby="drive-storage-title">
-      <DialogTitle id="drive-storage-title" sx={{ fontWeight: 800 }}>Drive Storage</DialogTitle>
-      <DialogContent dividers>{open && <GoogleStorageSettings />}</DialogContent>
-      <DialogActions sx={{ p: 2 }}><Button color="inherit" onClick={() => setOpen(false)}>Close</Button></DialogActions>
+      <DialogTitle id="drive-storage-title" sx={{ fontWeight: 800, textAlign: 'center' }}>Drive Storage</DialogTitle>
+      {open && <GoogleStorageSettings onClose={() => setOpen(false)} />}
     </Dialog>
   </>;
 }

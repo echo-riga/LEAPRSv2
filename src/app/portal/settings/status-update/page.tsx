@@ -40,7 +40,7 @@ import { FormConfigSkeleton } from '@/components/Skeletons';
 import DeleteConfirmationDialog from '@/components/DeleteConfirmationDialog';
 import DateField from '@/components/DateField';
 import SelectionCombobox from '@/components/SelectionCombobox';
-import { hasComboboxOptions } from '@/lib/dynamic-fields';
+import { dynamicFieldLabel, hasComboboxOptions } from '@/lib/dynamic-fields';
 import DynamicTableField from '@/components/DynamicTableField';
 import { focusFormError } from '@/lib/form-error-focus';
 import {
@@ -168,7 +168,7 @@ export default function StatusUpdateConfigPage() {
   const hasConfigurationChanges = draftFields.length > 0 || hasPendingDeletion;
 
   // Single unified section config
-  const groups = [{ key: 'all', label: 'Status Update' }] as const;
+  const groups = [{ key: 'all', label: 'Progress Update' }] as const;
 
   // ---- Inline add / edit / cancel / save / delete -------------------------------------------
 
@@ -296,7 +296,7 @@ export default function StatusUpdateConfigPage() {
       if (configurationSaveTimeout.current) window.clearTimeout(configurationSaveTimeout.current);
       configurationSaveTimeout.current = window.setTimeout(() => setConfigurationSaved(false), 2_000);
     } catch (error: unknown) {
-      console.error('Failed to save status update configuration:', error);
+      console.error('Failed to save progress update configuration:', error);
       showConfigurationError(error instanceof Error ? error.message : 'Failed to save field configuration.');
     } finally {
       setIsSavingConfiguration(false);
@@ -370,7 +370,7 @@ export default function StatusUpdateConfigPage() {
       case 'combobox':
         return (
           <SelectionCombobox
-            label={field.name}
+            label={dynamicFieldLabel(field)}
             required={isRequired}
             size="small"
             options={field.options}
@@ -383,7 +383,7 @@ export default function StatusUpdateConfigPage() {
         return (
           <Stack spacing={0.5}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-              {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
+              {dynamicFieldLabel(field)} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
             <TextField
               type="number"
@@ -400,7 +400,7 @@ export default function StatusUpdateConfigPage() {
         return (
           <Stack spacing={0.5}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-              {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
+              {dynamicFieldLabel(field)} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
             <DateField size="small" value={String(value || '')} onChange={(nextValue) => setPreviewData({ ...previewData, [field.key]: nextValue })} />
           </Stack>
@@ -409,7 +409,7 @@ export default function StatusUpdateConfigPage() {
         return (
           <Stack spacing={0.5}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-              {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
+              {dynamicFieldLabel(field)} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
             <Box
               sx={{
@@ -452,7 +452,7 @@ export default function StatusUpdateConfigPage() {
       case 'table':
         return (
           <DynamicTableField
-            label={field.name}
+            label={dynamicFieldLabel(field)}
             required={isRequired}
             value={previewData[field.key]}
             template={field.options?.[0]}
@@ -467,7 +467,7 @@ export default function StatusUpdateConfigPage() {
           return (
             <Stack spacing={0.5}>
               <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
+                {dynamicFieldLabel(field)} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
               </Typography>
               <Autocomplete
                 freeSolo
@@ -483,7 +483,7 @@ export default function StatusUpdateConfigPage() {
         return (
           <Stack spacing={0.5}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-              {field.name} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
+              {dynamicFieldLabel(field)} {isRequired && <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>*</span>}
             </Typography>
             <TextField
               fullWidth
@@ -692,7 +692,7 @@ export default function StatusUpdateConfigPage() {
       {/* Main Single Live Preview Container */}
       <Container maxWidth="md" sx={{ p: 0, width: '100%', mb: 4 }}>
         <Typography variant="h4" sx={{ fontWeight: '800', color: 'text.primary', letterSpacing: '-1px', mb: 0.5 }}>
-          Status Update Form Layout
+          Progress Update Form Layout
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           Configure required and optional fields, then drag to set their order.

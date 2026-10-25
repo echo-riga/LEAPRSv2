@@ -2,7 +2,7 @@ export const ROLE_OPTIONS = [
   {
     value: 'admin',
     label: 'Admin',
-    description: 'Manages users, settings, CapDev projects, and all requests.',
+    description: 'Manages users, settings, CapDev, and all requests.',
   },
   {
     value: 'employee',
@@ -17,12 +17,12 @@ export const ROLE_OPTIONS = [
   {
     value: 'viewer',
     label: 'Viewer',
-    description: 'Views projects and requests in their department.',
+    description: 'Views CapDev and requests in their department.',
   },
   {
     value: 'viewer-full',
     label: 'Viewer (All Departments)',
-    description: 'Views projects and requests across all departments.',
+    description: 'Views CapDev and requests across all departments.',
   },
 ] as const;
 

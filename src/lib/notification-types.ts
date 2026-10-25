@@ -1,7 +1,7 @@
 export const NOTIFICATION_FILTERS = [
   { type: 'inactivity_reminder', label: 'Inactivity Reminders' },
   { type: 'new_request', label: 'Request Submissions' },
-  { type: 'status_update', label: 'Status Updates' },
+  { type: 'status_update', label: 'Progress Updates' },
   { type: 'completed', label: 'Completed Requests' },
   { type: 'denied', label: 'Denied Requests' },
   { type: 'capdev_created', label: 'CapDev Creation' },

@@ -160,7 +160,7 @@ export default function SettingsPage() {
     {
       title: 'CapDev Configuration',
       icon: <CapDevIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'Configure custom dynamic fields, form layout, and additional form information for CapDev projects.',
+      description: 'Configure custom dynamic fields, form layout, and additional form information for CapDev.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
           <Chip label={`${counts.capdevFieldsCount} Dynamic Fields`} size="small" variant="outlined" color="success" />
@@ -195,9 +195,9 @@ export default function SettingsPage() {
       ),
     },
     {
-      title: 'Status Update Configuration',
+      title: 'Progress Update Configuration',
       icon: <TimelineIcon color="primary" sx={{ fontSize: 32 }} />,
-      description: 'Configure custom dynamic fields, form layout, and status update options.',
+      description: 'Configure custom dynamic fields, form layout, and progress update options.',
       control: (
         <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
           <Chip label={`${counts.statusUpdateFieldsCount} Dynamic Fields`} size="small" variant="outlined" color="primary" />

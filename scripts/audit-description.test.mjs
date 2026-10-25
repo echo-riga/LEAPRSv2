@@ -19,7 +19,7 @@ test('older entries expose available details without inventing previous values',
   const result = describeAudit({ ...request, details: { requestedBudget: '15000' } });
   assert.equal(result.summary, 'Updated the request.');
   assert.ok(result.lines.includes('Previous values were not recorded for this entry.'));
-  assert.ok(result.lines.includes('Requested budget: ₱15,000.00'));
+  assert.ok(result.lines.includes('Requested Amount: ₱15,000.00'));
 });
 
 test('deleted request snapshots retain names and budget restoration', () => {
@@ -36,7 +36,7 @@ test('status changes translate stored status values into readable English', () =
 test('progress updates show the full explanation and deducted amount', () => {
   const text = 'Required documents were received.\nBudget approved for processing.';
   const result = describeAudit({ ...request, action: 'created', entityType: 'status_update', details: { requestorName: 'Genrey', statusUpdate: text, statusMark: 'pending', deductedAmount: '500' } });
-  assert.ok(result.lines.includes(`Update: ${text}`));
+  assert.ok(result.lines.includes(`Progress Update: ${text}`));
   assert.ok(result.lines.includes('Amount deducted: ₱500.00'));
 });
 
