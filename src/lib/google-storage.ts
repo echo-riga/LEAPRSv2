@@ -1,7 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { withTransaction } from '@/db/transaction';
-import { googleStorageConnections, googleDriveResources, requestStorageFolders, googleStorageMigrations, googleStorageMigrationItems } from '@/db/schema';
+import { googleStorageConnections, googleDriveResources, googleDriveCleanupJobs, requestStorageFolders, googleStorageMigrations, googleStorageMigrationItems } from '@/db/schema';
 import { decryptGoogleSecret, encryptGoogleSecret } from '@/lib/google-storage-crypto';
 
 export type GoogleStorage = typeof googleStorageConnections.$inferSelect;
@@ -112,11 +112,13 @@ export async function getGoogleResourceRoot(fileId: string) {
   return root;
 }
 
-export async function registerGoogleResource(fileId: string, rootFolderId: string) {
+export async function registerGoogleResource(fileId: string, rootFolderId: string, cleanupKind: 'file' | 'form' = 'file') {
   await getGoogleStorageForRoot(rootFolderId);
   await db.insert(googleDriveResources).values({ fileId, rootFolderId }).onConflictDoNothing();
   const [resource] = await db.select().from(googleDriveResources).where(eq(googleDriveResources.fileId, fileId));
   if (resource?.rootFolderId !== rootFolderId) throw new Error('Google file storage ownership does not match.');
+  await db.insert(googleDriveCleanupJobs).values({ fileId, rootFolderId, kind: cleanupKind,
+    nextAttemptAt: new Date(Date.now() + 24 * 60 * 60 * 1000) }).onConflictDoNothing();
   // Upload sessions created before switching accounts can finish after migration.
   // Re-open the last transfer in the chain so those files move as well.
   const [migrated] = await db.select({ id: googleStorageMigrations.id }).from(googleStorageMigrations)

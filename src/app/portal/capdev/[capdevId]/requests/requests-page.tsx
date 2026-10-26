@@ -394,7 +394,8 @@ export default function RequestsPage({ capdevId }: { capdevId: number }) {
     if (result.success) {
       if (result.request) uploads.enqueue({ kind: 'request', id: result.request.id }, result.request.requestorName || 'Request', jobs);
       setEditorOpen(false);
-      await loadData();
+      if (!editing && page !== 1) setPage(1);
+      else await loadData();
     } else {
       const resultError = result.error?.toLowerCase() || '';
       if (['budget', 'amount', 'balance'].some((term) => resultError.includes(term))) {

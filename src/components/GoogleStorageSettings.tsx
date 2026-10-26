@@ -13,6 +13,8 @@ export default function GoogleStorageSettings({ onClose }: { onClose: () => void
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [configured, setConfigured] = useState(false);
+  const [cleanup, setCleanup] = useState<Record<string, number>>({});
+  const [cleaning, setCleaning] = useState(false);
   const load = useCallback(async () => {
     try {
       const response = await fetch('/api/google-storage', { cache: 'no-store' });
@@ -20,10 +22,20 @@ export default function GoogleStorageSettings({ onClose }: { onClose: () => void
       const result = await response.json();
       setOwner(result.owner);
       setConfigured(result.configured);
+      setCleanup(result.cleanup || {});
       setError('');
     } catch (error) { setError(error instanceof Error ? error.message : 'Unable to load storage settings.'); }
     finally { setLoading(false); }
   }, []);
+  const retryCleanup = async () => {
+    setCleaning(true);
+    try {
+      const response = await fetch('/api/google-storage/cleanup', { method: 'POST' });
+      if (!response.ok) throw new Error('Unable to retry file cleanup.');
+      await load();
+    } catch { setError('Unable to retry file cleanup. Please try again.'); }
+    finally { setCleaning(false); }
+  };
   useEffect(() => {
     void Promise.resolve().then(async () => {
       const status = new URLSearchParams(window.location.search).get('storage');
@@ -45,7 +57,8 @@ export default function GoogleStorageSettings({ onClose }: { onClose: () => void
           <Typography sx={{ mt: 0.5, fontWeight: 600, overflowWrap: 'anywhere' }}>{owner ? owner.email || 'Owner unavailable' : 'No account connected'}</Typography>
         </Box>
         {!configured && <Alert severity="warning">Google connection is not configured.</Alert>}
-        <Typography variant="body2" color="text.secondary">Changing accounts transfers the previous LEAPRS folder and its files to the new account. Existing links and evaluation responses are preserved. Google must allow ownership transfers between the accounts.</Typography>
+        {cleanup.failed > 0 && <Alert severity="warning">{cleanup.failed.toLocaleString()} file cleanup tasks need retry. Check the storage connection if failures continue.<Button size="small" disabled={cleaning} onClick={() => void retryCleanup()}>{cleaning ? 'Retrying…' : 'Retry cleanup'}</Button></Alert>}
+        <Typography variant="body2" color="text.secondary">Changing accounts transfers the previous owners’ storage folders and their files to the new account. Existing links and evaluation responses are preserved. Google must allow ownership transfers between the accounts.</Typography>
         <GoogleStorageMigrationProgress />
       </Stack>}
     </DialogContent>

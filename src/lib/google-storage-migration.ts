@@ -6,6 +6,7 @@ import { googleStorageConnections, googleStorageMigrations, googleStorageMigrati
 import { encryptGoogleSecret } from '@/lib/google-storage-crypto';
 import { driveFetch, getGoogleStorageToken, type GoogleStorage } from '@/lib/google-storage';
 import { DRIVE_FOLDER, finishTransferredRoot, listTransferChildren, readTransferFile, transferDriveOwnership } from '@/lib/google-storage-transfer-drive';
+import { getGoogleStorageOwner, ownerFilesFolderName, renameLegacyGoogleRoot } from '@/lib/google-storage-folder-name';
 
 export async function assertStorageMigrationIdle(tx: Transaction) {
   const [job] = await tx.select({ id: googleStorageMigrations.id }).from(googleStorageMigrations)
@@ -47,7 +48,7 @@ export async function queueStorageMigration(tx: Transaction, source: GoogleStora
   const id = randomUUID();
   await tx.insert(googleStorageMigrations).values({ id, sourceRoot: source.rootFolderId, targetRoot, sourceConnectionId: source.id });
   await tx.insert(googleStorageMigrationItems).values({ migrationId: id, fileId: source.rootFolderId,
-    name: 'Previous LEAPRS folder', mimeType: DRIVE_FOLDER, depth: 0 });
+    name: 'Previous owner storage folder', mimeType: DRIVE_FOLDER, depth: 0 });
 }
 
 export async function getStorageMigrationStatus() {
@@ -88,6 +89,21 @@ export async function advanceStorageMigration(retry = false) {
           eq(googleStorageMigrationItems.mimeType, DRIVE_FOLDER), eq(googleStorageMigrationItems.scanned, false)))
           .orderBy(asc(googleStorageMigrationItems.depth), asc(googleStorageMigrationItems.id)).limit(1);
         if (folder) {
+          if (folder.depth === 0 && !folder.pageToken) {
+            const root = await readTransferFile(sourceToken, job.sourceRoot);
+            if (root.name === 'LEAPRS' || root.name.endsWith("'s files")) {
+              const sourceOwner = await getGoogleStorageOwner(sourceToken);
+              const targetToken = await getGoogleStorageToken(target);
+              const targetOwner = await getGoogleStorageOwner(targetToken);
+              const sameName = ownerFilesFolderName(sourceOwner).toLowerCase() === ownerFilesFolderName(targetOwner).toLowerCase()
+                && sourceOwner.emailAddress !== targetOwner.emailAddress;
+              await renameLegacyGoogleRoot(sourceToken, root.id, root.name, sourceOwner, sameName);
+              if (sameName) {
+                const targetRoot = await readTransferFile(targetToken, job.targetRoot);
+                await renameLegacyGoogleRoot(targetToken, targetRoot.id, targetRoot.name, targetOwner, true);
+              }
+            }
+          }
           const data = await listTransferChildren(sourceToken, folder.fileId, folder.pageToken);
           if (data.files?.length) {
             if (data.files.some(file => file.id === job.targetRoot)) throw new Error('The destination is inside the previous storage folder. Choose a separate LEAPRS storage account.');

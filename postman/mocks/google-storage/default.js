@@ -33,8 +33,13 @@ http.createServer(async (req, res) => {
     const files = fixture.files || [];
     const visible = file => file.owners?.some(owner => owner.permissionId === account) || file.readable !== false;
     if (url.pathname === '/files' && req.method === 'GET') {
-      const parent = /'([\w-]+)' in parents/.exec(url.searchParams.get('q') || '')?.[1];
-      const matches = files.filter(file => file.parents?.includes(parent) && !file.trashed && visible(file));
+      const query = url.searchParams.get('q') || '';
+      const parent = /'([\w-]+)' in parents/.exec(query)?.[1];
+      const taggedRoot = /key='leaprsStorageRoot' and value='([\w-]+)'/.exec(query)?.[1];
+      const cutoff = /createdTime < '([^']+)'/.exec(query)?.[1];
+      const matches = files.filter(file => !file.trashed && visible(file) && (taggedRoot
+        ? file.appProperties?.leaprsStorageRoot === taggedRoot && (!cutoff || new Date(file.createdTime || 0) < new Date(cutoff))
+        : file.parents?.includes(parent)));
       const offset = Number(url.searchParams.get('pageToken') || 0);
       const page = matches.slice(offset, offset + 2);
       return send(200, { files: page, ...(matches.length > offset + 2 ? { nextPageToken: String(offset + 2) } : {}) });
@@ -77,11 +82,20 @@ http.createServer(async (req, res) => {
         Object.assign(file, body);
         return send(200, file);
       }
+      if (req.method === 'DELETE') {
+        if (!file.owners?.some(owner => owner.permissionId === account)) return send(403, { error: 'Only the owner can delete this My Drive file' });
+        if (fixture.deleteFailures > 0) { fixture.deleteFailures--; return send(503, { error: 'Temporary provider failure' }); }
+        if (files.some(child => child.parents?.includes(file.id) && !child.trashed)) return send(400, { error: 'Folder is not empty' });
+        fixture.files = files.filter(item => item.id !== file.id);
+        fixture.deleted = [...(fixture.deleted || []), file.id];
+        if (fixture.deleteLostResponse) { fixture.deleteLostResponse = false; return send(503, { error: 'Lost deletion response' }); }
+        res.writeHead(204); return res.end();
+      }
     }
     return send(501, { error: 'Migration endpoint not modeled.' });
   }
   if (req.headers.authorization !== 'Bearer sim-access') return send(401, { error: { code: 401 } });
-  if (url.pathname === '/about') return send(200, { user: { permissionId: 'sim-account', emailAddress: 'storage@example.test' } });
+  if (url.pathname === '/about') return send(200, { user: { permissionId: 'sim-account', emailAddress: 'storage@example.test', displayName: 'Storage Owner' } });
   if (fixture.mode === 'error') return send(503, { error: { code: 503 } });
   if (url.pathname === '/files' && req.method === 'GET') {
     const query = url.searchParams.get('q') || '';

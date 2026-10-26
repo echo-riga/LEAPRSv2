@@ -322,7 +322,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
           ...current,
           departments: current.departments.includes(projectDept) ? current.departments : [...current.departments, projectDept],
         }));
-        setPage(1);
+        if (!editing) setPage(1);
         await loadData();
       } else {
         const message = result.error || 'Unable to save this CapDev.';
@@ -385,7 +385,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
         const result = await bulkManageCapdevs({ capdevIds: selectedBulkIds, folderId, action: bulkAction, destinationFolderId: bulkDestinationFolderId });
         if (!result.success) { setBulkError(result.error || 'Unable to update the selected CapDev.'); setBulkConfirm(false); return; }
         if (bulkAction === 'move') setBulkSuccess('Moved ' + selectedBulkIds.length + ' ' + selectedProjectLabel + ' to ' + destinationFolderName + '.');
-        setBulkConfirm(false); setBulkOpen(false); setPage(1); await loadData(); return;
+        setBulkConfirm(false); setBulkOpen(false); await loadData(); return;
       }
       const result = await duplicateCapdevs({ capdevIds: selectedBulkIds, targetDate: bulkTargetDate, folderId: bulkDestinationFolderId });
       if (!result.success) {

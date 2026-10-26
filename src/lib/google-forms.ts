@@ -166,7 +166,7 @@ export async function createRequestEvaluationForm(input: {
     body: JSON.stringify({ info: { title, documentTitle: title } }),
   });
   if (!created.formId) throw new Error('Google Forms did not return a form ID.');
-  await registerGoogleResource(created.formId, root);
+  await registerGoogleResource(created.formId, root, 'form');
   await googleJson('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(created.formId) + '?addParents=' + encodeURIComponent(root) + '&removeParents=root&fields=id', accessToken, { method: 'PATCH', body: JSON.stringify({ appProperties: { leaprsStorageRoot: root, leaprsRequestId: String(input.requestId) } }) });
 
   // The form title and description are Section 1. Every evaluation group,

@@ -27,6 +27,7 @@ function fixture({ role = 'admin', locked = {}, existing = {} } = {}) {
     capdevs: {}, eq: () => true, ARCHIVED_READ_ONLY: 'Archived',
     withTransaction: async run => { transactionCount++; return run(tx); }, lockCapdevFolder: async () => {},
     reconcilePendingAttachments: value => value, auditChanges, getCapdevFieldDefinitions: async () => [],
+    lockDriveAttachments: async () => {}, assertAttachmentsNotDeleted: async () => {}, enqueueRemovedAttachments: async () => {}, scheduleDriveCleanup: () => {},
     getDynamicFieldValue: () => undefined, writeAuditLog: async (_, entry) => { audit = entry; },
   };
   const update = new Function(...Object.keys(deps), code + '; return updateCapdev;')(...Object.values(deps));

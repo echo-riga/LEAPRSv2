@@ -76,6 +76,9 @@ test('Google storage switching uses disposable database tables and a local HTTP 
       for (const statement of readFileSync(new URL('../drizzle/0025_google_storage_migrations.sql', import.meta.url), 'utf8').split(';').map(value => value.trim()).filter(Boolean)) {
         await tx.execute(sql.raw(statement));
       }
+      for (const statement of readFileSync(new URL('../drizzle/0026_google_drive_cleanup.sql', import.meta.url), 'utf8').split(';').map(value => value.trim()).filter(Boolean)) {
+        await tx.execute(sql.raw(statement));
+      }
     });
     await pool.query('CREATE SEQUENCE ' + quoted + '.audit_id');
     await pool.query('ALTER TABLE ' + quoted + ".audit_logs ALTER COLUMN id SET DEFAULT nextval('" + schema + ".audit_id')");

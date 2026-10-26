@@ -37,6 +37,25 @@ export const googleDriveResources = pgTable('google_drive_resources', {
   rootFolderId: text('root_folder_id').notNull(),
 });
 
+export const googleDriveCleanupJobs = pgTable('google_drive_cleanup_jobs', {
+  fileId: text('file_id').primaryKey(),
+  rootFolderId: text('root_folder_id').notNull(),
+  kind: text('kind').default('file').notNull(),
+  status: text('status').default('pending').notNull(),
+  attempts: integer('attempts').default(0).notNull(),
+  pageToken: text('page_token'),
+  nextAttemptAt: timestamp('next_attempt_at').defaultNow().notNull(),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, table => [index('google_drive_cleanup_due_idx').on(table.status, table.nextAttemptAt)]);
+
+export const googleDriveCleanupScans = pgTable('google_drive_cleanup_scans', {
+  rootFolderId: text('root_folder_id').primaryKey(),
+  pageToken: text('page_token'),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export const googleStorageMigrations = pgTable('google_storage_migrations', {
   id: text('id').primaryKey(),
   sourceRoot: text('source_root').notNull(),

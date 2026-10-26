@@ -17,6 +17,7 @@ registerHooks({ resolve(specifier, context, next) {
 const { encryptGoogleSecret, decryptGoogleSecret } = await import('../src/lib/google-storage-crypto.ts');
 const { createGoogleStorageFlow, verifyGoogleStorageFlow, findOrCreateGoogleRoot } = await import('../src/lib/google-storage-oauth.ts');
 const { googleTokenRequest } = await import('../src/lib/google-storage.ts');
+const { ownerFilesFolderName } = await import('../src/lib/google-storage-folder-name.ts');
 
 const server = fork(new URL('../postman/mocks/google-storage/default.js', import.meta.url), [], { env: { ...process.env, PORT: '0' }, silent: true });
 after(() => server.kill());
@@ -49,11 +50,18 @@ test('OAuth flow binds state, the initiating Admin, callback address, and expiry
   process.env.APP_URL = 'https://leaprs.test';
 });
 
+test('storage root labels use the owner name with an email fallback', () => {
+  assert.equal(ownerFilesFolderName({ displayName: '  Jericho   Riga  ', emailAddress: 'owner@example.test' }), "Jericho Riga's files");
+  assert.equal(ownerFilesFolderName({ emailAddress: 'owner@example.test' }), "owner@example.test's files");
+  assert.equal(ownerFilesFolderName({ displayName: 'Jericho Riga', emailAddress: 'owner@example.test' }, true), "Jericho Riga's files (owner@example.test)");
+});
+
 test('real HTTP authorization creates one folder and reconnects reuse it even after rename', async () => {
   await reset({});
   const tokens = await googleTokenRequest({ grant_type: 'authorization_code', code: 'valid', redirect_uri: 'https://leaprs.test/api/google-storage/callback', code_verifier: 'test-verifier' });
   const root = await findOrCreateGoogleRoot(tokens.access_token);
   assert.equal((await state()).creates, 1);
+  assert.equal((await state()).folders[0].name, "Storage Owner's files");
   assert.equal(await findOrCreateGoogleRoot(tokens.access_token), root);
   const fixture = await state(); fixture.folders[0].name = 'Renamed by owner';
   await reset(fixture);
@@ -66,6 +74,7 @@ test('real HTTP setup adopts a single owned existing folder and refuses ambiguou
   assert.equal(await findOrCreateGoogleRoot('sim-access'), 'existing');
   assert.equal((await state()).creates, 0);
   assert.equal((await state()).patches, 1);
+  assert.equal((await state()).folders[0].name, "Storage Owner's files");
   await reset({ folders: [folder('a'), folder('b')] });
   await assert.rejects(findOrCreateGoogleRoot('sim-access'), /Multiple LEAPRS/);
   assert.equal((await state()).creates, 0);

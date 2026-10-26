@@ -397,6 +397,7 @@ export default function UsersManagementPage() {
         return;
       }
       setUsersList((current) => [{ id: created.user.id, name: created.user.name || formName, email: created.user.email, role: formRole, password: '••••••••', createdAt: created.user.createdAt, department: formDepartment || 'Unassigned', isArchived: false, archivedAt: null }, ...current]);
+      setCurrentPage(1);
       setDialogOpen(false);
       return;
       const newId = `user-${Math.random().toString(36).substr(2, 9)}`;
@@ -461,7 +462,10 @@ export default function UsersManagementPage() {
   }).sort((a, b) => sortOrder === 'newest' ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   // Pagination Logic
-  const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / itemsPerPage));
+  // Keep the current page after edits and bulk changes, falling back only when
+  // removing matching users leaves that page outside the available range.
+  if (currentPage > totalPages) setCurrentPage(totalPages);
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentItems = filteredUsers.slice(indexOfFirstItem, indexOfLastItem);
@@ -921,7 +925,6 @@ export default function UsersManagementPage() {
           const result = await deleteArchivedDirectoryUser(deletingUser.id);
           if (!result.success) throw new Error(result.error || 'Unable to delete this user.');
           setUsersList((current) => current.filter((user) => user.id !== deletingUser.id));
-          if (currentItems.length === 1 && currentPage > 1) setCurrentPage(currentPage - 1);
         }}
       />
       <ActionErrorDialog open={Boolean(archiveError)} title="Unable to Update User" message={archiveError} onClose={() => setArchiveError('')} />

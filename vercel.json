@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/google-storage/cleanup", "schedule": "0 18 * * *" }
+  ]
+}

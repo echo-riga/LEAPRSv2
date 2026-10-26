@@ -25,6 +25,8 @@
     "db:folder-reference-image-migrate": "node --use-system-ca scripts/migrate-capdev-folder-reference-image.mjs",
     "db:google-storage-migrate": "node --use-system-ca --experimental-strip-types scripts/migrate-google-storage.mjs",
     "db:google-storage-transfers-migrate": "node --use-system-ca scripts/migrate-google-storage-transfers.mjs",
+    "db:google-drive-cleanup-migrate": "node --use-system-ca scripts/migrate-google-drive-cleanup.mjs",
+    "test:google-drive-cleanup": "node --use-system-ca --experimental-strip-types --test scripts/google-drive-cleanup.test.mjs",
     "test:google-storage": "node --use-system-ca --experimental-strip-types --test scripts/google-storage.test.mjs scripts/google-storage-transfer.test.mjs scripts/google-storage-database.test.mjs"
   },
   "dependencies": {

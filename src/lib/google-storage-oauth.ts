@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { driveFetch, googleOAuthCredentials } from '@/lib/google-storage';
 import { decryptGoogleSecret, encryptGoogleSecret } from '@/lib/google-storage-crypto';
+import { getGoogleStorageOwner, ownerFilesFolderName, renameLegacyGoogleRoot, type GoogleStorageOwner } from '@/lib/google-storage-folder-name';
 
 export const GOOGLE_OAUTH_COOKIE = 'leaprs-google-storage';
 type Flow = { state: string; verifier: string; userId: string; redirectUri: string; expiresAt: number };
@@ -51,29 +52,36 @@ async function folderSearch(token: string, query: string) {
   return folders;
 }
 
-export async function findOrCreateGoogleRoot(token: string, savedFolderId?: string) {
+export async function findOrCreateGoogleRoot(token: string, savedFolderId?: string, connectedOwner?: GoogleStorageOwner) {
+  const owner = connectedOwner || await getGoogleStorageOwner(token);
   const appMarker = marker();
   const properties = { leaprsStorageRoot: 'v1', leaprsClient: appMarker };
   if (savedFolderId) {
     const saved = await inspectGoogleRoot(token, savedFolderId);
-    if (saved && saved.appProperties?.leaprsClient === appMarker) return saved.id;
+    if (saved && saved.appProperties?.leaprsClient === appMarker) {
+      await renameLegacyGoogleRoot(token, saved.id, saved.name, owner);
+      return saved.id;
+    }
   }
   const base = `trashed = false and mimeType = '${folderType}' and 'me' in owners`;
   const marked = await folderSearch(token, base + ` and appProperties has { key='leaprsClient' and value='${appMarker}' } and appProperties has { key='leaprsStorageRoot' and value='v1' }`);
   if (marked.length > 1) throw new Error('More than one managed LEAPRS folder was found. Rename or remove duplicate copies and reconnect.');
-  if (marked[0]) return marked[0].id;
+  if (marked[0]) {
+    await renameLegacyGoogleRoot(token, marked[0].id, marked[0].name, owner);
+    return marked[0].id;
+  }
   // An existing, unmarked LEAPRS folder may be adopted only when it is the
   // single matching folder owned by this account directly in My Drive.
   const existing = (await folderSearch(token, base + " and 'root' in parents and name = 'LEAPRS'"))
     .filter(folder => !folder.appProperties?.leaprsClient || folder.appProperties.leaprsClient === appMarker);
   if (existing.length > 1) throw new Error('Multiple LEAPRS folders exist in My Drive. Rename the extra folders and reconnect.');
   if (existing[0]) {
-    const response = await driveFetch('/files/' + encodeURIComponent(existing[0].id), token, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appProperties: { ...existing[0].appProperties, ...properties } }) });
+    const response = await driveFetch('/files/' + encodeURIComponent(existing[0].id), token, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: ownerFilesFolderName(owner), appProperties: { ...existing[0].appProperties, ...properties } }) });
     if (!response.ok) throw new Error('Unable to identify the existing LEAPRS folder.');
     return existing[0].id;
   }
   const response = await driveFetch('/files?fields=id', token, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'LEAPRS', mimeType: folderType, parents: ['root'], appProperties: properties }) });
+    body: JSON.stringify({ name: ownerFilesFolderName(owner), mimeType: folderType, parents: ['root'], appProperties: properties }) });
   if (!response.ok) throw new Error('Unable to create the LEAPRS folder.');
   const folder = await response.json() as { id?: string };
   if (!folder.id) throw new Error('Google did not return the LEAPRS folder.');

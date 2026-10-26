@@ -1,8 +1,11 @@
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { requestStorageFolders, googleStorageConnections } from '@/db/schema';
 import type { Transaction } from '@/db/transaction';
+import { assertAttachmentsNotDeleted, lockDriveAttachments } from '@/lib/drive-attachment-lifecycle';
 
 export async function claimRequestFolder(tx: Transaction, userId: string, requestId: number, additionalInfo: Record<string, unknown>) {
+  await lockDriveAttachments(tx);
+  await assertAttachmentsNotDeleted(tx, additionalInfo);
   const folderId = additionalInfo.googleDriveFolderId;
   delete additionalInfo.googleDriveFolderId;
   if (folderId === undefined) return;

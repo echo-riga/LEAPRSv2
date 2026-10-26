@@ -28,7 +28,7 @@ import { auditChanges, requestLabel } from '@/lib/audit-description';
 import { ARCHIVED_READ_ONLY, isArchiveReadOnly } from '@/lib/archive-policy';
 import { isAllowedSignupEmail, SIGNUP_EMAIL_ERROR } from '@/lib/signup-email';
 import { connections, users, systemSettings, roleApprovalRequests, capdevFolders, capdevs, capdevFieldDefinitions, requestFieldDefinitions, statusUpdateFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
-import { sql, count, and, eq, getTableColumns, lte, gte, asc, desc, or, isNull, isNotNull, ilike, inArray, notInArray, type SQL } from 'drizzle-orm';
+import { sql, count, and, eq, getTableColumns, lte, gte, asc, desc, or, isNull, isNotNull, ilike, inArray, type SQL } from 'drizzle-orm';
 import { auth } from '@/lib/auth/server';
 import { sendPasswordResetEmail, sendSignupVerificationEmail } from '@/lib/email';
 import {
@@ -47,6 +47,8 @@ import { getRequestInactivitySummaries, readInactivityDays, syncRequestReminders
 import { DEFAULT_INACTIVITY_DAYS, INACTIVITY_SETTING_KEY, inactivityMessage, validInactivityDays } from '@/lib/request-inactivity';
 import { getDynamicFieldValue, getInvalidComboboxFields, hasComboboxOptions } from '@/lib/dynamic-fields';
 import { getDynamicFieldAttachmentIds, hasStoredDynamicFieldValue, removeDynamicFieldValue } from '@/lib/dynamic-field-deletion';
+import { attachmentFileIds, assertAttachmentsNotDeleted, enqueueDriveCleanup, enqueueFileIds, enqueueRemovedAttachments, lockDriveAttachments } from '@/lib/drive-attachment-lifecycle';
+import { scheduleDriveCleanup } from '@/lib/drive-cleanup-schedule';
 import { PORTAL_CHATBOT_GUIDE } from '@/lib/portal-chatbot-guide';
 import {
   findCapdevByAipCodeService,
@@ -1195,6 +1197,7 @@ export async function bulkManageRequests(input: { capdevId: number; requestIds: 
     if (!await getAccessibleCapdev(access, input.capdevId)) return unauthorized;
     const actor = await getActorSnapshot(access);
     return await withTransaction(async tx => {
+      await lockDriveAttachments(tx);
       const selected = await tx.select().from(requests).where(and(eq(requests.capdevId, input.capdevId), inArray(requests.id, input.requestIds))).orderBy(requests.id).for('update');
       if (selected.length !== input.requestIds.length || selected.some(request => access.role === 'employee' && request.userId !== access.userId)) {
         throw new Error('Some selected requests are unavailable. Refresh and try again.');
@@ -1239,12 +1242,16 @@ export async function deleteRequestStatusUpdate(id: number) {
     if (!update || !request) return unauthorized;
     const actor = await getActorSnapshot(access);
     return await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
       const [current] = await tx.select().from(requests).where(eq(requests.id, request.id)).for('update');
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update');
       if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       const [target] = await tx.select().from(requestStatusUpdates).where(eq(requestStatusUpdates.id, id)).for('update');
       if (!current || !target || (access.role === 'employee' && current.userId !== access.userId)) return unauthorized;
       if (!target.archivedAt && !isArchiveReadOnly(current, parent)) return { success: false as const, error: 'Archive this progress update before deleting permanently.' };
+      const removedUpdates = await tx.select().from(requestStatusUpdates).where(or(eq(requestStatusUpdates.id, id), eq(requestStatusUpdates.stopperId, id)));
+      await enqueueFileIds(tx, attachmentFileIds(...removedUpdates.flatMap(update => [update.additionalInfo, update.files])));
+      scheduleDriveCleanup();
       if (current.activeStopperId === id) await tx.update(requests).set({ isStopped: false, activeStopperId: null, updatedAt: new Date(), updatedById: access.userId }).where(eq(requests.id, current.id));
       await tx.delete(requestStatusUpdates).where(or(eq(requestStatusUpdates.id, id), eq(requestStatusUpdates.stopperId, id)));
       await tx.insert(auditLogs).values({ ...actor, action: 'deleted', entityType: 'status_update', entityId: String(id), entityLabel: requestLabel(current.requestorName),
@@ -1284,8 +1291,8 @@ export async function getCapdevFolderReferenceImage(folderId: number) {
 async function cleanupFolderReferenceImage(image: (typeof capdevFolders.$inferSelect)['referenceImage']) {
   if (!image) return;
   try {
-    await getGoogleStorageForRoot(image.rootFolderId);
-    await deleteManagedDriveAttachments([{ fileId: image.id, parentFolderId: image.rootFolderId }]);
+    await withTransaction(tx => enqueueDriveCleanup(tx, image.id, image.rootFolderId));
+    scheduleDriveCleanup();
   } catch (error) { console.warn('Unable to clean up replaced folder reference image:', error); }
 }
 
@@ -1299,6 +1306,7 @@ export async function saveCapdevFolderReferenceImage(folderId: number, form: For
     const file = await validateFolderReferenceImage(form.get('image'));
     const actor = await getActorSnapshot(access);
     const result = await withTransaction(async tx => {
+      await lockDriveAttachments(tx);
       const folder = await lockCapdevFolder(tx, folderId);
       const rootFolderId = (await getActiveGoogleStorage()).rootFolderId;
       const token = await getGoogleDriveAccessToken(rootFolderId);
@@ -1306,11 +1314,12 @@ export async function saveCapdevFolderReferenceImage(folderId: number, form: For
       const image = { id: stored.id, name: file.name, mimeType: file.type, rootFolderId, version: crypto.randomUUID() };
       uploaded = image;
       await tx.update(capdevFolders).set({ referenceImage: image }).where(eq(capdevFolders.id, folderId));
+      if (folder.referenceImage) await enqueueDriveCleanup(tx, folder.referenceImage.id, folder.referenceImage.rootFolderId);
       await tx.insert(auditLogs).values({ ...actor, action: 'updated', entityType: 'capdev_folder', entityId: String(folderId), entityLabel: folder.name, details: { referenceImage: image.name, previousReferenceImage: folder.referenceImage?.name || null } });
       return { image, previous: folder.referenceImage };
     });
     committed = true;
-    await cleanupFolderReferenceImage(result.previous);
+    scheduleDriveCleanup();
     return { success: true as const, image: result.image };
   } catch (error) {
     if (uploaded && !committed) await cleanupFolderReferenceImage(uploaded);
@@ -1324,13 +1333,14 @@ export async function removeCapdevFolderReferenceImage(folderId: number) {
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
     const actor = await getActorSnapshot(access);
-    const previous = await withTransaction(async tx => {
+    await withTransaction(async tx => {
+      await lockDriveAttachments(tx);
       const folder = await lockCapdevFolder(tx, folderId);
       await tx.update(capdevFolders).set({ referenceImage: null }).where(eq(capdevFolders.id, folderId));
+      if (folder.referenceImage) await enqueueDriveCleanup(tx, folder.referenceImage.id, folder.referenceImage.rootFolderId);
       if (folder.referenceImage) await tx.insert(auditLogs).values({ ...actor, action: 'updated', entityType: 'capdev_folder', entityId: String(folderId), entityLabel: folder.name, details: { removedReferenceImage: folder.referenceImage.name } });
-      return folder.referenceImage;
     });
-    await cleanupFolderReferenceImage(previous);
+    scheduleDriveCleanup();
     return { success: true as const };
   } catch {
     return { success: false as const, error: 'Unable to remove the reference file. Please try again.' };
@@ -1407,31 +1417,13 @@ export async function saveCapdevFolder(name: string, id?: number) {
 }
 
 async function cleanupCapdevStorage(tx: Transaction, projects: (typeof capdevs.$inferSelect)[]) {
-  const projectIds = projects.map(project => project.id);
-  if (projectIds.length) {
-    const children = await tx.select().from(requests).where(inArray(requests.capdevId, projectIds)).orderBy(requests.id).for('update');
-    const childIds = children.map(request => request.id);
-    const storageFolders = childIds.length ? await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, childIds)) : [];
-    const fields = await tx.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.type, 'file'));
-    const otherProjects = await tx.select({ additionalInfo: capdevs.additionalInfo }).from(capdevs).where(notInArray(capdevs.id, projectIds));
-    const attachmentIds = (info: unknown) => fields.flatMap(field => getDynamicFieldAttachmentIds((info || {}) as Record<string, unknown>, field));
-    const retained = new Set(otherProjects.flatMap(project => attachmentIds(project.additionalInfo)));
-    const files = [...new Set(projects.flatMap(project => attachmentIds(project.additionalInfo)))].filter(fileId => !retained.has(fileId));
-
-    // Never delete a legacy JSON folder ID; only trusted server mappings qualify.
-    if (storageFolders.length) {
-      for (const stored of storageFolders) {
-        const token = await getGoogleDriveAccessToken(stored.rootFolderId);
-        const metadata = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(stored.folderId) + '?fields=id', { headers: { Authorization: 'Bearer ' + token } });
-        if (metadata.status === 404) continue;
-        if (!metadata.ok) throw new Error('Unable to verify request attachment folder.');
-        await verifyManagedDriveFolder(token, stored.folderId, stored.rootFolderId);
-        const deletion = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(stored.folderId), { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
-        if (!deletion.ok && deletion.status !== 404) throw new Error('Unable to delete request attachment folder.');
-      }
-    }
-    await deleteManagedDriveAttachments(await Promise.all(files.map(async fileId => ({ fileId, parentFolderId: await getGoogleResourceRoot(fileId) }))));
-  }
+  await lockDriveAttachments(tx);
+  const ids = projects.map(project => project.id);
+  if (!ids.length) return;
+  const children = await tx.select().from(requests).where(inArray(requests.capdevId, ids)).orderBy(requests.id).for('update');
+  await cleanupRequestStorage(tx, children.map(request => request.id));
+  await enqueueFileIds(tx, attachmentFileIds(...projects.map(project => project.additionalInfo)));
+  scheduleDriveCleanup();
 }
 
 export async function bulkManageCapdevs(input: { folderId: number; capdevIds: number[]; action: 'archive' | 'delete' | 'move'; destinationFolderId?: number }) {
@@ -1439,7 +1431,10 @@ export async function bulkManageCapdevs(input: { folderId: number; capdevIds: nu
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
     const actor = await getActorSnapshot(access);
-    await withTransaction(tx => manageCapdevRecords(tx, input.folderId, input.capdevIds, input.action, actor, projects => cleanupCapdevStorage(tx, projects), input.destinationFolderId));
+    await withTransaction(async tx => {
+      await lockDriveAttachments(tx);
+      await manageCapdevRecords(tx, input.folderId, input.capdevIds, input.action, actor, projects => cleanupCapdevStorage(tx, projects), input.destinationFolderId);
+    });
     return { success: true };
   } catch (error) {
     console.error('Failed to manage selected CapDev:', error);
@@ -1454,13 +1449,15 @@ export async function deleteCapdevFolder(id: number) {
     if (!access || access.role !== 'admin') return unauthorized;
     const actor = await getActorSnapshot(access);
     await withTransaction(async tx => {
+      await lockDriveAttachments(tx);
       await lockFolderSelection(tx);
       const folder = await lockCapdevFolder(tx, id);
       if (folder.isActive) throw new Error('Activate another folder before deleting this folder.');
       const projects = await tx.select().from(capdevs).where(eq(capdevs.folderId, id)).orderBy(capdevs.id).for('update');
       await cleanupCapdevStorage(tx, projects);
+      if (folder.referenceImage) await enqueueDriveCleanup(tx, folder.referenceImage.id, folder.referenceImage.rootFolderId);
       await deleteCapdevFolderRecords(tx, id, actor);
-      await cleanupFolderReferenceImage(folder.referenceImage);
+      scheduleDriveCleanup();
     });
     return { success: true };
   } catch (error) {
@@ -1909,6 +1906,8 @@ export async function createCapdev(data: CapdevInput) {
     if (missingFields.length > 0) return { success: false, error: `Complete the required field${missingFields.length === 1 ? '' : 's'}: ${missingFields.join(', ')}.` };
     const aipCode = data.aipCode.trim();
     const created = await withTransaction(async tx => {
+      await lockDriveAttachments(tx);
+      await assertAttachmentsNotDeleted(tx, data.additionalInfo);
       await lockCapdevFolder(tx, data.folderId);
       const [created] = await tx.insert(capdevs).values({ ...data, aipCode, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', updatedById: access.userId, initialBudget: data.budget }).returning();
       await insertNotificationEvent(tx, {
@@ -1947,11 +1946,13 @@ export async function duplicateCapdevs(input: { capdevIds: number[]; targetDate:
     }
 
     const created = await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
       await lockCapdevFolder(tx, input.folderId);
       const sources = await tx.select().from(capdevs)
         .where(and(inArray(capdevs.id, sourceIds), isNull(capdevs.archivedAt)))
         .orderBy(asc(capdevs.id)).for('update');
       if (sources.length !== sourceIds.length) throw new Error('One or more selected CapDev are unavailable or archived.');
+      for (const source of sources) await assertAttachmentsNotDeleted(tx, source.additionalInfo);
 
       const values = sources.map((source) => ({
         folderId: input.folderId,
@@ -2022,17 +2023,22 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     if (!existing) return { success: false, error: 'CapDev not found.' };
     if (existing.archivedAt) return { success: false, error: ARCHIVED_READ_ONLY };
     const { updated, previous } = await withTransaction(async tx => {
+      await lockDriveAttachments(tx);
       await lockCapdevFolder(tx, data.folderId);
       const [current] = await tx.select().from(capdevs).where(eq(capdevs.id, id)).for('update');
       if (!current || current.archivedAt) throw new Error(ARCHIVED_READ_ONLY);
+      const additionalInfo = reconcilePendingAttachments(data.additionalInfo, (current.additionalInfo || {}) as Record<string, unknown>);
+      await assertAttachmentsNotDeleted(tx, additionalInfo);
       const budgetReset = initialBudget !== undefined && Number(initialBudget) !== Number(current.initialBudget)
         ? { initialBudget, budget: initialBudget } : {};
       const [saved] = await tx.update(capdevs)
-        .set({ ...budgetReset, folderId: data.folderId, aipCode: data.aipCode, description: data.description, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', additionalInfo: reconcilePendingAttachments(data.additionalInfo, (current.additionalInfo || {}) as Record<string, unknown>), updatedById: access.userId, updatedAt: new Date() })
+        .set({ ...budgetReset, folderId: data.folderId, aipCode: data.aipCode, description: data.description, department: (data.department && data.department.trim() !== 'None') ? data.department.trim() : '', additionalInfo, updatedById: access.userId, updatedAt: new Date() })
         .where(eq(capdevs.id, id)).returning();
+      await enqueueRemovedAttachments(tx, current.additionalInfo, additionalInfo);
       return { updated: saved, previous: current };
     });
     if (!updated) return { success: false, error: 'CapDev not found.' };
+    scheduleDriveCleanup();
     const changes = auditChanges(previous, updated, { aipCode: 'AIP code', description: 'Description', department: 'Department', folderId: 'Folder', initialBudget: 'Initial Balance', budget: 'Remaining Balance' });
     const fields = await getCapdevFieldDefinitions();
     for (const field of fields) changes.push(...auditChanges({ value: getDynamicFieldValue((previous.additionalInfo || {}) as Record<string, unknown>, field) }, { value: getDynamicFieldValue((updated.additionalInfo || {}) as Record<string, unknown>, field) }, { value: field.name }));
@@ -2040,7 +2046,7 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     return { success: true, capdev: updated };
   } catch (error) {
     console.error('Failed to update CapDev:', error);
-    return { success: false, error: 'Database update failed' };
+    return { success: false, error: error instanceof Error && error.message.startsWith('An attachment was already removed') ? error.message : 'Database update failed' };
   }
 }
 
@@ -2078,8 +2084,10 @@ export async function deleteCapdev(id: number) {
     if (!target?.archivedAt) return { success: false, error: 'Archive this CapDev before deleting permanently.' };
     const actor = await getActorSnapshot(access);
     return await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
       const [current] = await tx.select().from(capdevs).where(eq(capdevs.id, id)).for('update');
       if (!current?.archivedAt) return { success: false, error: 'Archive this CapDev before deleting permanently.' };
+      await cleanupCapdevStorage(tx, [current]);
       // Delete child records first, then the project, in one database statement.
       // The dependencies between the CTEs ensure PostgreSQL respects the foreign keys.
       const result = await tx.execute(sql`
@@ -2236,11 +2244,12 @@ export async function deleteCapdevFieldDefinition(id: number, updatedById: strin
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
     const result = await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
       const [field] = await tx.select().from(capdevFieldDefinitions).where(eq(capdevFieldDefinitions.id, id)).for('update');
       if (!field) throw new Error('Form field not found.');
       const records = await tx.select({ id: capdevs.id, additionalInfo: capdevs.additionalInfo }).from(capdevs).for('update');
       const attachments = records.flatMap((record) => getDynamicFieldAttachmentIds((record.additionalInfo || {}) as Record<string, unknown>, field));
-      await deleteManagedDriveAttachments(await Promise.all(attachments.map(async fileId => ({ fileId, parentFolderId: await getGoogleResourceRoot(fileId) }))));
+      await deleteManagedDriveAttachments(await Promise.all(attachments.map(async fileId => ({ fileId, parentFolderId: await getGoogleResourceRoot(fileId) }))), tx);
       for (const record of records) {
         const additionalInfo = (record.additionalInfo || {}) as Record<string, unknown>;
         if (!hasStoredDynamicFieldValue(additionalInfo, field)) continue;
@@ -2386,6 +2395,7 @@ export async function deleteRequestFieldDefinition(id: number, setting: RequestS
     if (!access || access.role !== 'admin') return unauthorized;
     if (!isRequestSetting(setting)) return { success: false, error: 'Invalid request setting.' };
     const result = await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
       const [field] = await tx.select().from(requestFieldDefinitions).where(and(eq(requestFieldDefinitions.id, id), eq(requestFieldDefinitions.setting, setting))).for('update');
       if (!field) throw new Error('Form field not found.');
       const records = await tx.select({ id: requests.id, additionalInfo: requests.additionalInfo }).from(requests).where(eq(requests.setting, setting)).for('update');
@@ -2398,11 +2408,10 @@ export async function deleteRequestFieldDefinition(id: number, setting: RequestS
         for (const fileId of fileIds) {
           const root = await getGoogleResourceRoot(fileId);
           const folder = folders.find(folder => folder.requestId === record.id && folder.rootFolderId === root);
-          if (!folder) throw new Error('The original request attachment folder could not be verified.');
-          attachments.push({ fileId, parentFolderId: folder.folderId });
+          attachments.push({ fileId, parentFolderId: folder?.folderId || root });
         }
       }
-      await deleteManagedDriveAttachments(attachments);
+      await deleteManagedDriveAttachments(attachments, tx);
       for (const record of records) {
         const additionalInfo = (record.additionalInfo || {}) as Record<string, unknown>;
         if (!hasStoredDynamicFieldValue(additionalInfo, field)) continue;
@@ -2588,6 +2597,7 @@ export async function deleteStatusUpdateFieldDefinition(id: number, updatedById:
     const access = await getCurrentAccess();
     if (!access || access.role !== 'admin') return unauthorized;
     const result = await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
       const [field] = await tx.select().from(statusUpdateFieldDefinitions).where(eq(statusUpdateFieldDefinitions.id, id)).for('update');
       if (!field) throw new Error('Form field not found.');
       const records = await tx.select({ id: requestStatusUpdates.id, requestId: requestStatusUpdates.requestId, files: requestStatusUpdates.files, additionalInfo: requestStatusUpdates.additionalInfo }).from(requestStatusUpdates).for('update');
@@ -2601,11 +2611,10 @@ export async function deleteStatusUpdateFieldDefinition(id: number, updatedById:
         for (const fileId of fileIds) {
           const root = await getGoogleResourceRoot(fileId);
           const folder = folders.find(folder => folder.requestId === record.requestId && folder.rootFolderId === root);
-          if (!folder) throw new Error('The original request attachment folder could not be verified.');
-          attachments.push({ fileId, parentFolderId: folder.folderId });
+          attachments.push({ fileId, parentFolderId: folder?.folderId || root });
         }
       }
-      await deleteManagedDriveAttachments(attachments);
+      await deleteManagedDriveAttachments(attachments, tx);
       for (const record of records) {
         const additionalInfo = (record.additionalInfo || {}) as Record<string, unknown>;
         if (!hasStoredDynamicFieldValue(additionalInfo, field)) continue;
@@ -2870,9 +2879,11 @@ export async function updateRequest(id: number, data: RequestInput) {
     if (missing.length) return { success: false, error: 'Complete the required fields: ' + missing.map((field) => field.name).join(', ') };
     let changes: ReturnType<typeof auditChanges> = [];
     const updated = await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
       const [current] = await tx.select().from(requests).where(eq(requests.id, id)).for('update');
       if (!current || (access.role === 'employee' && current.userId !== access.userId)) throw new Error('Request not found.');
       validated.additionalInfo = reconcilePendingAttachments(validated.additionalInfo, (current.additionalInfo || {}) as Record<string, unknown>);
+      await assertAttachmentsNotDeleted(tx, validated.additionalInfo);
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
       if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
       if (isArchiveReadOnly(current, parent)) throw new Error(ARCHIVED_READ_ONLY);
@@ -2890,31 +2901,30 @@ export async function updateRequest(id: number, data: RequestInput) {
       const [saved] = await tx.update(requests).set({ setting: validated.setting, description: validated.description, eventDate: validated.eventDate,
         requestedBudget: validated.requestedBudget, additionalInfo: validated.additionalInfo,
         updatedById: access.userId, updatedAt: new Date() }).where(eq(requests.id, id)).returning();
+      await enqueueRemovedAttachments(tx, current.additionalInfo, validated.additionalInfo);
       return saved;
     });
     if (!updated) return { success: false, error: 'Request not found.' };
+    scheduleDriveCleanup();
     await writeAuditLog(access, { action: 'updated', entityType: 'request', entityId: updated.id, entityLabel: `Request #${updated.id}`, details: { capdevId: updated.capdevId, requestorName: updated.requestorName, setting: updated.setting, requestedBudget: updated.requestedBudget, changes } });
     return { success: true, request: updated };
   } catch (error) {
     console.error('Failed to update request:', error);
-    return { success: false, error: 'Database update failed' };
+    return { success: false, error: error instanceof Error && error.message.startsWith('An attachment was already removed') ? error.message : 'Database update failed' };
   }
 }
 
 async function cleanupRequestStorage(tx: Transaction, ids: number[]) {
-  const storageFolders = await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, ids));
-  for (const storageFolder of storageFolders) {
-    try {
-      const accessToken = await getGoogleDriveAccessToken(storageFolder.rootFolderId);
-      await verifyManagedDriveFolder(accessToken, storageFolder.folderId, storageFolder.rootFolderId);
-      const deletion = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(storageFolder.folderId.trim())}`, {
-        method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!deletion.ok && deletion.status !== 404) throw new Error('Unable to delete request attachment folder.');
-    } catch (error) {
-      console.warn('Could not delete Google Drive folder for request:', error);
-    }
-  }
+  if (!ids.length) return;
+  await lockDriveAttachments(tx);
+  const records = await tx.select().from(requests).where(inArray(requests.id, ids));
+  const updates = await tx.select().from(requestStatusUpdates).where(inArray(requestStatusUpdates.requestId, ids));
+  await enqueueFileIds(tx, attachmentFileIds(...records.map(record => record.additionalInfo), ...updates.flatMap(update => [update.additionalInfo, update.files])));
+  const forms = records.flatMap(record => [record.participantFeedbackFormId, record.supervisorEvaluationFormId]).filter((id): id is string => Boolean(id));
+  await enqueueFileIds(tx, forms, 'form');
+  const folders = await tx.select().from(requestStorageFolders).where(inArray(requestStorageFolders.requestId, ids));
+  for (const folder of folders) await enqueueDriveCleanup(tx, folder.folderId, folder.rootFolderId, 'folder');
+  scheduleDriveCleanup();
 }
 
 export async function deleteRequest(id: number) {
@@ -2925,6 +2935,7 @@ export async function deleteRequest(id: number) {
     if (!existing.archivedAt && !existing.parentArchivedAt) return { success: false, error: 'Archive this request before deleting permanently.' };
     const actor = await getActorSnapshot(access);
     return await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
       const [current] = await tx.select().from(requests).where(eq(requests.id, id)).for('update');
       if (!current || (access.role === 'employee' && current.userId !== access.userId)) return unauthorized;
       const [parent] = await tx.select().from(capdevs).where(eq(capdevs.id, current.capdevId)).for('update');
@@ -3003,31 +3014,10 @@ async function verifyManagedDriveFolder(accessToken: string, folderId: string, r
 
 type ManagedDriveAttachment = { fileId: string; parentFolderId: string };
 
-async function deleteManagedDriveAttachments(attachments: ManagedDriveAttachment[]) {
-  const verified: { fileId: string; token: string }[] = [];
-  const tokens = new Map<string,string>();
-  const folders = new Set<string>();
-  // Verify all references before performing the first external deletion.
-  for (const { fileId, parentFolderId } of attachments) {
-    const root = await getStorageRootForParent(parentFolderId);
-    let token = tokens.get(root);
-    if (!token) { token = await getGoogleDriveAccessToken(root); tokens.set(root,token); }
-    if (parentFolderId !== root && !folders.has(parentFolderId)) {
-      await verifyManagedDriveFolder(token,parentFolderId,root);
-      folders.add(parentFolderId);
-    }
-    const response = await fetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(fileId)+'?fields=id,parents,trashed', {headers:{Authorization:'Bearer '+token}});
-    if (response.status===404) continue;
-    if (!response.ok) throw new Error('Unable to verify a Google Drive attachment.');
-    const file = await response.json() as {parents?:string[];trashed?:boolean};
-    if (file.trashed) continue;
-    if (!file.parents?.includes(parentFolderId)) throw new Error('A Google Drive attachment is outside its managed LEAPRS folder.');
-    if (!verified.some(item=>item.fileId===fileId)) verified.push({fileId,token});
-  }
-  for (const {fileId,token} of verified) {
-    const response=await fetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(fileId),{method:'DELETE',headers:{Authorization:'Bearer '+token}});
-    if(!response.ok&&response.status!==404) throw new Error('Unable to delete a Google Drive attachment.');
-  }
+async function deleteManagedDriveAttachments(attachments: ManagedDriveAttachment[], tx: Transaction) {
+  await lockDriveAttachments(tx);
+  await enqueueFileIds(tx, attachments.map(attachment => attachment.fileId));
+  scheduleDriveCleanup();
 }
 
 async function ensureRequestGoogleDriveFolder(access: UserAccess, context?: RequestUploadContext) {
@@ -3041,6 +3031,7 @@ async function ensureRequestGoogleDriveFolder(access: UserAccess, context?: Requ
   const accessToken = await getGoogleDriveAccessToken(rootParentFolderId);
   if (context?.requestId !== undefined && (!Number.isSafeInteger(context.requestId) || !await getWritableRequest(access, context.requestId))) throw new Error(unauthorized.error);
   const folderId = await withTransaction(async (tx) => {
+    await lockDriveAttachments(tx);
     let req: typeof requests.$inferSelect | undefined;
     if (context?.requestId) {
       [req] = await tx.select().from(requests).where(eq(requests.id, context.requestId)).for('update');
@@ -3071,6 +3062,7 @@ async function ensureRequestGoogleDriveFolder(access: UserAccess, context?: Requ
     const folder = await response.json() as { id?: string };
     if (!folder.id) throw new Error('Drive did not return an attachment folder.');
     await tx.insert(requestStorageFolders).values({ folderId: folder.id, requestId: req?.id, userId: access.userId, rootFolderId: rootParentFolderId });
+    await enqueueDriveCleanup(tx, folder.id, rootParentFolderId, 'folder', 24 * 60 * 60 * 1000);
     return folder.id;
   });
   return { folderId, rootFolderId: rootParentFolderId, accessToken };
@@ -3169,22 +3161,26 @@ export async function reconcileBackgroundAttachment(target: UploadTarget, upload
     if (pending && !recoverFile) return { success: true as const, state: 'pending' as const };
     const query = `trashed = false and appProperties has { key='leaprsUploadId' and value='${uploadId}' } and appProperties has { key='leaprsRecord' and value='${target.kind}:${target.id}' } and appProperties has { key='leaprsUserId' and value='${access.userId.replaceAll("'", "\\'")}' }`;
     let availableAccounts = 0;
+    let cleanupQueued = false;
     for (const storage of await listGoogleStorages()) {
       let token: string;
       try { token = await getGoogleStorageToken(storage); } catch { continue; }
       const url = new URL('https://www.googleapis.com/drive/v3/files');
-      url.search = new URLSearchParams({ q: query, fields: 'files(id)', pageSize: '100' }).toString();
+      url.search = new URLSearchParams({ q: query, fields: 'files(id,appProperties)', pageSize: '100' }).toString();
       const response = await fetch(url, {headers:{Authorization:'Bearer '+token}});
       if (!response.ok) continue;
       availableAccounts++;
-      const { files } = await response.json() as { files: {id:string}[] };
+      const { files } = await response.json() as { files: { id: string; appProperties?: Record<string, string> }[] };
       if (pending && files[0]) return {success:true as const,state:'pending' as const,fileId:files[0].id};
       if (!pending) for (const file of files) {
-        const removed=await fetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(file.id),{method:'DELETE',headers:{Authorization:'Bearer '+token}});
-        if(!removed.ok&&removed.status!==404) throw new Error('Unable to remove an unused attachment.');
+        const root = file.appProperties?.leaprsStorageRoot || await getGoogleResourceRoot(file.id);
+        await getGoogleStorageForRoot(root);
+        await withTransaction(tx => enqueueDriveCleanup(tx, file.id, root));
+        cleanupQueued = true;
       }
     }
     if (!availableAccounts) throw new Error('Reconnect Google Drive storage to recover this attachment.');
+    if (cleanupQueued) scheduleDriveCleanup();
     return {success:true as const,state:pending ? 'pending' as const : 'cancelled' as const};
   } catch (error) { return { success: false as const, error: error instanceof Error ? error.message : 'Unable to recover attachment.' }; }
 }
@@ -3216,6 +3212,8 @@ export async function finishBackgroundAttachment(target: UploadTarget, uploadId:
     if (file.trashed || file.appProperties?.leaprsUploadId !== uploadId || file.appProperties?.leaprsRecord !== `${target.kind}:${target.id}` || file.appProperties?.leaprsUserId !== access.userId) throw new Error('Attachment ownership could not be verified.');
     const attachment: StatusAttachment & { backgroundUploadId: string } = { id: file.id, name: file.name, mimeType: file.mimeType, url: file.webViewLink || `https://drive.google.com/open?id=${file.id}`, backgroundUploadId: uploadId };
     await withTransaction(async tx => {
+      await lockDriveAttachments(tx);
+      await assertAttachmentsNotDeleted(tx, attachment);
       const record = await getUploadRecord(access, target, tx);
       // A repeated completion call after a lost response must be harmless.
       if (Object.values(record.info).some(value => Array.isArray(value) && value.some(item => item && typeof item === 'object' && 'id' in item && item.id === file.id))) return;
@@ -3524,6 +3522,8 @@ export async function stopRequestProgress(data: StopRequestInput) {
     if (!data.reason.trim()) return { success: false, error: 'A stopper reason is required.' };
     const { data: session } = await auth.getSession();
     const { stopper } = await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
+      await assertAttachmentsNotDeleted(tx, data.files, additionalInfo);
       const [request] = await tx.select().from(requests).where(eq(requests.id, data.requestId)).for('update');
       const [parent] = request ? await tx.select().from(capdevs).where(eq(capdevs.id, request.capdevId)).for('update') : [];
       if (parent) await assertActiveFolderAccess(tx, access.role, parent.folderId);
@@ -3636,6 +3636,8 @@ export async function createRequestStatusUpdate(data: StatusUpdateInput) {
     if (isStopperResponse && (data.subtractsRequestedAmount || data.markAsComplete)) return { success: false, error: 'A stopper response cannot deduct budget or complete a request.' };
     const deductedAmount = data.deductedAmount === undefined || data.deductedAmount === '' ? undefined : validateMoney(data.deductedAmount);
     const createdUpdate = await withTransaction(async (tx) => {
+      await lockDriveAttachments(tx);
+      await assertAttachmentsNotDeleted(tx, data.files, data.additionalInfo);
       const createdUpdate = await writeRequestStatusUpdate(tx, access.role, {
       requestId: data.requestId, userId: access.userId,
       authorName: session?.user?.name || session?.user?.email || 'Staff member',

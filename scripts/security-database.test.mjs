@@ -107,7 +107,7 @@ test('database security regression suite uses an isolated disposable schema', as
     await t.test('employees cannot deduct another owner request or use negative amounts', async () => {
       await setup();
       await assert.rejects(run((tx) => writeRequestStatusUpdate(tx, 'employee', input(20))), /permission/);
-      await assert.rejects(run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10, { deductedAmount: '-10' }))), /positive/);
+      await assert.rejects(run((tx) => writeRequestStatusUpdate(tx, 'employee', input(10, { deductedAmount: '-10' }))), /greater than zero/);
     });
     await t.test('folder claiming rejects arbitrary and other-user folders', async () => {
       await setup();

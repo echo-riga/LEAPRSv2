@@ -29,9 +29,9 @@ export async function GET(request: Request) {
       const tokens = await googleTokenRequest({ code, redirect_uri: flow.redirectUri, code_verifier: flow.verifier, grant_type: 'authorization_code' });
       const granted = new Set(tokens.scope?.split(' ') || []);
       if (!GOOGLE_STORAGE_SCOPES.every(scope => granted.has(scope))) throw new Error('Grant all required Drive and Forms permissions.');
-      const response = await driveFetch('/about?fields=user(permissionId,emailAddress)', tokens.access_token!);
+      const response = await driveFetch('/about?fields=user(permissionId,emailAddress,displayName)', tokens.access_token!);
       if (!response.ok) throw new Error('Unable to identify the connected account.');
-      const { user } = await response.json() as { user?: { permissionId?: string; emailAddress?: string } };
+      const { user } = await response.json() as { user?: { permissionId?: string; emailAddress?: string; displayName?: string } };
       if (!user?.permissionId || !user.emailAddress) throw new Error('Google did not identify the storage account.');
       await withTransaction(async tx => {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(724103, 2)`);
@@ -69,7 +69,7 @@ export async function GET(request: Request) {
             return;
           }
         }
-        const root = await findOrCreateGoogleRoot(tokens.access_token!, existing?.rootFolderId);
+        const root = await findOrCreateGoogleRoot(tokens.access_token!, existing?.rootFolderId, user);
         const sameRoot = all.find(connection => connection.rootFolderId === root);
         // A new connection must not claim a root already registered to another account.
         if (sameRoot && !sameRoot.isLegacy && sameRoot.accountId !== user.permissionId) throw new Error('Storage account mismatch.');
