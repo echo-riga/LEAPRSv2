@@ -294,9 +294,9 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
       focusFormError('capdev-field-aipCode');
       return;
     }
-    try { validateMoney(form.initialBudget); }
+    try { validateMoney(form.initialBudget, { allowZero: Boolean(editing) }); }
     catch {
-      setFieldErrors({ budget: 'Enter an initial balance as a whole number greater than zero.' });
+      setFieldErrors({ budget: editing ? 'Enter an initial balance as a whole number of zero or greater.' : 'Enter an initial balance as a whole number greater than zero.' });
       focusFormError('capdev-field-budget');
       return;
     }
@@ -583,7 +583,7 @@ export default function CapdevPage({ folderId }: { folderId: number }) {
           </Grid>
           {editing && <><Divider sx={{ my: 3 }} /><Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 2 }}>Balance History</Typography>{budgetHistory.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>Deductions include those recorded before balance resets.</Typography>}<Stack spacing={1.25}><Stack direction="row" sx={{ justifyContent: 'space-between' }}><Typography variant="body2">Initial balance</Typography><Typography variant="body2" sx={{ fontWeight: 800 }}>{formatCurrency(form.initialBudget)}</Typography></Stack>{budgetHistory.map((entry, index) => <Stack key={`${String(entry.createdAt)}-${index}`} direction="row" spacing={1} sx={{ pl: 2, alignItems: 'center', color: 'error.main' }}><Typography aria-hidden sx={{ fontWeight: 800 }}>└</Typography><Typography variant="body2" sx={{ flexGrow: 1 }}>Deducted by {entry.authorName || 'Staff member'}</Typography><Typography variant="body2" sx={{ fontWeight: 800 }}>−{formatCurrency(entry.amount)}</Typography></Stack>)}<Divider /><Stack direction="row" sx={{ justifyContent: 'space-between' }}><Typography variant="body2" sx={{ fontWeight: 800 }}>Remaining balance</Typography><Typography variant="body2" sx={{ fontWeight: 800, color: Number(form.budget) <= 0 ? 'error.main' : 'primary.dark' }}>{formatCurrency(form.budget)}</Typography></Stack></Stack><Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 3 }}>Added {formatDate(editing.createdAt)}</Typography></>}
         </DialogContent>
-        <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Close</Button>{isAdmin && <Button onClick={() => void saveProject()} disabled={editorReadOnly || saving || !form.aipCode || !form.budget || (!form.initialBudget || Number(form.initialBudget) <= 0) || !areRequiredFieldsComplete || Object.keys(fieldErrors).length > 0} variant="contained">{saving ? 'Saving' : 'Save CapDev'}</Button>}</DialogActions>
+        <DialogActions sx={{ p: 2.5 }}><Button onClick={() => setEditorOpen(false)} disabled={saving} color="inherit">Close</Button>{isAdmin && <Button onClick={() => void saveProject()} disabled={editorReadOnly || saving || !form.aipCode || !form.budget || (!form.initialBudget || Number(form.initialBudget) < 0 || (!editing && Number(form.initialBudget) === 0)) || !areRequiredFieldsComplete || Object.keys(fieldErrors).length > 0} variant="contained">{saving ? 'Saving' : 'Save CapDev'}</Button>}</DialogActions>
       </Dialog>
       <Dialog open={budgetResetConfirmationOpen} onClose={() => !saving && setBudgetResetConfirmationOpen(false)} fullWidth maxWidth="sm" aria-labelledby="budget-reset-title" aria-describedby="budget-reset-description">
         <DialogTitle id="budget-reset-title" sx={{ fontWeight: 800 }}>Reset remaining balance?</DialogTitle>

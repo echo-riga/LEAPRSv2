@@ -64,8 +64,17 @@ test('same amount and a repeated reset submission preserve deductions made after
   assert.equal(Object.hasOwn(f.patch(), 'budget'), false);
 });
 
+test('zero initial budget resets both balances and still requires positive request amounts', async () => {
+  const f = fixture();
+  const result = await f.update(1, { ...input, initialBudget: '0' });
+  assert.equal(result.success, true);
+  assert.equal(result.capdev.initialBudget, '0');
+  assert.equal(result.capdev.budget, '0');
+  assert.throws(() => validateMoney('0'));
+});
+
 test('invalid budgets are rejected before writes', async () => {
-  for (const initialBudget of ['0', '-1', '1.234', '1.50', 'NaN', 'Infinity', '1e4', '', '10000000000']) {
+  for (const initialBudget of ['-1', '1.234', '1.50', 'NaN', 'Infinity', '1e4', '', '10000000000']) {
     const f = fixture();
     assert.equal((await f.update(1, { ...input, initialBudget })).success, false);
     assert.equal(f.transactions(), 0);

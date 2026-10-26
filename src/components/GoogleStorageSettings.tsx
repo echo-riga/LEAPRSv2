@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, DialogActions, DialogContent, Stack, Typography } from '@mui/material';
+import { GoogleStorageMigrationProgress, useGoogleStorageMigration } from '@/components/GoogleStorageMigration';
 
 export default function GoogleStorageSettings({ onClose }: { onClose: () => void }) {
+  const { migration } = useGoogleStorageMigration();
+  const transferring = migration?.status === 'running';
   const [owner, setOwner] = useState<{ email: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [changing, setChanging] = useState(false);
@@ -24,7 +27,7 @@ export default function GoogleStorageSettings({ onClose }: { onClose: () => void
   useEffect(() => {
     void Promise.resolve().then(async () => {
       const status = new URLSearchParams(window.location.search).get('storage');
-      if (status === 'connected') setNotice('Storage account changed.');
+      if (status === 'connected') setNotice('Storage connection updated.');
       if (status === 'cancelled') setNotice('Account change cancelled.');
       await load();
       if (status === 'connection_failed') setError('Unable to change account. Please try again and allow the requested permissions.');
@@ -42,12 +45,14 @@ export default function GoogleStorageSettings({ onClose }: { onClose: () => void
           <Typography sx={{ mt: 0.5, fontWeight: 600, overflowWrap: 'anywhere' }}>{owner ? owner.email || 'Owner unavailable' : 'No account connected'}</Typography>
         </Box>
         {!configured && <Alert severity="warning">Google connection is not configured.</Alert>}
+        <Typography variant="body2" color="text.secondary">Changing accounts transfers the previous LEAPRS folder and its files to the new account. Existing links and evaluation responses are preserved. Google must allow ownership transfers between the accounts.</Typography>
+        <GoogleStorageMigrationProgress />
       </Stack>}
     </DialogContent>
     <DialogActions sx={{ p: 2, gap: 1 }}>
       <Button color="inherit" disabled={changing} onClick={onClose}>Close</Button>
       <Box component="form" method="post" action="/api/google-storage/connect" onSubmit={() => setChanging(true)}>
-        <Button type="submit" variant="contained" disabled={loading || changing || !configured}>{changing ? 'Connecting...' : 'Change account'}</Button>
+        <Button type="submit" variant="contained" disabled={loading || changing || !configured || transferring}>{changing ? 'Connecting...' : migration?.status === 'failed' ? 'Reconnect or change account' : 'Change account'}</Button>
       </Box>
     </DialogActions>
   </>;

@@ -22,8 +22,54 @@ http.createServer(async (req, res) => {
   if (url.pathname === '/token' && req.method === 'POST') {
     if (body.refresh_token) fixture.refreshes.push(body.refresh_token);
     if (body.code === 'expired' || body.refresh_token === 'revoked') return send(400, { error: 'invalid_grant' });
+    if (fixture.migration) return send(200, { access_token: body.refresh_token === 'target-refresh' ? 'sim-target' : 'sim-source' });
     return send(200, { access_token: 'sim-access', refresh_token: 'sim-refresh', token_type: 'Bearer', expires_in: 3600,
       scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/forms.body https://www.googleapis.com/auth/forms.responses.readonly' });
+  }
+  if (fixture.migration) {
+    const account = req.headers.authorization === 'Bearer sim-target' ? 'target-account' : req.headers.authorization === 'Bearer sim-source' ? 'source-account' : null;
+    if (!account) return send(401, {});
+    if (url.pathname === '/about') return send(200, { user: { permissionId: account, emailAddress: account + '@example.test' } });
+    const files = fixture.files || [];
+    const visible = file => file.owners?.some(owner => owner.permissionId === account) || file.readable !== false;
+    if (url.pathname === '/files' && req.method === 'GET') {
+      const parent = /'([\w-]+)' in parents/.exec(url.searchParams.get('q') || '')?.[1];
+      const matches = files.filter(file => file.parents?.includes(parent) && !file.trashed && visible(file));
+      const offset = Number(url.searchParams.get('pageToken') || 0);
+      const page = matches.slice(offset, offset + 2);
+      return send(200, { files: page, ...(matches.length > offset + 2 ? { nextPageToken: String(offset + 2) } : {}) });
+    }
+    const match = /^\/files\/([^/]+)(?:\/permissions(?:\/([^/]+))?)?$/.exec(url.pathname);
+    if (match) {
+      const file = files.find(file => file.id === decodeURIComponent(match[1]));
+      if (!file || !visible(file)) return send(404, {});
+      if (url.pathname.includes('/permissions')) {
+        fixture.permissionCalls = (fixture.permissionCalls || 0) + 1;
+        if (fixture.blocked) return send(403, { error: { code: 403 } });
+        if (req.method === 'GET') return send(200, { permissions: file.permissions || [] });
+        if (body.pendingOwner) {
+          if (fixture.workspace) return send(400, { error: { code: 400 } });
+          file.pendingOwner = 'target-account';
+          return send(200, { id: 'target-account' });
+        }
+        if (body.role === 'owner') {
+          if (url.searchParams.get('transferOwnership') !== 'true' || (account === 'target-account' && !file.pendingOwner)) return send(400, {});
+          file.owners = [{ permissionId: 'target-account' }];
+          delete file.pendingOwner;
+          fixture.transfers = (fixture.transfers || 0) + 1;
+          if (fixture.lostResponse) { fixture.lostResponse = false; return send(503, {}); }
+          return send(200, { id: 'target-account' });
+        }
+        return send(501, {});
+      }
+      if (req.method === 'GET') return send(200, { ...file, ownedByMe: file.owners?.some(owner => owner.permissionId === account) });
+      if (req.method === 'PATCH') {
+        if (url.searchParams.has('addParents')) file.parents = [url.searchParams.get('addParents')];
+        Object.assign(file, body);
+        return send(200, file);
+      }
+    }
+    return send(501, { error: 'Migration endpoint not modeled.' });
   }
   if (req.headers.authorization !== 'Bearer sim-access') return send(401, { error: { code: 401 } });
   if (url.pathname === '/about') return send(200, { user: { permissionId: 'sim-account', emailAddress: 'storage@example.test' } });

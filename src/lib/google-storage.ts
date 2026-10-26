@@ -1,6 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/db';
-import { googleStorageConnections, googleDriveResources, requestStorageFolders } from '@/db/schema';
+import { withTransaction } from '@/db/transaction';
+import { googleStorageConnections, googleDriveResources, requestStorageFolders, googleStorageMigrations, googleStorageMigrationItems } from '@/db/schema';
 import { decryptGoogleSecret, encryptGoogleSecret } from '@/lib/google-storage-crypto';
 
 export type GoogleStorage = typeof googleStorageConnections.$inferSelect;
@@ -46,7 +47,22 @@ export async function getActiveGoogleStorage(): Promise<GoogleStorage> {
 
 export async function getGoogleStorageForRoot(root: string): Promise<GoogleStorage> {
   const [connection] = await db.select().from(googleStorageConnections).where(eq(googleStorageConnections.rootFolderId, root)).limit(1);
-  if (connection) return connection;
+  if (connection) {
+    // File IDs and logical resource roots stay stable after ownership transfers.
+    // Follow subsequent account switches to the account that now owns this tree.
+    let current = connection;
+    const seen = new Set<string>();
+    while (!seen.has(current.rootFolderId)) {
+      seen.add(current.rootFolderId);
+      const [migration] = await db.select().from(googleStorageMigrations).where(and(
+        eq(googleStorageMigrations.sourceRoot, current.rootFolderId), eq(googleStorageMigrations.status, 'completed'))).limit(1);
+      if (!migration) return { ...current, rootFolderId: root };
+      const [destination] = await db.select().from(googleStorageConnections).where(eq(googleStorageConnections.rootFolderId, migration.targetRoot)).limit(1);
+      if (!destination) throw new Error('The migrated Google storage connection is unavailable.');
+      current = destination;
+    }
+    throw new Error('Invalid Google storage migration chain.');
+  }
   const legacy = environmentStorage();
   if (legacy?.rootFolderId === root) return legacy;
   throw new Error('The original Google storage connection is unavailable.');
@@ -101,6 +117,28 @@ export async function registerGoogleResource(fileId: string, rootFolderId: strin
   await db.insert(googleDriveResources).values({ fileId, rootFolderId }).onConflictDoNothing();
   const [resource] = await db.select().from(googleDriveResources).where(eq(googleDriveResources.fileId, fileId));
   if (resource?.rootFolderId !== rootFolderId) throw new Error('Google file storage ownership does not match.');
+  // Upload sessions created before switching accounts can finish after migration.
+  // Re-open the last transfer in the chain so those files move as well.
+  const [migrated] = await db.select({ id: googleStorageMigrations.id }).from(googleStorageMigrations)
+    .where(eq(googleStorageMigrations.sourceRoot, rootFolderId)).limit(1);
+  if (migrated) await withTransaction(async tx => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(724103, 2)`);
+    let root = rootFolderId;
+    let last: typeof googleStorageMigrations.$inferSelect | undefined;
+    const visited = new Set<string>();
+    while (!visited.has(root)) {
+      visited.add(root);
+      const [job] = await tx.select().from(googleStorageMigrations).where(eq(googleStorageMigrations.sourceRoot, root)).limit(1);
+      if (!job) break;
+      last = job;
+      root = job.targetRoot;
+    }
+    if (!last) return;
+    await tx.insert(googleStorageMigrationItems).values({ migrationId: last.id, fileId, name: 'Recently uploaded file', mimeType: 'application/octet-stream', depth: 1, scanned: true })
+      .onConflictDoUpdate({ target: [googleStorageMigrationItems.migrationId, googleStorageMigrationItems.fileId], set: { done: false } });
+    if (last.status === 'completed') await tx.update(googleStorageMigrations).set({ status: 'running', phase: 'transferring', error: null, updatedAt: new Date() })
+      .where(eq(googleStorageMigrations.id, last.id));
+  });
 }
 
 export async function getStorageRootForParent(parentFolderId: string) {

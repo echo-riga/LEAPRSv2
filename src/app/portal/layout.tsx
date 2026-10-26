@@ -15,6 +15,7 @@ import NotificationsMenu from '@/components/NotificationsMenu';
 import PortalChatbot from '@/components/PortalChatbot';
 import RequestTimelineProgress from '@/components/RequestTimelineProgress';
 import BackgroundUploads from '@/components/BackgroundUploads';
+import GoogleStorageMigration from '@/components/GoogleStorageMigration';
 
 const PORTAL_ROUTES = ['/portal', '/portal/analytics', '/portal/reports', '/portal/audit-logs', '/portal/settings', '/portal/users', '/portal/settings/capdev', '/portal/settings/request'];
 function getGreeting() {
@@ -126,6 +127,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <BackgroundUploads key={session.data.user.id} userId={session.data.user.id}>
+    <GoogleStorageMigration enabled={role === 'admin'}>
     <Box sx={{ minHeight: '100vh', bgcolor: '#fafcfa' }}>
       <AppBar position="fixed" color="inherit" elevation={0} sx={{ bgcolor: '#fafcfa', borderBottom: '1px solid rgba(28, 40, 28, 0.12)' }}>
         <Toolbar sx={{ minHeight: { xs: 64, md: 72 }, px: { xs: 2, md: 3 }, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr) auto', md: 'minmax(180px, 1fr) auto minmax(180px, 1fr)' }, alignItems: 'center', columnGap: 1.5, position: 'relative' }}>
@@ -169,6 +171,7 @@ function PortalLayoutContent({ children }: { children: React.ReactNode }) {
       </AppBar>
       <Box component="main" sx={{ minHeight: '100vh', boxSizing: 'border-box', px: { xs: 2, md: 3 }, pb: { xs: 2, md: 3 }, pt: { xs: '80px', md: '96px' } }}>{children}</Box>
     </Box>
+    </GoogleStorageMigration>
     </BackgroundUploads>
   );
 }

@@ -37,6 +37,32 @@ export const googleDriveResources = pgTable('google_drive_resources', {
   rootFolderId: text('root_folder_id').notNull(),
 });
 
+export const googleStorageMigrations = pgTable('google_storage_migrations', {
+  id: text('id').primaryKey(),
+  sourceRoot: text('source_root').notNull(),
+  targetRoot: text('target_root').notNull(),
+  sourceConnectionId: text('source_connection_id').notNull(),
+  status: text('status').default('running').notNull(),
+  phase: text('phase').default('discovering').notNull(),
+  error: text('error'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, table => [index('google_storage_migrations_status_idx').on(table.status),
+  uniqueIndex('google_storage_migrations_source_idx').on(table.sourceRoot)]);
+
+export const googleStorageMigrationItems = pgTable('google_storage_migration_items', {
+  id: serial('id').primaryKey(),
+  migrationId: text('migration_id').references(() => googleStorageMigrations.id, { onDelete: 'cascade' }).notNull(),
+  fileId: text('file_id').notNull(),
+  name: text('name').notNull(),
+  mimeType: text('mime_type').notNull(),
+  depth: integer('depth').notNull(),
+  scanned: boolean('scanned').default(false).notNull(),
+  pageToken: text('page_token'),
+  done: boolean('done').default(false).notNull(),
+}, table => [uniqueIndex('google_storage_migration_file_idx').on(table.migrationId, table.fileId),
+  index('google_storage_migration_pending_idx').on(table.migrationId, table.done, table.scanned)]);
+
 export const users = pgTable('users', {
   id: text('id').primaryKey(),
   role: varchar('role', { length: 50 }).default('employee').notNull(),

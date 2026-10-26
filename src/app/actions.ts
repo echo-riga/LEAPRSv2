@@ -2006,8 +2006,8 @@ export async function updateCapdev(id: number, data: CapdevInput) {
     if (!access || access.role !== 'admin') return unauthorized;
     let initialBudget: string | undefined;
     if (data.initialBudget !== undefined) {
-      try { initialBudget = validateMoney(data.initialBudget); }
-      catch { return { success: false, error: 'Enter an initial balance as a whole number greater than zero.' }; }
+      try { initialBudget = validateMoney(data.initialBudget, { allowZero: true }); }
+      catch { return { success: false, error: 'Enter an initial balance as a whole number of zero or greater.' }; }
     }
     data = { ...data, additionalInfo: validatePendingAttachments(data.additionalInfo, access.userId) };
     const aipCodePattern = /^\d{4}-\d{3}-\d-\d-\d{2}-\d{3}-\d{3}$/;

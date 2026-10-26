@@ -17,9 +17,9 @@ export function validateRequestInput(value: unknown) {
     requestedBudget, description: input.description, eventDate: input.eventDate, additionalInfo: { ...additionalInfo } as Record<string, unknown> };
 }
 
-export function validateMoney(value: unknown): string {
-  if ((typeof value !== 'string' && typeof value !== 'number') || !/^\d{1,10}(\.0{1,2})?$/.test(String(value)) || Number(value) <= 0) {
-    throw new Error('Enter a whole amount greater than zero.');
+export function validateMoney(value: unknown, { allowZero = false }: { allowZero?: boolean } = {}): string {
+  if ((typeof value !== 'string' && typeof value !== 'number') || !/^\d{1,10}(\.0{1,2})?$/.test(String(value)) || (allowZero ? Number(value) < 0 : Number(value) <= 0)) {
+    throw new Error(allowZero ? 'Enter a whole amount of zero or greater.' : 'Enter a whole amount greater than zero.');
   }
   return String(value);
 }
