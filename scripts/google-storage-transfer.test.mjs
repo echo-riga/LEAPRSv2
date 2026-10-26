@@ -26,6 +26,8 @@ test('consumer transfer preserves file ID, parents, and existing Form data', asy
   assert.deepEqual(result.parents, ['old-root']);
   assert.equal((await state()).files[0].responses[0].responseId, 'existing-response');
   assert.equal((await state()).transfers, 1);
+  assert.equal((await state()).shares, 1);
+  assert.equal((await state()).pendingUpdates, 1);
 });
 
 test('same-organization Workspace accounts use direct ownership transfer', async () => {
@@ -34,9 +36,17 @@ test('same-organization Workspace accounts use direct ownership transfer', async
   assert.equal((await state()).transfers, 1);
 });
 
+test('retrying an existing Editor share explicitly requests pending ownership', async () => {
+  await reset({ files: [file('attachment', { permissions: [{ id: 'target-account', emailAddress: 'target-account@example.test', role: 'writer' }] })] });
+  assert.equal((await transfer()).ownedByMe, true);
+  const fixture = await state();
+  assert.equal(fixture.shares || 0, 0);
+  assert.equal(fixture.pendingUpdates, 1);
+});
+
 test('a lost transfer response is recovered without another ownership invitation', async () => {
   await reset({ lostResponse: true });
-  await assert.rejects(transfer(), /could not complete/);
+  await assert.rejects(transfer(), /could not accept pending ownership.*HTTP 503/);
   const calls = (await state()).permissionCalls;
   assert.equal((await transfer()).ownedByMe, true);
   assert.equal((await state()).permissionCalls, calls);
@@ -45,9 +55,26 @@ test('a lost transfer response is recovered without another ownership invitation
 
 test('blocked transfers preserve the original file and report account restrictions', async () => {
   await reset({ blocked: true });
-  await assert.rejects(transfer(), /different Workspace organizations/);
+  await assert.rejects(transfer(), /ownershipChangeAcrossDomainsNotPermitted/);
   assert.equal((await state()).files[0].owners[0].permissionId, 'source-account');
   assert.equal((await state()).transfers || 0, 0);
+});
+
+test('a generic permissions rejection does not claim the accounts are incompatible', async () => {
+  await reset({ blocked: true, blockedReason: 'insufficientFilePermissions' });
+  await assert.rejects(transfer(), error => {
+    assert.match(error.message, /insufficientFilePermissions/);
+    assert.doesNotMatch(error.message, /organizations|incompatible/);
+    return true;
+  });
+});
+
+test('rate limiting on pending ownership does not attempt a direct ownership transfer', async () => {
+  await reset({ pendingFailureReason: 'userRateLimitExceeded' });
+  await assert.rejects(transfer(), /temporarily limited.*userRateLimitExceeded/);
+  const fixture = await state();
+  assert.equal(fixture.permissionCalls, 3);
+  assert.equal(fixture.transfers || 0, 0);
 });
 
 test('discovery follows provider pagination without losing files', async () => {

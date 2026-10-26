@@ -4,14 +4,19 @@ export const DRIVE_FOLDER = 'application/vnd.google-apps.folder';
 type DriveFile = { id: string; name: string; mimeType: string; parents?: string[]; trashed?: boolean;
   ownedByMe?: boolean; owners?: Array<{ permissionId?: string }>; appProperties?: Record<string, string> };
 
-async function checked(response: Response) {
+async function checked(response: Response, operation = 'complete the transfer') {
   if (response.ok) return response;
-  if (response.status === 403 || response.status === 400) {
-    throw new Error('Google blocked the transfer. Both accounts must permit ownership transfers and the new account must have available storage. Transfers between different Workspace organizations or personal and Workspace accounts are not supported.');
-  }
+  const body = await response.json().catch(() => null) as { error?: { errors?: Array<{ reason?: string }> } } | null;
+  const rawReason = body?.error?.errors?.[0]?.reason;
+  const reason = rawReason && /^[a-zA-Z][a-zA-Z0-9_]{0,99}$/.test(rawReason) ? rawReason : undefined;
+  const reference = `(HTTP ${response.status}${reason ? '; ' + reason : ''})`;
+  if (reason === 'ownershipChangeAcrossDomainsNotPermitted') throw new Error(`Google does not permit ownership transfers between these account organizations ${reference}. Choose a compatible destination account.`);
+  if (reason === 'ownershipChangeRequiresConsent') throw new Error(`Google requires the destination account to accept pending ownership ${reference}. Reconnect the destination and retry.`);
+  if (reason === 'storageQuotaExceeded') throw new Error(`Google reports that the destination account has insufficient storage ${reference}. Free storage and retry.`);
+  if (reason === 'insufficientFilePermissions' || reason === 'appNotAuthorizedToFile') throw new Error(`Google denied permission to ${operation} ${reference}. Reconnect the participating accounts and retry.`);
   if (response.status === 404) throw new Error('A storage file or folder is no longer available. Restore it in Drive and retry.');
-  if (response.status === 429) throw new Error('Google temporarily limited transfers. Wait a few minutes and retry.');
-  throw new Error('Google could not complete the transfer. Please retry.');
+  if (response.status === 429 || reason === 'rateLimitExceeded' || reason === 'userRateLimitExceeded') throw new Error(`Google temporarily limited transfers ${reference}. Wait a few minutes and retry.`);
+  throw new Error(`Google could not ${operation} ${reference}. Reconnect the participating accounts and retry.`);
 }
 
 export async function readTransferFile(token: string, fileId: string): Promise<DriveFile> {
@@ -43,22 +48,37 @@ export async function transferDriveOwnership(input: {
     if (!file.ownedByMe) throw new Error('The previous storage account does not own this file. Its owner must transfer it before migration can continue.');
     const response = await checked(await driveFetch(path + '/permissions?fields=permissions(id,emailAddress,role)&pageSize=100', sourceToken));
     const permissions = await response.json() as { permissions?: Array<{ id: string; emailAddress?: string; role?: string }> };
-    const existing = permissions.permissions?.find(permission => permission.id === targetAccountId || permission.emailAddress?.toLowerCase() === targetEmail.toLowerCase());
-    const permissionPath = path + '/permissions' + (existing ? '/' + encodeURIComponent(existing.id) : '');
-    const method = existing ? 'PATCH' : 'POST';
+    let permission = permissions.permissions?.find(permission => permission.id === targetAccountId || permission.emailAddress?.toLowerCase() === targetEmail.toLowerCase());
     const headers = { 'Content-Type': 'application/json' };
+    if (!permission) {
+      // Drive may ignore pendingOwner in permissions.create and return only a
+      // writer. Establish the share, then explicitly update pending ownership.
+      const shared = await checked(await driveFetch(path + '/permissions?fields=id&sendNotificationEmail=false', sourceToken, {
+        method: 'POST', headers, body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: targetEmail }),
+      }), 'share the file with the destination');
+      permission = await shared.json() as { id: string };
+      if (!permission.id) throw new Error('Google did not return the file permission.');
+    }
+    const permissionPath = path + '/permissions/' + encodeURIComponent(permission.id);
     // Consumer accounts require an invitation accepted with the destination's token.
-    const pending = await driveFetch(permissionPath + '?fields=id', sourceToken, { method, headers,
-      body: JSON.stringify({ role: 'writer', pendingOwner: true, ...(!existing ? { type: 'user', emailAddress: targetEmail } : {}) }) });
+    const pending = await driveFetch(permissionPath + '?fields=id,pendingOwner', sourceToken, { method: 'PATCH', headers,
+      body: JSON.stringify({ role: 'writer', pendingOwner: true }) });
     if (pending.ok) {
-      const permission = await pending.json() as { id?: string };
-      if (!permission.id) throw new Error('Google did not return the ownership permission.');
-      await checked(await driveFetch(path + '/permissions/' + encodeURIComponent(permission.id) + '?transferOwnership=true', targetToken,
-        { method: 'PATCH', headers, body: JSON.stringify({ role: 'owner' }) }));
+      const invitation = await pending.json() as { pendingOwner?: boolean };
+      if (invitation.pendingOwner === true) {
+        await checked(await driveFetch(permissionPath + '?transferOwnership=true', targetToken,
+          { method: 'PATCH', headers, body: JSON.stringify({ role: 'owner' }) }), 'accept pending ownership');
+      } else {
+        // Workspace accounts can omit pending ownership and transfer directly.
+        await checked(await driveFetch(permissionPath + '?transferOwnership=true', sourceToken,
+          { method: 'PATCH', headers, body: JSON.stringify({ role: 'owner' }) }), 'transfer ownership');
+      }
     } else if (pending.status === 400 || pending.status === 403) {
-      // Same-organization Workspace accounts use a direct transfer instead.
-      await checked(await driveFetch(permissionPath + '?transferOwnership=true&moveToNewOwnersRoot=false', sourceToken, { method, headers,
-        body: JSON.stringify({ role: 'owner', ...(!existing ? { type: 'user', emailAddress: targetEmail } : {}) }) }));
+      const details = await pending.clone().json().catch(() => null) as { error?: { errors?: Array<{ reason?: string }> } } | null;
+      const reason = details?.error?.errors?.[0]?.reason;
+      if (reason && !['invalidSharingRequest', 'badRequest', 'invalid', 'userCannotAddPendingOwnerToFile'].includes(reason)) await checked(pending, 'request pending ownership');
+      await checked(await driveFetch(permissionPath + '?transferOwnership=true', sourceToken, { method: 'PATCH', headers,
+        body: JSON.stringify({ role: 'owner' }) }), 'transfer ownership');
     } else {
       await checked(pending);
     }

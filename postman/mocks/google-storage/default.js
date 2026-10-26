@@ -45,12 +45,21 @@ http.createServer(async (req, res) => {
       if (!file || !visible(file)) return send(404, {});
       if (url.pathname.includes('/permissions')) {
         fixture.permissionCalls = (fixture.permissionCalls || 0) + 1;
-        if (fixture.blocked) return send(403, { error: { code: 403 } });
+        if (fixture.blocked) return send(403, { error: { code: 403, errors: [{ reason: fixture.blockedReason || 'ownershipChangeAcrossDomainsNotPermitted' }] } });
         if (req.method === 'GET') return send(200, { permissions: file.permissions || [] });
+        if (req.method === 'POST' && body.role === 'writer') {
+          // Observed Drive behavior: creation can ignore pendingOwner. Require the
+          // caller to explicitly PATCH it before the target can accept ownership.
+          fixture.shares = (fixture.shares || 0) + 1;
+          file.permissions = [{ id: 'target-account', emailAddress: 'target-account@example.test', role: 'writer' }];
+          return send(200, { id: 'target-account', role: 'writer', pendingOwner: false });
+        }
         if (body.pendingOwner) {
-          if (fixture.workspace) return send(400, { error: { code: 400 } });
+          fixture.pendingUpdates = (fixture.pendingUpdates || 0) + 1;
+          if (fixture.pendingFailureReason) return send(403, { error: { errors: [{ reason: fixture.pendingFailureReason }] } });
+          if (fixture.workspace) return send(403, { error: { code: 403, errors: [{ reason: 'userCannotAddPendingOwnerToFile' }] } });
           file.pendingOwner = 'target-account';
-          return send(200, { id: 'target-account' });
+          return send(200, { id: 'target-account', pendingOwner: true });
         }
         if (body.role === 'owner') {
           if (url.searchParams.get('transferOwnership') !== 'true' || (account === 'target-account' && !file.pendingOwner)) return send(400, {});

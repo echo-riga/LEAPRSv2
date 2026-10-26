@@ -155,7 +155,7 @@ test('Google storage switching uses disposable database tables and a local HTTP 
       }
       assert.equal(status.status, 'failed');
       assert.equal(status.completed, 0);
-      assert.match(status.error, /Google blocked/);
+      assert.match(status.error, /ownershipChangeAcrossDomainsNotPermitted/);
       await transaction(async tx => {
         await migration.retargetFailedStorageMigrations(tx, 'replacement-root');
         const [rerouted] = await tx.select().from(googleStorageMigrations);
