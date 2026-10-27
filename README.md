@@ -2,6 +2,46 @@
 
 Lifelong Education Advancement Program Requisition System: CapDev projects, requests, progress, budgets, and related administration.
 
+## Features
+
+- Role-based CapDev projects, In-House and External requests, approvals, timelines, and progress tracking.
+- Configurable forms, budget controls, reports, and Excel exports.
+- Google Drive attachments with resumable browser uploads and Google Forms evaluations.
+- AI assistance, evaluation summaries, and OAuth-protected MCP tools.
+- In-app and email notifications, audit logs, archiving, and storage administration.
+
+Built with Next.js 16, React 19, TypeScript, MUI, Drizzle ORM, Neon PostgreSQL, and Neon Auth.
+
+## Local setup
+
+Use Node.js 22.15 or newer and npm.
+
+```sh
+npm ci
+```
+
+Create .env.local using the [environment configuration table](ARCHITECTURE.md#10-environment-configuration). The core app requires DATABASE_URL, NEON_AUTH_BASE_URL, and NEON_AUTH_COOKIE_SECRET. Configure APP_URL for your environment. Drive/Forms use Google OAuth credentials and a storage connection; AI and mail features require their respective provider keys. Keep secrets server-side.
+
+Provision the database and review [schema changes and checks](ARCHITECTURE.md#11-schema-changes-and-checks) before applying migrations. Migration files in this repository do not establish the state of a deployed database. This is an integrated application, not a credential-free demo.
+
+```sh
+npm run dev
+```
+
+Open http://localhost:3000. Application routes and screens live in src/app, shared logic in src/lib, and the Drizzle schema in src/db.
+
+## Checks and build
+
+```sh
+npm run lint
+npm run test:security
+node --test scripts/background-uploads.test.mjs
+npm run build
+npm start
+```
+
+Database and integration checks have additional configuration requirements; see the operational sections below and ARCHITECTURE.md. Deploy as a Next.js server application with the same environment configuration and reviewed migrations. The checked-in vercel.json schedules Drive cleanup; notification email scheduling is configured separately.
+
 ## Project documentation
 
 | Document | Purpose |
@@ -81,36 +121,7 @@ modify application records. Verification limits are shared through PostgreSQL;
 the deployment proxy must overwrite client-supplied forwarded IP headers.
 Expired rows in `security_rate_limits` can be removed periodically.
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-### Notification emails
+## Notification emails
 
 In-app notifications also send individual emails to involved active users' registered
 account addresses through Resend. Each user saves their own seven notification-type
@@ -147,7 +158,3 @@ enabled by this code alone; choose an interval supported by your hosting plan.
 Validate using `node --use-system-ca --experimental-strip-types --test
 scripts/notification-email-database.test.mjs scripts/request-reminders-database.test.mjs`.
 Tests use disposable database schemas and a mocked email provider.
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
