@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, DialogActions, DialogContent, Stack, Typography } from '@mui/material';
-import { GoogleStorageMigrationProgress, useGoogleStorageMigration } from '@/components/GoogleStorageMigration';
+import { useGoogleStorageMigration } from '@/components/GoogleStorageMigration';
 
 export default function GoogleStorageSettings({ onClose }: { onClose: () => void }) {
   const { migration } = useGoogleStorageMigration();
@@ -58,8 +58,6 @@ export default function GoogleStorageSettings({ onClose }: { onClose: () => void
         </Box>
         {!configured && <Alert severity="warning">Google connection is not configured.</Alert>}
         {cleanup.failed > 0 && <Alert severity="warning">{cleanup.failed.toLocaleString()} file cleanup tasks need retry. Check the storage connection if failures continue.<Button size="small" disabled={cleaning} onClick={() => void retryCleanup()}>{cleaning ? 'Retrying…' : 'Retry cleanup'}</Button></Alert>}
-        <Typography variant="body2" color="text.secondary">Changing accounts transfers the previous owners’ storage folders and their files to the new account. Existing links and evaluation responses are preserved. Google must allow ownership transfers between the accounts.</Typography>
-        <GoogleStorageMigrationProgress />
       </Stack>}
     </DialogContent>
     <DialogActions sx={{ p: 2, gap: 1 }}>
