@@ -7,6 +7,20 @@ import { encryptGoogleSecret } from '@/lib/google-storage-crypto';
 import { driveFetch, getGoogleStorageToken, type GoogleStorage } from '@/lib/google-storage';
 import { DRIVE_FOLDER, finishTransferredRoot, listTransferChildren, readTransferFile, transferDriveOwnership } from '@/lib/google-storage-transfer-drive';
 import { getGoogleStorageOwner, ownerFilesFolderName, renameLegacyGoogleRoot } from '@/lib/google-storage-folder-name';
+import { DRIVE_FORM, ensureEvaluationFormAccess } from '@/lib/google-storage-form-access';
+
+export async function discoverReferencedEvaluationForms(tx: Transaction, migrationId: string) {
+  // Include archived/inactive requests and both evaluation types. Discover after
+  // walking folders so forms already in the tree keep their ownership-transfer item.
+  await tx.execute(sql`INSERT INTO google_storage_migration_items
+    (migration_id, file_id, name, mime_type, depth)
+    SELECT ${migrationId}, form_id, 'Referenced evaluation form', ${DRIVE_FORM}, -1
+    FROM (
+      SELECT participant_feedback_form_id AS form_id FROM requests
+      UNION SELECT supervisor_evaluation_form_id FROM requests
+    ) forms WHERE form_id IS NOT NULL AND form_id <> ''
+    ON CONFLICT (migration_id, file_id) DO NOTHING`);
+}
 
 export async function assertStorageMigrationIdle(tx: Transaction) {
   const [job] = await tx.select({ id: googleStorageMigrations.id }).from(googleStorageMigrations)
@@ -113,6 +127,7 @@ export async function advanceStorageMigration(retry = false) {
           await tx.update(googleStorageMigrationItems).set({ scanned: !data.nextPageToken, pageToken: data.nextPageToken || null })
             .where(eq(googleStorageMigrationItems.id, folder.id));
         } else {
+          await discoverReferencedEvaluationForms(tx, job.id);
           const [pending] = await tx.select({ id: googleStorageMigrationItems.id }).from(googleStorageMigrationItems)
             .where(and(eq(googleStorageMigrationItems.migrationId, job.id), eq(googleStorageMigrationItems.done, false))).limit(1);
           if (pending) {
@@ -135,10 +150,10 @@ export async function advanceStorageMigration(retry = false) {
           const { user } = await response.json() as { user?: { permissionId?: string; emailAddress?: string } };
           if (!user?.permissionId || !user.emailAddress) throw new Error('Unable to identify the destination account.');
           let ownerToken = sourceToken;
-          const metadata = await readTransferFile(sourceToken, item.fileId);
+          const metadata = await readTransferFile(sourceToken, item.fileId).catch(() => null);
           // A resumable upload pinned before an earlier switch can still be owned
           // by an older retained account. Use its actual owner for the transfer.
-          if (!metadata.ownedByMe && !metadata.owners?.some(owner => owner.permissionId === user.permissionId)) {
+          if (!metadata?.ownedByMe && !metadata?.owners?.some(owner => owner.permissionId === user.permissionId)) {
             const retained = await tx.select().from(googleStorageConnections);
             for (const connection of retained) {
               if (connection.id === source.id || connection.id === target.id) continue;
@@ -148,8 +163,10 @@ export async function advanceStorageMigration(retry = false) {
               } catch { /* Another retained account may own this file. */ }
             }
           }
-          await transferDriveOwnership({ fileId: item.fileId, sourceToken: ownerToken, targetToken,
-            targetAccountId: user.permissionId, targetEmail: user.emailAddress });
+          const transfer = { fileId: item.fileId, sourceToken: ownerToken, targetToken,
+            targetAccountId: user.permissionId, targetEmail: user.emailAddress };
+          if (item.depth >= 0) await transferDriveOwnership(transfer);
+          if (item.mimeType === DRIVE_FORM) await ensureEvaluationFormAccess(transfer);
           await tx.update(googleStorageMigrationItems).set({ done: true }).where(eq(googleStorageMigrationItems.id, item.id));
         } else {
           // Discover late uploads before declaring success; keep IDs and the folder tree.

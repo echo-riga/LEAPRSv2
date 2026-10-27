@@ -144,7 +144,7 @@ async function googleJson<T>(url: string, accessToken: string, init?: RequestIni
     const detail = await response.text();
     console.error('Google Forms API request failed:', response.status, detail);
     if (response.status === 403) {
-      throw new Error('Google Forms access was denied. Enable the Forms API and authorize the connected Google account.');
+      throw new Error('Google denied access to this form or its responses. The connected storage account needs Editor access; check Forms API authorization and organization sharing restrictions.');
     }
     throw new Error('Google Forms could not complete the request.');
   }

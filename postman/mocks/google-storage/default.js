@@ -32,6 +32,14 @@ http.createServer(async (req, res) => {
     if (url.pathname === '/about') return send(200, { user: { permissionId: account, emailAddress: account + '@example.test' } });
     const files = fixture.files || [];
     const visible = file => file.owners?.some(owner => owner.permissionId === account) || file.readable !== false;
+    const formMatch = /^\/forms\/([^/]+)\/responses$/.exec(url.pathname);
+    if (formMatch) {
+      fixture.responseChecks = (fixture.responseChecks || 0) + 1;
+      const file = files.find(file => file.id === decodeURIComponent(formMatch[1]));
+      const allowed = file && !fixture.responseDenied && (file.owners?.some(owner => owner.permissionId === account)
+        || file.permissions?.some(p => p.id === account && p.role === 'writer'));
+      return allowed ? send(200, { responses: file.responses || [] }) : send(403, { error: { code: 403, status: 'PERMISSION_DENIED' } });
+    }
     if (url.pathname === '/files' && req.method === 'GET') {
       const query = url.searchParams.get('q') || '';
       const parent = /'([\w-]+)' in parents/.exec(query)?.[1];
@@ -53,11 +61,19 @@ http.createServer(async (req, res) => {
         if (fixture.blocked) return send(403, { error: { code: 403, errors: [{ reason: fixture.blockedReason || 'ownershipChangeAcrossDomainsNotPermitted' }] } });
         if (req.method === 'GET') return send(200, { permissions: file.permissions || [] });
         if (req.method === 'POST' && body.role === 'writer') {
+          if (fixture.sharingBlocked) return send(403, { error: { code: 403 } });
           // Observed Drive behavior: creation can ignore pendingOwner. Require the
           // caller to explicitly PATCH it before the target can accept ownership.
           fixture.shares = (fixture.shares || 0) + 1;
           file.permissions = [{ id: 'target-account', emailAddress: 'target-account@example.test', role: 'writer' }];
           return send(200, { id: 'target-account', role: 'writer', pendingOwner: false });
+        }
+        if (req.method === 'PATCH' && body.role === 'writer' && !body.pendingOwner) {
+          if (fixture.sharingBlocked) return send(403, { error: { code: 403 } });
+          const permission = file.permissions?.find(p => p.id === decodeURIComponent(match[2]));
+          if (!permission) return send(404, {});
+          permission.role = 'writer';
+          return send(200, permission);
         }
         if (body.pendingOwner) {
           fixture.pendingUpdates = (fixture.pendingUpdates || 0) + 1;

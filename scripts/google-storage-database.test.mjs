@@ -52,6 +52,7 @@ test('Google storage switching uses disposable database tables and a local HTTP 
   const [{ port }] = await once(server, 'message');
   const base = 'http://127.0.0.1:' + port;
   process.env.GOOGLE_STORAGE_DRIVE_API_URL = base;
+  process.env.GOOGLE_STORAGE_FORMS_API_URL = base;
   process.env.GOOGLE_STORAGE_TOKEN_URL = base + '/token';
   const reset = fixture => fetch(base + '/__reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fixture) });
   const state = async () => (await fetch(base + '/__state')).json();
@@ -229,6 +230,46 @@ test('Google storage switching uses disposable database tables and a local HTTP 
       await transaction(async () => {
         assert.equal(decryptGoogleSecret((await storage.getGoogleStorageForRoot('older-root')).encryptedRefreshToken), 'target-refresh');
       });
+    });
+    await t.test('verification includes external forms on archived requests and waits for response access', async () => {
+      await transaction(async tx => {
+        await tx.execute(sql`INSERT INTO requests
+          (id,capdev_id,user_id,setting,requested_budget,updated_by_id,archived_at,participant_feedback_form_id,supervisor_evaluation_form_id)
+          VALUES (9000,1,'owner','in_house',0,'owner',now(),'external-participant','external-supervisor'),
+          (9001,1,'owner','in_house',0,'owner',NULL,'external-participant',NULL)`);
+        await tx.update(googleStorageMigrations).set({ status: 'running', phase: 'verifying' })
+          .where(eq(googleStorageMigrations.sourceRoot, 'older-root'));
+      });
+      const fixture = await state();
+      fixture.files.push(...['external-participant', 'external-supervisor'].map(id => ({
+        id, name: id, mimeType: 'application/vnd.google-apps.form', parents: ['outside-managed-storage'],
+        owners: [{ permissionId: 'source-account' }], responses: [{ responseId: 'saved-response' }],
+      })));
+      await reset({ ...fixture, responseDenied: true });
+      let status;
+      for (let i = 0; i < 20; i++) {
+        status = await transaction(() => migration.advanceStorageMigration());
+        if (status.status === 'failed') break;
+      }
+      assert.equal(status.status, 'failed');
+      assert.match(status.error, /evaluation response access/);
+      await transaction(async tx => {
+        const items = await tx.select().from(googleStorageMigrationItems)
+          .where(eq(googleStorageMigrationItems.migrationId, status.id));
+        assert.equal(items.filter(item => item.fileId === 'external-participant').length, 1);
+        assert.equal(items.filter(item => item.depth === -1 && !item.done).length, 2);
+      });
+      await reset({ ...await state(), responseDenied: false });
+      for (let i = 0; i < 25; i++) {
+        status = await transaction(() => migration.advanceStorageMigration(true));
+        if (status.status === 'completed') break;
+      }
+      assert.equal(status.status, 'completed');
+      for (const file of (await state()).files.filter(file => file.id.startsWith('external-'))) {
+        assert.equal(file.owners[0].permissionId, 'source-account');
+        assert.equal(file.permissions[0].role, 'writer');
+        assert.equal(file.responses[0].responseId, 'saved-response');
+      }
     });
   } finally {
     await pool.query('DROP SCHEMA IF EXISTS ' + quoted + ' CASCADE');

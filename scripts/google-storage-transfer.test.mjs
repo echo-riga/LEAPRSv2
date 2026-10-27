@@ -9,15 +9,44 @@ registerHooks({ resolve(specifier, context, next) {
   return next(specifier.startsWith('@/') ? new URL('../src/' + specifier.slice(2) + '.ts', import.meta.url).href : specifier, context);
 } });
 const { transferDriveOwnership, listTransferChildren, finishTransferredRoot } = await import('../src/lib/google-storage-transfer-drive.ts');
+const { ensureEvaluationFormAccess } = await import('../src/lib/google-storage-form-access.ts');
 const server = fork(new URL('../postman/mocks/google-storage/default.js', import.meta.url), [], { env: { ...process.env, PORT: '0' }, silent: true });
 after(() => server.kill());
 const [{ port }] = await once(server, 'message');
 const base = 'http://127.0.0.1:' + port;
 process.env.GOOGLE_STORAGE_DRIVE_API_URL = base;
+process.env.GOOGLE_STORAGE_FORMS_API_URL = base;
 const file = (id, extra = {}) => ({ id, name: id, mimeType: 'application/pdf', parents: ['old-root'], owners: [{ permissionId: 'source-account' }], ...extra });
 const reset = fixture => fetch(base + '/__reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ migration: true, files: [file('attachment')], ...fixture }) });
 const state = async () => (await fetch(base + '/__state')).json();
 const transfer = (extra = {}) => transferDriveOwnership({ fileId: 'attachment', sourceToken: 'sim-source', targetToken: 'sim-target', targetAccountId: 'target-account', targetEmail: 'target-account@example.test', ...extra });
+const formAccess = () => ensureEvaluationFormAccess({ fileId: 'attachment', sourceToken: 'sim-source', targetToken: 'sim-target', targetAccountId: 'target-account', targetEmail: 'target-account@example.test' });
+
+test('an external school-owned evaluation form grants response access without transferring or copying', async () => {
+  await reset({ files: [file('attachment', { parents: ['unmanaged-folder'], responses: [{ responseId: 'original' }] })] });
+  await formAccess();
+  const result = await state();
+  assert.equal(result.shares, 1);
+  assert.equal(result.responseChecks, 2);
+  assert.equal(result.transfers || 0, 0);
+  assert.equal(result.files[0].owners[0].permissionId, 'source-account');
+  assert.equal(result.files[0].responses[0].responseId, 'original');
+  await formAccess();
+  assert.equal((await state()).shares, 1);
+});
+
+test('an existing Viewer is upgraded to Editor to read evaluation responses', async () => {
+  await reset({ files: [file('attachment', { permissions: [{ id: 'target-account', role: 'reader' }] })] });
+  await formAccess();
+  assert.equal((await state()).files[0].permissions[0].role, 'writer');
+});
+
+test('blocked sharing and response denial remain retryable failures', async () => {
+  await reset({ sharingBlocked: true });
+  await assert.rejects(formAccess(), /blocked Editor access/);
+  await reset({ responseDenied: true });
+  await assert.rejects(formAccess(), /not confirmed evaluation response access/);
+});
 
 test('consumer transfer preserves file ID, parents, and existing Form data', async () => {
   await reset({ files: [file('attachment', { mimeType: 'application/vnd.google-apps.form', responses: [{ responseId: 'existing-response' }] })] });
