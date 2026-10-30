@@ -206,6 +206,7 @@ The seven categories are Inactivity Reminders, Request Submissions, Status Updat
 - The timeline has no separate archive management screen. Archived history remains readable; mutation controls are absent under archived parents.
 - Deletion and archiving never refund previously deducted amounts. Clearing an active stopper through supported deletion also clears its dependent response/resume history and stopped state.
 - Audit history captures actor and record snapshots, readable identifiers, and relevant changes. Admin alone can search and page through it. Audit history survives source record deletion.
+- Audit email login, logout, sign-up, verification-code requests, email verification, and password-reset outcomes on the server. Include verified account identity where established, the submitted email as unverified on failures, and the public IP visible through the trusted deployment proxy when available. Never record passwords, verification codes, tokens, or cookies. Generic code-request responses indicate acceptance only, without confirming account existence or delivery.
 
 ## 11. Evaluations and reports
 

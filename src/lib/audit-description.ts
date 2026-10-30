@@ -50,6 +50,15 @@ export function describeAudit(entry: AuditEntry) {
     : entry.entityType.endsWith('_field') && !/layout|department options/i.test(entry.entityLabel) ? `form field “${entry.entityLabel}”` : entry.entityLabel;
   const actions: Record<string, string> = { created: 'Created', updated: 'Updated', deleted: 'Deleted', archived: 'Archived', restored: 'Restored', stopped: 'Paused', resumed: 'Resumed' };
   let summary = `${actions[entry.action] || 'Changed'} ${target}.`;
+  if (entry.entityType === 'authentication') {
+    const events: Record<string, string> = {
+      login: 'Login', logout: 'Logout', signup: 'Sign-up', signup_code_requested: 'Sign-up verification code request',
+      signup_verification: 'Email verification', password_reset_requested: 'Password reset request', password_reset: 'Password reset',
+    };
+    const requested = d.event === 'signup_code_requested' || d.event === 'password_reset_requested';
+    const outcome = d.outcome === 'Succeeded' ? requested ? 'accepted' : 'succeeded' : 'failed';
+    summary = `${events[String(d.event)] || 'Authentication'} ${outcome} for ${entry.entityLabel}.`;
+  }
   if (entry.entityType === 'status_update') summary = entry.action === 'created'
     ? `${d.isStopperResponse ? 'Added a response to the pause on' : 'Added a progress update to'} ${target}.`
     : `${actions[entry.action] || 'Updated'} a progress update for ${target}.`;
@@ -64,6 +73,14 @@ export function describeAudit(entry: AuditEntry) {
     lines.length = 0;
   }
   const changedFields = new Set(changes.map((c) => c.field));
+  if (entry.entityType === 'authentication') {
+    lines.push(`Identity: ${d.identityVerified ? 'Verified account' : 'Unverified visitor; submitted email only'}`);
+    if (typeof d.accountId === 'string') lines.push(`Account ID: ${d.accountId}`);
+    lines.push(`Public IP: ${typeof d.ipAddress === 'string' ? d.ipAddress : 'Unavailable'}`);
+    if (typeof d.userAgent === 'string') lines.push(`Browser/device: ${d.userAgent}`);
+    if (typeof d.httpStatus === 'number') lines.push(`HTTP status: ${d.httpStatus}`);
+    if (d.event === 'signup_code_requested' || d.event === 'password_reset_requested') lines.push('Request acceptance does not confirm account existence or email delivery.');
+  }
   const metadata: Record<string, string> = { capdevAipCode: 'CapDev AIP code', requestDescription: 'Request Title', eventDate: 'Event Date', department: 'Department', role: 'Role', requestedRole: 'Requested role', email: 'Email', setting: 'Request type', requestedBudget: 'Requested Amount', initialBudget: 'Initial Balance', statusMark: 'Progress status', reason: 'Reason for pause', statusUpdate: 'Progress Update', remarks: 'Remarks', deductedAmount: 'Amount deducted', restoredBudget: 'Budget restored', type: 'Field type', isRequired: 'Required', included: 'Available departments', excluded: 'Hidden departments' };
   for (const [key, label] of Object.entries(metadata)) {
     if (!changedFields.has(key) && d[key] !== undefined && d[key] !== null && d[key] !== '' && !(key === 'restoredBudget' && Number(d[key]) === 0)) lines.push(`${label}: ${valueText(d[key], key)}`);

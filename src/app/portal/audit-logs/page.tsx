@@ -18,9 +18,16 @@ import { AuditLogsSkeleton } from '@/components/Skeletons';
 const PAGE_SIZE = 6;
 
 const actionLabels: Record<string, string> = {
+  login_succeeded: 'Login succeeded', login_failed: 'Login failed', logout_succeeded: 'Logout succeeded', logout_failed: 'Logout failed',
+  signup_succeeded: 'Sign-up succeeded', signup_failed: 'Sign-up failed',
+  signup_code_requested_succeeded: 'Verification code request accepted', signup_code_requested_failed: 'Verification code request failed',
+  signup_verification_succeeded: 'Email verification succeeded', signup_verification_failed: 'Email verification failed',
+  password_reset_requested_succeeded: 'Password reset request accepted', password_reset_requested_failed: 'Password reset request failed',
+  password_reset_succeeded: 'Password reset succeeded', password_reset_failed: 'Password reset failed',
   created: 'Created', updated: 'Updated', deleted: 'Deleted', archived: 'Archived', restored: 'Restored', status_changed: 'Status changed', stopped: 'Paused', resumed: 'Resumed',
 };
 const entityLabels: Record<string, string> = {
+  authentication: 'Authentication',
   capdev_folder: 'CapDev folder', capdev: 'CapDev', request: 'Request', status_update: 'Progress Update', user: 'User account', capdev_field: 'CapDev form field', request_field: 'Request form field', status_update_field: 'Progress update form field', system_setting: 'System setting',
 };
 

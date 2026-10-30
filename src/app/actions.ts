@@ -25,6 +25,8 @@ import { claimRequestFolder } from '@/lib/request-storage';
 import { limitVerification, verificationCode, verificationHash, consumeRateLimit } from '@/lib/security';
 import { manilaDate, manilaDateBoundary } from '@/lib/manila-date';
 import { auditChanges, requestLabel } from '@/lib/audit-description';
+import { writeAuthAudit } from '@/lib/auth-audit';
+import { type AuthEvent, type AuthIdentity } from '@/lib/auth-audit-event';
 import { ARCHIVED_READ_ONLY, isArchiveReadOnly } from '@/lib/archive-policy';
 import { isAllowedSignupEmail, SIGNUP_EMAIL_ERROR } from '@/lib/signup-email';
 import { connections, users, systemSettings, roleApprovalRequests, capdevFolders, capdevs, capdevFieldDefinitions, requestFieldDefinitions, statusUpdateFieldDefinitions, requests, requestStatusUpdates, passwordResets, signupVerifications, notifications, notificationReads, auditLogs } from '@/db/schema';
@@ -312,6 +314,7 @@ export async function getAuditLogs(input: { search?: string; action?: string; en
         ilike(auditLogs.actorEmail, pattern),
         ilike(auditLogs.entityLabel, pattern),
         ilike(auditLogs.entityId, pattern),
+        sql`${auditLogs.details}->>'ipAddress' ILIKE ${pattern}`,
         sql`${auditLogs.details}->>'requestorName' ILIKE ${pattern}`,
         sql`EXISTS (SELECT 1 FROM ${requests} WHERE ${requests.requestorName} ILIKE ${pattern} AND ${requests.id}::text = CASE WHEN ${auditLogs.entityType} = 'request' THEN ${auditLogs.entityId} WHEN ${auditLogs.entityType} = 'status_update' THEN ${auditLogs.details}->>'requestId' END)`,
       )!);
@@ -3835,7 +3838,39 @@ export async function markAllNotificationsAsRead() {
 }
 
 
-export async function requestPasswordReset(rawEmail: string): Promise<{ success: boolean; message?: string; error?: string }> {
+async function auditVerification<T extends { success: boolean }>(event: AuthEvent, email: string, run: () => Promise<T>): Promise<T> {
+  const result = await run();
+  let identity: AuthIdentity | null = null;
+  try {
+    if (event === 'password_reset' && result.success) {
+      const account = await db.execute(sql`SELECT id, name, email FROM neon_auth.user WHERE LOWER(email) = ${email.trim().toLowerCase()} LIMIT 1`);
+      const user = account.rows[0];
+      if (user) identity = { id: String(user.id), email: String(user.email), name: user.name ? String(user.name) : null };
+    }
+    await writeAuthAudit({ event, success: result.success, email, identity, headers: await headers() });
+  } catch {
+    console.error('Authentication audit context could not be resolved.');
+  }
+  return result;
+}
+
+export async function requestPasswordReset(rawEmail: string) {
+  return auditVerification('password_reset_requested', rawEmail, () => requestPasswordResetImpl(rawEmail));
+}
+
+export async function requestSignupVerificationCode(rawEmail: string) {
+  return auditVerification('signup_code_requested', rawEmail, () => requestSignupVerificationCodeImpl(rawEmail));
+}
+
+export async function verifySignupCode(rawEmail: string, rawCode: string) {
+  return auditVerification('signup_verification', rawEmail, () => verifySignupCodeImpl(rawEmail, rawCode));
+}
+
+export async function verifyAndResetPassword(rawEmail: string, rawCode: string, newPassword: string) {
+  return auditVerification('password_reset', rawEmail, () => verifyAndResetPasswordImpl(rawEmail, rawCode, newPassword));
+}
+
+async function requestPasswordResetImpl(rawEmail: string): Promise<{ success: boolean; message?: string; error?: string }> {
   const generic = { success: true, message: 'If an account exists, a verification code has been sent. Please wait before requesting another.' };
   try {
     const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
@@ -3856,7 +3891,7 @@ export async function requestPasswordReset(rawEmail: string): Promise<{ success:
   }
 }
 
-export async function requestSignupVerificationCode(rawEmail: string): Promise<{ success: boolean; message?: string; error?: string }> {
+async function requestSignupVerificationCodeImpl(rawEmail: string): Promise<{ success: boolean; message?: string; error?: string }> {
   const generic = { success: true, message: 'If this email can be registered, a verification code has been sent. Please wait before requesting another.' };
   try {
     const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
@@ -3878,7 +3913,7 @@ export async function requestSignupVerificationCode(rawEmail: string): Promise<{
   }
 }
 
-export async function verifySignupCode(rawEmail: string, rawCode: string) {
+async function verifySignupCodeImpl(rawEmail: string, rawCode: string) {
   try {
     const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
     if (!isAllowedSignupEmail(email)) return { success: false, error: SIGNUP_EMAIL_ERROR };
@@ -3897,7 +3932,7 @@ export async function verifySignupCode(rawEmail: string, rawCode: string) {
   }
 }
 
-export async function verifyAndResetPassword(rawEmail: string, rawCode: string, newPassword: string) {
+async function verifyAndResetPasswordImpl(rawEmail: string, rawCode: string, newPassword: string) {
   try {
     const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
     if (!email || email.length > 255) return { success: false, error: 'Invalid or expired verification code.' };
