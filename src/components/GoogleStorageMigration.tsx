@@ -63,6 +63,6 @@ export function GoogleStorageMigrationProgress() {
       value={Math.min(99, migration.total ? migration.completed / migration.total * 100 : 0)} />}
     <Typography variant="body2" color="text.secondary">{discovering ? 'Finding files and folders…' : `${migration.completed.toLocaleString()} of ${migration.total.toLocaleString()} files and folders transferred${!finished && migration.phase === 'verifying' ? ' · Checking for remaining files…' : ''}`}</Typography>
     {!finished && <Typography variant="caption" color="text.secondary">Continues while an Admin has the portal open. You can keep working.</Typography>}
-    {(migration.error || error) && <Alert severity="error">{migration.error || error}<Button size="small" onClick={retry}>Retry transfer</Button></Alert>}
+    {(migration.error || error) && <Alert severity="error" sx={{ minWidth: 0, '& .MuiAlert-message': { minWidth: 0, overflowWrap: 'anywhere' } }}>{migration.error || error}<Button size="small" onClick={retry}>Retry transfer</Button></Alert>}
   </Stack>;
 }
