@@ -89,6 +89,16 @@ test('a target that cannot be a pending owner falls back to direct ownership tra
   assert.equal(fixture.transfers, 1);
 });
 
+test('a cross-organization file stays in the original Drive and is shared with the destination', async () => {
+  await reset({ pendingFailureReason: 'targetUserCannotBePendingOwnerOnFile', blocked: true });
+  const result = await transfer();
+  assert.equal(result.ownedByMe, false);
+  const fixture = await state();
+  assert.equal(fixture.files[0].owners[0].permissionId, 'source-account');
+  assert.equal(fixture.shares, 1);
+  assert.equal(fixture.transfers || 0, 0);
+});
+
 test('a lost transfer response is recovered without another ownership invitation', async () => {
   await reset({ lostResponse: true });
   await assert.rejects(transfer(), /could not accept pending ownership.*HTTP 503/);
@@ -98,9 +108,10 @@ test('a lost transfer response is recovered without another ownership invitation
   assert.equal((await state()).transfers, 1);
 });
 
-test('blocked transfers preserve the original file and report account restrictions', async () => {
+test('blocked cross-organization transfers preserve the original file and share it with the destination', async () => {
   await reset({ blocked: true });
-  await assert.rejects(transfer(), /ownershipChangeAcrossDomainsNotPermitted/);
+  const result = await transfer();
+  assert.equal(result.ownedByMe, false);
   assert.equal((await state()).files[0].owners[0].permissionId, 'source-account');
   assert.equal((await state()).transfers || 0, 0);
 });

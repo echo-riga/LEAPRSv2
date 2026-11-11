@@ -58,7 +58,6 @@ http.createServer(async (req, res) => {
       if (!file || !visible(file)) return send(404, {});
       if (url.pathname.includes('/permissions')) {
         fixture.permissionCalls = (fixture.permissionCalls || 0) + 1;
-        if (fixture.blocked) return send(403, { error: { code: 403, errors: [{ reason: fixture.blockedReason || 'ownershipChangeAcrossDomainsNotPermitted' }] } });
         if (req.method === 'GET') return send(200, { permissions: file.permissions || [] });
         if (req.method === 'POST' && body.role === 'writer') {
           if (fixture.sharingBlocked) return send(403, { error: { code: 403 } });
@@ -83,6 +82,7 @@ http.createServer(async (req, res) => {
           return send(200, { id: 'target-account', pendingOwner: true });
         }
         if (body.role === 'owner') {
+          if (fixture.blocked) return send(403, { error: { code: 403, errors: [{ reason: fixture.blockedReason || 'ownershipChangeAcrossDomainsNotPermitted' }] } });
           if (url.searchParams.get('transferOwnership') !== 'true' || (account === 'target-account' && !file.pendingOwner)) return send(400, {});
           file.owners = [{ permissionId: 'target-account' }];
           delete file.pendingOwner;

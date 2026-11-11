@@ -4,6 +4,10 @@ export const DRIVE_FOLDER = 'application/vnd.google-apps.folder';
 type DriveFile = { id: string; name: string; mimeType: string; parents?: string[]; trashed?: boolean;
   ownedByMe?: boolean; owners?: Array<{ permissionId?: string }>; appProperties?: Record<string, string> };
 
+function ownershipCannotTransfer(error: unknown) {
+  return error instanceof Error && /\(HTTP (?:400|403); (?:ownershipChangeAcrossDomainsNotPermitted|targetUserCannotBePendingOwnerOnFile|userCannotBePendingOwnerOnFile|userCannotAddPendingOwnerToFile)\)/.test(error.message);
+}
+
 async function checked(response: Response, operation = 'complete the transfer') {
   if (response.ok) return response;
   const body = await response.json().catch(() => null) as { error?: { errors?: Array<{ reason?: string }> } } | null;
@@ -63,35 +67,42 @@ export async function transferDriveOwnership(input: {
     // Consumer accounts require an invitation accepted with the destination's token.
     const pending = await driveFetch(permissionPath + '?fields=id,pendingOwner', sourceToken, { method: 'PATCH', headers,
       body: JSON.stringify({ role: 'writer', pendingOwner: true }) });
-    if (pending.ok) {
-      const invitation = await pending.json() as { pendingOwner?: boolean };
-      if (invitation.pendingOwner === true) {
-        await checked(await driveFetch(permissionPath + '?transferOwnership=true', targetToken,
-          { method: 'PATCH', headers, body: JSON.stringify({ role: 'owner' }) }), 'accept pending ownership');
+    try {
+      if (pending.ok) {
+        const invitation = await pending.json() as { pendingOwner?: boolean };
+        if (invitation.pendingOwner === true) {
+          await checked(await driveFetch(permissionPath + '?transferOwnership=true', targetToken,
+            { method: 'PATCH', headers, body: JSON.stringify({ role: 'owner' }) }), 'accept pending ownership');
+        } else {
+          // Workspace accounts can omit pending ownership and transfer directly.
+          await checked(await driveFetch(permissionPath + '?transferOwnership=true', sourceToken,
+            { method: 'PATCH', headers, body: JSON.stringify({ role: 'owner' }) }), 'transfer ownership');
+        }
+      } else if (pending.status === 400 || pending.status === 403) {
+        const details = await pending.clone().json().catch(() => null) as { error?: { errors?: Array<{ reason?: string }> } } | null;
+        const reason = details?.error?.errors?.[0]?.reason;
+        if (reason && !['invalidSharingRequest', 'badRequest', 'invalid', 'userCannotAddPendingOwnerToFile', 'userCannotBePendingOwnerOnFile', 'targetUserCannotBePendingOwnerOnFile'].includes(reason)) await checked(pending, 'request pending ownership');
+        await checked(await driveFetch(permissionPath + '?transferOwnership=true', sourceToken, { method: 'PATCH', headers,
+          body: JSON.stringify({ role: 'owner' }) }), 'transfer ownership');
       } else {
-        // Workspace accounts can omit pending ownership and transfer directly.
-        await checked(await driveFetch(permissionPath + '?transferOwnership=true', sourceToken,
-          { method: 'PATCH', headers, body: JSON.stringify({ role: 'owner' }) }), 'transfer ownership');
+        await checked(pending);
       }
-    } else if (pending.status === 400 || pending.status === 403) {
-      const details = await pending.clone().json().catch(() => null) as { error?: { errors?: Array<{ reason?: string }> } } | null;
-      const reason = details?.error?.errors?.[0]?.reason;
-      if (reason && !['invalidSharingRequest', 'badRequest', 'invalid', 'userCannotAddPendingOwnerToFile', 'userCannotBePendingOwnerOnFile', 'targetUserCannotBePendingOwnerOnFile'].includes(reason)) await checked(pending, 'request pending ownership');
-      await checked(await driveFetch(permissionPath + '?transferOwnership=true', sourceToken, { method: 'PATCH', headers,
-        body: JSON.stringify({ role: 'owner' }) }), 'transfer ownership');
-    } else {
-      await checked(pending);
+    } catch (error) {
+      // Google only permits ownership changes for certain account combinations.
+      // The Editor share made above keeps the original file, its ID, and all
+      // LEAPRS references intact while giving the new storage account access.
+      if (!ownershipCannotTransfer(error)) throw error;
     }
   }
   const verified = await readTransferFile(targetToken, fileId);
-  if (!verified.ownedByMe || !verified.owners?.some(owner => owner.permissionId === targetAccountId)) {
-    throw new Error('Google has not confirmed the new file owner. Please retry.');
-  }
   return verified;
 }
 
 export async function finishTransferredRoot(sourceRoot: string, targetRoot: string, token: string) {
   const file = await readTransferFile(token, sourceRoot);
+  // Cross-organization files remain in the original Drive and are shared with
+  // the active storage account. They must not be moved or re-parented.
+  if (!file.ownedByMe) return;
   const params = new URLSearchParams({ fields: 'id,parents' });
   if (!file.parents?.includes(targetRoot)) params.set('addParents', targetRoot);
   const remove = file.parents?.filter(parent => parent !== targetRoot);
