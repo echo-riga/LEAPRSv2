@@ -76,7 +76,7 @@ export async function transferDriveOwnership(input: {
     } else if (pending.status === 400 || pending.status === 403) {
       const details = await pending.clone().json().catch(() => null) as { error?: { errors?: Array<{ reason?: string }> } } | null;
       const reason = details?.error?.errors?.[0]?.reason;
-      if (reason && !['invalidSharingRequest', 'badRequest', 'invalid', 'userCannotAddPendingOwnerToFile', 'userCannotBePendingOwnerOnFile'].includes(reason)) await checked(pending, 'request pending ownership');
+      if (reason && !['invalidSharingRequest', 'badRequest', 'invalid', 'userCannotAddPendingOwnerToFile', 'userCannotBePendingOwnerOnFile', 'targetUserCannotBePendingOwnerOnFile'].includes(reason)) await checked(pending, 'request pending ownership');
       await checked(await driveFetch(permissionPath + '?transferOwnership=true', sourceToken, { method: 'PATCH', headers,
         body: JSON.stringify({ role: 'owner' }) }), 'transfer ownership');
     } else {

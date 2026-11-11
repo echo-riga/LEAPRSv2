@@ -81,6 +81,14 @@ test('a file that cannot have a pending owner falls back to direct ownership tra
   assert.equal(fixture.transfers, 1);
 });
 
+test('a target that cannot be a pending owner falls back to direct ownership transfer', async () => {
+  await reset({ pendingFailureReason: 'targetUserCannotBePendingOwnerOnFile' });
+  assert.equal((await transfer()).ownedByMe, true);
+  const fixture = await state();
+  assert.equal(fixture.pendingUpdates, 1);
+  assert.equal(fixture.transfers, 1);
+});
+
 test('a lost transfer response is recovered without another ownership invitation', async () => {
   await reset({ lostResponse: true });
   await assert.rejects(transfer(), /could not accept pending ownership.*HTTP 503/);
